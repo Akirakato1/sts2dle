@@ -1,4 +1,4 @@
-import React, { useId, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { CardIdentity, SpriteMap } from "../../shared/domain.js";
 import { SpriteArt } from "./SpriteArt.js";
@@ -7,6 +7,7 @@ export interface CardSearchProps {
   cards: readonly CardIdentity[];
   spriteMap: SpriteMap;
   guessedCardIds: ReadonlySet<string>;
+  disabled?: boolean;
   onSelect(cardId: string): void;
 }
 
@@ -27,7 +28,7 @@ export function searchCards(
     .sort((left, right) => left.name.localeCompare(right.name, "en-US") || compareCodeUnits(left.id, right.id));
 }
 
-export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardSearchProps) {
+export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false, onSelect }: CardSearchProps) {
   const listboxId = useId();
   const pointerSelecting = useRef(false);
   const [query, setQuery] = useState("");
@@ -39,10 +40,19 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardS
     for (const card of cards) counts.set(card.name, (counts.get(card.name) ?? 0) + 1);
     return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
   }, [cards]);
-  const menuOpen = isOpen && results.length > 0;
+  const menuOpen = !disabled && isOpen && results.length > 0;
   const optionId = (cardId: string) => `${listboxId}-option-${encodeURIComponent(cardId)}`;
 
+  useEffect(() => {
+    if (!disabled) return;
+    pointerSelecting.current = false;
+    setQuery("");
+    setActiveIndex(-1);
+    setIsOpen(false);
+  }, [disabled]);
+
   function choose(card: CardIdentity) {
+    if (disabled) return;
     pointerSelecting.current = false;
     onSelect(card.id);
     setQuery("");
@@ -51,7 +61,7 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardS
   }
 
   function moveActive(direction: 1 | -1) {
-    if (results.length === 0) return;
+    if (disabled || results.length === 0) return;
     setIsOpen(true);
     setActiveIndex((current) => {
       if (current < 0) return direction === 1 ? 0 : results.length - 1;
@@ -72,13 +82,15 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardS
       aria-expanded={menuOpen}
       aria-activedescendant={menuOpen && activeIndex >= 0 ? optionId(results[activeIndex]!.id) : undefined}
       value={query}
+      disabled={disabled}
       onChange={(event) => {
+        if (disabled) return;
         const nextQuery = event.currentTarget.value;
         setQuery(nextQuery);
         setActiveIndex(-1);
         setIsOpen(nextQuery.trim().length > 0);
       }}
-      onFocus={() => { if (results.length > 0) setIsOpen(true); }}
+      onFocus={() => { if (!disabled && results.length > 0) setIsOpen(true); }}
       onBlur={() => {
         if (pointerSelecting.current) {
           pointerSelecting.current = false;
@@ -88,6 +100,7 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardS
         setActiveIndex(-1);
       }}
       onKeyDown={(event) => {
+        if (disabled) return;
         if (event.key === "ArrowDown") {
           event.preventDefault();
           moveActive(1);

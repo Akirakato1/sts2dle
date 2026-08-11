@@ -2,11 +2,39 @@ import React, { useEffect, useState } from "react";
 
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { CardSearch } from "./components/CardSearch.js";
+import { GuessGrid } from "./components/GuessGrid.js";
 import { useGame } from "./game/use-game.js";
 import type { RoundState } from "./game/game-reducer.js";
 
-interface GameSlotProps { round: RoundState; onSubmit(cardId: string): void }
-function ResultsSlot(_props: GameSlotProps) { return <section className="game-slot" aria-label="Guess results"><p>Comparison results will appear here.</p></section>; }
+interface RoundGameProps {
+  round: RoundState;
+  snapshot: LoadedSnapshot;
+  onSubmit(cardId: string): void;
+  onNextRound(): void;
+}
+
+function RoundGame({ round, snapshot, onSubmit, onNextRound }: RoundGameProps) {
+  const [animateFromIndex, setAnimateFromIndex] = useState(round.guesses.length);
+  const isRevealing = animateFromIndex < round.guesses.length;
+  return <main>
+    <CardSearch
+      cards={snapshot.cards}
+      spriteMap={snapshot.spriteMap}
+      guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}
+      disabled={isRevealing}
+      onSelect={onSubmit}
+    />
+    <GuessGrid
+      guesses={round.guesses}
+      cardsById={snapshot.cardsById}
+      spriteMap={snapshot.spriteMap}
+      animateFromIndex={animateFromIndex}
+      onRevealComplete={() => setAnimateFromIndex(round.guesses.length)}
+    />
+    {round.mode === "practice" && <button type="button" className="new-round" onClick={onNextRound}>New practice round</button>}
+    {round.error && <p role="alert">{round.error}</p>}
+  </main>;
+}
 
 function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
   const game = useGame(snapshot);
@@ -18,18 +46,7 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
       {(["daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={round.mode === mode ? "page" : undefined} className={round.mode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{mode === "daily" ? "Daily" : "Practice"}</button>)}
     </nav>
     <p className="round-note">Each guess compares its base card and upgrade together. Match every trait to find today&apos;s card.</p>
-    <main>
-      <CardSearch
-        key={game.roundToken}
-        cards={snapshot.cards}
-        spriteMap={snapshot.spriteMap}
-        guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}
-        onSelect={game.submit}
-      />
-      <ResultsSlot round={round} onSubmit={game.submit} />
-      {round.mode === "practice" && <button type="button" className="new-round" onClick={game.nextRound}>New practice round</button>}
-      {round.error && <p role="alert">{round.error}</p>}
-    </main>
+    <RoundGame key={game.roundToken} round={round} snapshot={snapshot} onSubmit={game.submit} onNextRound={game.nextRound} />
   </>;
 }
 

@@ -1,0 +1,138 @@
+.guess-grid-scroll {
+  width: 100%;
+  margin: .8rem 0 1.25rem;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.guess-grid {
+  display: grid;
+  grid-template-columns: 96px repeat(11, minmax(88px, 1fr));
+  gap: .3rem;
+  min-width: 1120px;
+  text-align: center;
+}
+
+.guess-grid__row {
+  display: contents;
+}
+
+.guess-grid__header {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  min-height: 42px;
+  padding: .35rem .2rem;
+  color: #d8c991;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.guess-grid__art-header,
+.guess-grid__art {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: #192018;
+  box-shadow: .35rem 0 .45rem rgb(0 0 0 / 22%);
+}
+
+.guess-grid__art-header {
+  z-index: 4;
+}
+
+.guess-grid__art {
+  display: flex;
+  min-height: 80px;
+  align-items: center;
+  justify-content: center;
+}
+
+.guess-grid__card-name {
+  position: absolute;
+  right: .2rem;
+  bottom: .2rem;
+  left: .2rem;
+  overflow: hidden;
+  padding: .15rem .2rem;
+  color: #fff7dc;
+  background: rgb(0 0 0 / 72%);
+  font-size: .68rem;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-tile {
+  min-height: 80px;
+  perspective: 700px;
+}
+
+.feature-tile__surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 80px;
+  transform: rotateY(0deg);
+  transform-style: preserve-3d;
+  transition: transform 420ms ease;
+  transition-delay: calc((var(--reveal-index) + 1) * 110ms);
+}
+
+.feature-tile--revealed .feature-tile__surface {
+  transform: rotateY(180deg);
+}
+
+.feature-tile__face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: .25rem;
+  backface-visibility: hidden;
+}
+
+.feature-tile__front {
+  background: #2b352a;
+}
+
+.feature-tile__back {
+  gap: .22rem;
+  padding: .35rem;
+  color: #fff7dc;
+  background: var(--tile-color);
+  font-weight: 700;
+  transform: rotateY(180deg);
+}
+
+.feature-tile__result-mark {
+  font-family: system-ui, sans-serif;
+  font-size: .75rem;
+}
+
+.feature-tile__value {
+  overflow-wrap: anywhere;
+}
+
+.feature-tile__hint {
+  font-family: system-ui, sans-serif;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.feature-tile--immediate .feature-tile__surface {
+  transition: none;
+  transition-delay: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feature-tile__surface {
+    transition: none;
+    transition-delay: 0ms;
+  }
+}

@@ -18,6 +18,7 @@ const appCards = [card("apotheosis", "Apotheosis"), card("apparition", "Appariti
 const appSprite = { candidate: { x: 0, y: 0, width: 64, height: 64 }, guess: { x: 0, y: 0, width: 160, height: 160 } };
 const searchSnapshot = {
   cards: appCards,
+  cardsById: new Map(appCards.map((item) => [item.id, item])),
   spriteMap: {
     candidate: { url: "/candidate.webp", width: 128, height: 64, displayScale: 0.5 },
     guess: { url: "/guess.webp", width: 320, height: 160, displayScale: 0.5 },
@@ -112,5 +113,51 @@ describe("App snapshot cleanup", () => {
     view.rerender(<App />);
     expect(screen.getByRole("combobox")).toHaveValue("");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  test("locks the search from row insertion through the eleventh tile reveal", async () => {
+    const makeResult = (feature: keyof typeof appCards[0]["base"]) => ({
+      feature,
+      color: "red" as const,
+      displayValue: String(appCards[1]!.base[feature]),
+      hint: "none" as const,
+    });
+    const submit = vi.fn();
+    let gameState = {
+      round: {
+        mode: "daily" as const,
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+        guesses: [] as Array<{ cardId: string; results: ReturnType<typeof makeResult>[] }>,
+        status: "playing" as const,
+        error: null,
+      },
+      roundToken: 1,
+      error: null,
+      submit,
+      setMode: vi.fn(),
+      nextRound: vi.fn(),
+    };
+    games.mockImplementation(() => gameState);
+    loads.mockResolvedValue(searchSnapshot);
+    const view = render(<App />);
+    const input = await screen.findByRole("combobox");
+    expect(input).toBeEnabled();
+
+    gameState = {
+      ...gameState,
+      round: {
+        ...gameState.round,
+        guesses: [{
+          cardId: "apparition",
+          results: ["cardClass", "cardType", "mana", "rarity", "eternal", "ethereal", "exhaust", "innate", "retain", "sly", "unplayable"].map((feature) => makeResult(feature as keyof typeof appCards[0]["base"])),
+        }],
+      },
+    };
+    view.rerender(<App />);
+    expect(screen.getByRole("combobox")).toBeDisabled();
+
+    const surfaces = view.container.querySelectorAll(".feature-tile__surface");
+    fireEvent.transitionEnd(surfaces[surfaces.length - 1]!);
+    expect(screen.getByRole("combobox")).toBeEnabled();
   });
 });

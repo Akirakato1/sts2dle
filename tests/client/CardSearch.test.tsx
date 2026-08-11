@@ -94,6 +94,16 @@ describe("searchCards", () => {
 });
 
 describe("CardSearch", () => {
+  test("locks search interaction while a guess row is revealing", () => {
+    const { input, onSelect } = renderSearch({ disabled: true });
+
+    expect(input).toBeDisabled();
+    fireEvent.change(input, { target: { value: "ap" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   test("keeps the listbox closed for empty or whitespace-only input", () => {
     const { input } = renderSearch();
     expect(input).toHaveAttribute("aria-expanded", "false");
