@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -14,6 +14,8 @@ export interface FixtureDataLockOperations {
   ensureDirectory(path: string): Promise<void>;
   resolvePath(path: string): Promise<string>;
   acquireDirectory(path: string): Promise<void>;
+  createUnownedDirectory(path: string): Promise<void>;
+  listDirectory(path: string): Promise<string[]>;
   writeOwner(path: string, value: string): Promise<void>;
   readOwner(path: string): Promise<string>;
   renamePath(from: string, to: string): Promise<void>;
@@ -39,6 +41,8 @@ const defaultOperations: FixtureDataLockOperations = {
   ensureDirectory: async (path) => mkdir(path, { recursive: true }).then(() => undefined),
   resolvePath: realpath,
   acquireDirectory: async (path) => mkdir(path).then(() => undefined),
+  createUnownedDirectory: async (path) => mkdir(path).then(() => undefined),
+  listDirectory: readdir,
   writeOwner: async (path, value) => writeFile(path, value, { encoding: "utf8", flag: "wx" }),
   readOwner: async (path) => readFile(path, "utf8"),
   renamePath: rename,
@@ -80,18 +84,17 @@ export async function withE2eFixtureDataLock<T>(
 
   while (true) {
     if (monotonicNow(operations) >= deadline) throw timeoutError(timeoutMs);
+    if (await hasQuarantinedLock(dataPath, operations)) {
+      await waitForRetry(deadline, timeoutMs, retryDelayMs, operations);
+      continue;
+    }
     try {
       await operations.acquireDirectory(lockPath);
     } catch (error: unknown) {
       if (!isAlreadyExists(error)) {
         throw new Error("Unable to acquire E2E fixture data lock");
       }
-      const remaining = deadline - monotonicNow(operations);
-      if (remaining <= 0) throw timeoutError(timeoutMs);
-      await lockedOperation(
-        () => operations.wait(Math.min(retryDelayMs, remaining)),
-        "Unable to wait for E2E fixture data lock",
-      );
+      await waitForRetry(deadline, timeoutMs, retryDelayMs, operations);
       continue;
     }
 
@@ -111,12 +114,50 @@ export async function withE2eFixtureDataLock<T>(
       throw timeoutError(timeoutMs);
     }
 
+    let quarantinedLockExists: boolean;
+    try {
+      quarantinedLockExists = await hasQuarantinedLock(dataPath, operations);
+    } catch (error: unknown) {
+      await releaseOwnedLock(dataPath, lockPath, token, operations);
+      throw error;
+    }
+    if (quarantinedLockExists) {
+      await releaseOwnedLock(dataPath, lockPath, token, operations);
+      await waitForRetry(deadline, timeoutMs, retryDelayMs, operations);
+      continue;
+    }
+
     try {
       return await action(dataPath);
     } finally {
       await releaseOwnedLock(dataPath, lockPath, token, operations);
     }
   }
+}
+
+async function hasQuarantinedLock(
+  dataPath: string,
+  operations: FixtureDataLockOperations,
+): Promise<boolean> {
+  const entries = await lockedOperation(
+    () => operations.listDirectory(dataPath),
+    "Unable to inspect E2E fixture lock quarantine",
+  );
+  return entries.some((entry) => entry.startsWith(RELEASE_PREFIX));
+}
+
+async function waitForRetry(
+  deadline: number,
+  timeoutMs: number,
+  retryDelayMs: number,
+  operations: FixtureDataLockOperations,
+): Promise<void> {
+  const remaining = deadline - monotonicNow(operations);
+  if (remaining <= 0) throw timeoutError(timeoutMs);
+  await lockedOperation(
+    () => operations.wait(Math.min(retryDelayMs, remaining)),
+    "Unable to wait for E2E fixture data lock",
+  );
 }
 
 async function releaseOwnedLock(
@@ -144,12 +185,12 @@ async function releaseOwnedLock(
     const value = await operations.readOwner(join(releasePath, OWNER_FILE));
     owner = parseOwner(value);
   } catch {
-    await restoreUnverifiedLock(releasePath, lockPath, operations);
+    await preserveUnverifiedLock(lockPath, operations);
     throw new Error("Unable to verify E2E fixture lock ownership");
   }
 
   if (owner.token !== token) {
-    await restoreUnverifiedLock(releasePath, lockPath, operations);
+    await preserveUnverifiedLock(lockPath, operations);
     throw new Error("E2E fixture lock ownership changed before release");
   }
 
@@ -159,13 +200,12 @@ async function releaseOwnedLock(
   );
 }
 
-async function restoreUnverifiedLock(
-  releasePath: string,
+async function preserveUnverifiedLock(
   lockPath: string,
   operations: FixtureDataLockOperations,
 ): Promise<void> {
   try {
-    await operations.renamePath(releasePath, lockPath);
+    await operations.createUnownedDirectory(lockPath);
   } catch (error: unknown) {
     if (isAlreadyExists(error)) return;
     throw new Error("Unable to preserve unverified E2E fixture data lock");
