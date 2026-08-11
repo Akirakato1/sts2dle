@@ -40,4 +40,14 @@ describe("useGame", () => {
     await act(async () => { game.result.current.nextRound(); });
     expect(createPracticeRandom).toHaveBeenCalledTimes(2);
   });
+
+  test("keeps a newer Practice round when a pending Daily request resolves later", async () => {
+    let resolveDaily!: (source: { nextUint32(): number }) => void;
+    vi.mocked(createDailyRandom).mockImplementationOnce(() => new Promise((resolve) => { resolveDaily = resolve; }));
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await game.result.current.setMode("practice"); });
+    expect(game.result.current.round?.mode).toBe("practice");
+    await act(async () => { resolveDaily({ nextUint32: () => 1 }); });
+    expect(game.result.current.round?.mode).toBe("practice");
+  });
 });

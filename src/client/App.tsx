@@ -32,12 +32,12 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     setSnapshot(null); setError(null);
-    void loadSnapshot().then((loaded) => { if (!cancelled) setSnapshot(loaded); }).catch((caught: unknown) => {
-      if (!cancelled) setError(caught instanceof Error ? caught.message : "Unable to load game data.");
+    void loadSnapshot(fetch, controller.signal).then((loaded) => { if (!controller.signal.aborted) setSnapshot(loaded); }).catch((caught: unknown) => {
+      if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Unable to load game data.");
     });
-    return () => { cancelled = true; };
+    return () => { controller.abort(); };
   }, [attempt]);
   return <div className="app-shell">
     <header><p className="eyebrow">Slay the Spire 2</p><h1>STSDLE</h1><p className="subtitle">A daily card deduction.</p></header>

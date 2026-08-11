@@ -51,4 +51,21 @@ describe("loadSnapshot", () => {
       "/runtime/pair-groups.json": pairGroups, "/runtime/sprite-map.json": spriteMap,
     }))).rejects.toThrow("MISSING");
   });
+
+  test("identifies the URL for network, JSON, and schema failures", async () => {
+    const network = (async (input: string | URL | Request) => { if (String(input).endsWith("manifest.json")) throw new Error("offline"); return new Response("{}", { status: 200 }); }) as typeof fetch;
+    await expect(loadSnapshot(network)).rejects.toThrow("/runtime/manifest.json");
+    const invalidJson = (async (input: string | URL | Request) => new Response(String(input).endsWith("cards.json") ? "{" : JSON.stringify(String(input).endsWith("manifest.json") ? manifest : String(input).endsWith("base-groups.json") ? baseGroups : String(input).endsWith("pair-groups.json") ? pairGroups : spriteMap), { status: 200 })) as typeof fetch;
+    await expect(loadSnapshot(invalidJson)).rejects.toThrow("/runtime/cards.json");
+    await expect(loadSnapshot(jsonFetch({ "/runtime/manifest.json": manifest, "/runtime/cards.json": [{}], "/runtime/base-groups.json": baseGroups, "/runtime/pair-groups.json": pairGroups, "/runtime/sprite-map.json": spriteMap }))).rejects.toThrow("/runtime/cards.json");
+  });
+
+  test("forwards an abort signal and validates upgrade counts", async () => {
+    let seen: AbortSignal | undefined;
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => { seen = init?.signal ?? undefined; return new Response(JSON.stringify(manifest), { status: 200 }); }) as typeof fetch;
+    const controller = new AbortController();
+    await expect(loadSnapshot(fetchImpl, controller.signal)).rejects.toThrow("/runtime/cards.json");
+    expect(seen).toBe(controller.signal);
+    await expect(loadSnapshot(jsonFetch({ "/runtime/manifest.json": { ...manifest, upgradeCount: 0 }, "/runtime/cards.json": [card], "/runtime/base-groups.json": baseGroups, "/runtime/pair-groups.json": pairGroups, "/runtime/sprite-map.json": spriteMap }))).rejects.toThrow("upgradeCount");
+  });
 });

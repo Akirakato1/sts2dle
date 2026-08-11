@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { LoadedSnapshot } from "../api/load-snapshot.js";
 import { createDailyRandom, createPracticeRandom } from "../../shared/random.js";
@@ -11,6 +11,7 @@ function utcDate(now = new Date()): string { return now.toISOString().slice(0, 1
 export function useGame(snapshot: LoadedSnapshot) {
   const [round, setRound] = useState<RoundState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const requestGeneration = useRef(0);
   const groups = useMemo(() => ({
     baseGroups: snapshot.baseGroups,
     pairGroups: snapshot.pairGroups,
@@ -24,16 +25,23 @@ export function useGame(snapshot: LoadedSnapshot) {
     return selectAnswer(groups, snapshot.cardsById, source);
   }, [groups, snapshot]);
   const start = useCallback(async (mode: PlayMode) => {
+    const generation = ++requestGeneration.current;
     try {
       setError(null);
       const answer = await choose(mode);
+      if (generation !== requestGeneration.current) return;
       setRound((current) => current
         ? gameReducer(current, { type: "set-mode", mode, answer })
         : { mode, answer, guesses: [], status: "playing", error: null });
       void preloadAnswerImages(answer, snapshot.cardsById);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to start a round."); }
+    } catch (caught) {
+      if (generation === requestGeneration.current) setError(caught instanceof Error ? caught.message : "Unable to start a round.");
+    }
   }, [choose, snapshot.cardsById]);
-  useEffect(() => { void start("daily"); }, [start]);
+  useEffect(() => {
+    void start("daily");
+    return () => { requestGeneration.current += 1; };
+  }, [start]);
   const submit = useCallback((cardId: string) => setRound((current) => {
     if (!current) return current;
     const card = snapshot.cardsById.get(cardId);

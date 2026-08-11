@@ -13,8 +13,10 @@ export interface LoadedSnapshot {
 
 const runtimeUrls = ["/runtime/manifest.json", "/runtime/cards.json", "/runtime/base-groups.json", "/runtime/pair-groups.json", "/runtime/sprite-map.json"] as const;
 
-async function getJson(fetchImpl: typeof fetch, url: string): Promise<unknown> {
-  const response = await fetchImpl(url);
+async function getJson(fetchImpl: typeof fetch, url: string, signal?: AbortSignal): Promise<unknown> {
+  let response: Response;
+  try { response = await fetchImpl(url, signal ? { signal } : undefined); }
+  catch (caught) { throw new Error(`Failed to load ${url}: ${caught instanceof Error ? caught.message : "request failed"}`); }
   if (!response.ok) throw new Error(`Failed to load ${url}: ${response.status}`);
   try { return await response.json(); }
   catch { throw new Error(`Failed to parse ${url}`); }
@@ -34,14 +36,17 @@ function toCardIdentity(value: ReturnType<typeof cardIdentitySchema.parse>): Car
   return { ...value, duplicateName: value.duplicateName } as CardIdentity;
 }
 
-export async function loadSnapshot(fetchImpl: typeof fetch = fetch): Promise<LoadedSnapshot> {
-  const [manifestValue, cardsValue, baseGroupsValue, pairGroupsValue, spriteMapValue] = await Promise.all(runtimeUrls.map((url) => getJson(fetchImpl, url)));
-  const manifest = snapshotManifestSchema.parse(manifestValue);
-  const cards = cardIdentitySchema.array().parse(cardsValue).map(toCardIdentity);
-  const baseGroups = groupSchema.array().parse(baseGroupsValue);
-  const pairGroups = groupSchema.array().parse(pairGroupsValue);
-  const spriteMap = spriteMapSchema.parse(spriteMapValue);
+function parseRuntime<T>(url: string, parse: () => T): T { try { return parse(); } catch { throw new Error(`Invalid snapshot data at ${url}`); } }
+
+export async function loadSnapshot(fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<LoadedSnapshot> {
+  const [manifestValue, cardsValue, baseGroupsValue, pairGroupsValue, spriteMapValue] = await Promise.all(runtimeUrls.map((url) => getJson(fetchImpl, url, signal)));
+  const manifest = parseRuntime("/runtime/manifest.json", () => snapshotManifestSchema.parse(manifestValue));
+  const cards = parseRuntime("/runtime/cards.json", () => cardIdentitySchema.array().parse(cardsValue).map(toCardIdentity));
+  const baseGroups = parseRuntime("/runtime/base-groups.json", () => groupSchema.array().parse(baseGroupsValue));
+  const pairGroups = parseRuntime("/runtime/pair-groups.json", () => groupSchema.array().parse(pairGroupsValue));
+  const spriteMap = parseRuntime("/runtime/sprite-map.json", () => spriteMapSchema.parse(spriteMapValue));
   if (manifest.cardCount !== cards.length) throw new Error(`manifest cardCount (${manifest.cardCount}) does not match cards (${cards.length})`);
+  if (manifest.upgradeCount !== cards.filter((card) => card.hasUpgrade).length) throw new Error("manifest upgradeCount does not match cards");
   if (manifest.baseGroupCount !== baseGroups.length) throw new Error("manifest baseGroupCount does not match base groups");
   if (manifest.pairGroupCount !== pairGroups.length) throw new Error("manifest pairGroupCount does not match pair groups");
   const cardsById = new Map(cards.map((card) => [card.id, card]));
