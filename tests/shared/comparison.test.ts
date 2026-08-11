@@ -33,6 +33,22 @@ describe("paired feature comparison", () => {
     expect(compareFeature("mana", crossingCosts, answer)).toMatchObject({ color: "red", hint: "both" });
   });
 
+  it("collapses matching upward directions", () => {
+    expect(compareFeature("mana", card("up", { mana: 1 }, { mana: -1 }), answer).hint).toBe("up");
+  });
+
+  it("collapses matching downward directions", () => {
+    expect(compareFeature("mana", card("down", { mana: 3 }, { mana: 2 }), answer).hint).toBe("down");
+  });
+
+  it("merges an upward direction with non-comparable mana", () => {
+    expect(compareFeature("mana", card("up-dash", { mana: 1 }, { mana: "X" }), answer).hint).toBe("up-dash");
+  });
+
+  it("merges a downward direction with non-comparable mana", () => {
+    expect(compareFeature("mana", card("down-dash", { mana: 3 }, { mana: "X" }), answer).hint).toBe("down-dash");
+  });
+
   it("uses a dash for non-comparable mana values", () => {
     expect(compareFeature("mana", card("x", { mana: "X" }, { mana: "X" }), answer).hint).toBe("dash");
   });

@@ -11,7 +11,7 @@ export interface CardGroups {
 function sortedGroups(groups: Map<string, string[]>): BaseGroup[] {
   return [...groups]
     .map(([key, cardIds]) => ({ key, cardIds: [...cardIds].sort() }))
-    .sort((left, right) => left.key.localeCompare(right.key));
+    .sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
 }
 
 export function buildGroups(cards: CardIdentity[]): CardGroups {

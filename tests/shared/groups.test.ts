@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
 import { baseKey, pairKey } from "../../src/shared/feature-keys.js";
 import { buildGroups } from "../../src/shared/groups.js";
@@ -37,5 +37,19 @@ describe("feature keys and groups", () => {
     expect(pairKey(cardA)).not.toBe(pairKey(differentUpgrade));
     expect(groups.baseGroups[0]?.cardIds).toEqual([cardA.id, cardB.id, differentUpgrade.id].sort());
     expect(groups.pairGroupsByKey.get(pairKey(cardA))?.cardIds).toEqual(["A", "B"]);
+  });
+
+  it("orders groups identically across input permutations even when locale collation ties keys", () => {
+    const low = card("LOW", { base: { ...base, mana: 0 } });
+    const high = card("HIGH", { base: { ...base, mana: 1 } });
+    const expectedKeys = [baseKey(low.base), baseKey(high.base)].sort();
+    const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockReturnValue(0);
+
+    try {
+      expect(buildGroups([low, high]).baseGroups.map((group) => group.key)).toEqual(expectedKeys);
+      expect(buildGroups([high, low]).baseGroups.map((group) => group.key)).toEqual(expectedKeys);
+    } finally {
+      localeCompare.mockRestore();
+    }
   });
 });
