@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -60,9 +60,54 @@ describe("SnapshotStore", () => {
     await writeFile(join(dataDir, "active.json"), JSON.stringify({ buildId: `..${sep}outside` }));
     const store = new SnapshotStore(dataDir);
 
-    await expect(store.loadActive()).rejects.toThrow("escapes snapshots directory");
+    await expect(store.loadActive()).rejects.toThrow("Invalid active snapshot build ID");
     expect(resolve(dataDir, "snapshots", `..${sep}outside`)).not.toContain(
       `${resolve(dataDir, "snapshots")}${sep}`,
     );
+  });
+
+  it("rejects UNC and nested active build identifiers before resolving them", async () => {
+    const dataDir = await createTemporaryDataDir();
+    await mkdir(join(dataDir, "snapshots"), { recursive: true });
+    const store = new SnapshotStore(dataDir);
+
+    await writeFile(join(dataDir, "active.json"), JSON.stringify({
+      buildId: "\\\\server\\share\\outside",
+    }));
+    await expect(store.loadActive()).rejects.toThrow("Invalid active snapshot build ID");
+
+    await writeFile(join(dataDir, "active.json"), JSON.stringify({ buildId: "nested\\build" }));
+    await expect(store.loadActive()).rejects.toThrow("Invalid active snapshot build ID");
+  });
+
+  it("rejects a snapshot directory link that resolves outside the store", async () => {
+    const dataDir = await createTemporaryDataDir();
+    const outsideDir = await mkdtemp(join(tmpdir(), "stsdle-snapshot-outside-"));
+    temporaryDirectories.push(outsideDir);
+    const snapshotsDir = join(dataDir, "snapshots");
+    await mkdir(snapshotsDir, { recursive: true });
+    await symlink(outsideDir, join(snapshotsDir, "linked-build"), "junction");
+    await writeFile(join(dataDir, "active.json"), JSON.stringify({ buildId: "linked-build" }));
+
+    await expect(new SnapshotStore(dataDir).loadActive()).rejects.toThrow(
+      "escapes snapshots directory",
+    );
+  });
+
+  it("can retry pointer publication after a post-rename failure", async () => {
+    const dataDir = await createTemporaryDataDir();
+    const store = new SnapshotStore(dataDir);
+    const staging = await store.createStaging("retry");
+    const temporaryPointerPath = join(dataDir, "active.json.tmp");
+    await mkdir(temporaryPointerPath, { recursive: true });
+
+    await expect(staging.activate()).rejects.toThrow();
+    await rm(temporaryPointerPath, { recursive: true, force: true });
+
+    await expect(staging.activate()).resolves.toBe(join(dataDir, "snapshots", staging.buildId));
+    await expect(store.loadActive()).resolves.toEqual({
+      buildId: staging.buildId,
+      path: join(dataDir, "snapshots", staging.buildId),
+    });
   });
 });

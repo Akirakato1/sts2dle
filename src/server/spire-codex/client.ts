@@ -62,12 +62,17 @@ export class SpireCodexClient {
       );
     }
 
-    const rawBody = await response.text();
+    let rawBody: string;
+    try {
+      rawBody = await response.text();
+    } catch {
+      throw new SpireCodexRequestError("Spire Codex response body could not be read", context);
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawBody);
-    } catch (cause) {
-      throw new SpireCodexRequestError("Spire Codex returned invalid JSON", context, { cause });
+    } catch {
+      throw new SpireCodexRequestError("Spire Codex returned invalid JSON", context);
     }
 
     const validated = RawSpireCardsSchema.safeParse(parsed);

@@ -1,4 +1,4 @@
-import { mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { mkdir, open, realpath, rename, rm, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
 export interface ActiveSnapshot {
@@ -29,22 +29,25 @@ export class SnapshotStore {
     const stagingPath = join(this.snapshotsPath, `${buildId}.staging`);
     await mkdir(stagingPath);
 
-    let settled = false;
+    let phase: "staging" | "renamed" | "settled" = "staging";
+    const activatedPath = join(this.snapshotsPath, buildId);
     return {
       buildId,
       path: stagingPath,
       activate: async () => {
-        if (settled) throw new Error("Staging snapshot has already been settled");
-        const activatedPath = join(this.snapshotsPath, buildId);
-        await rename(stagingPath, activatedPath);
+        if (phase === "settled") throw new Error("Staging snapshot has already been settled");
+        if (phase === "staging") {
+          await rename(stagingPath, activatedPath);
+          phase = "renamed";
+        }
         await this.writeActivePointer(buildId);
-        settled = true;
+        phase = "settled";
         return activatedPath;
       },
       abort: async () => {
-        if (settled) throw new Error("Staging snapshot has already been settled");
-        await rm(stagingPath, { recursive: true, force: true });
-        settled = true;
+        if (phase === "settled") throw new Error("Staging snapshot has already been settled");
+        await rm(phase === "staging" ? stagingPath : activatedPath, { recursive: true, force: true });
+        phase = "settled";
       },
     };
   }
@@ -65,15 +68,22 @@ export class SnapshotStore {
     }
 
     const pointer = parsePointer(pointerBody);
-    const snapshotPath = resolve(this.snapshotsPath, pointer.buildId);
-    if (!isWithin(snapshotPath, this.snapshotsPath)) {
+    if (!isValidBuildId(pointer.buildId)) {
+      throw new Error("Invalid active snapshot build ID");
+    }
+    const snapshotPath = join(this.snapshotsPath, pointer.buildId);
+    const [snapshotsRealPath, snapshotRealPath] = await Promise.all([
+      realpath(this.snapshotsPath),
+      realpath(snapshotPath),
+    ]);
+    if (!isWithin(snapshotRealPath, snapshotsRealPath)) {
       throw new Error("Active snapshot pointer escapes snapshots directory");
     }
-    const snapshotStats = await stat(snapshotPath);
+    const snapshotStats = await stat(snapshotRealPath);
     if (!snapshotStats.isDirectory()) {
       throw new Error("Active snapshot pointer does not reference a directory");
     }
-    return { buildId: pointer.buildId, path: snapshotPath };
+    return { buildId: pointer.buildId, path: snapshotRealPath };
   }
 
   private async writeActivePointer(buildId: string): Promise<void> {
@@ -107,6 +117,10 @@ function parsePointer(value: string): { buildId: string } {
 function isWithin(candidate: string, parent: string): boolean {
   const pathToCandidate = relative(parent, candidate);
   return pathToCandidate !== "" && !pathToCandidate.startsWith("..") && !pathToCandidate.includes(":");
+}
+
+function isValidBuildId(buildId: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(buildId);
 }
 
 function isNotFound(error: unknown): error is NodeJS.ErrnoException {

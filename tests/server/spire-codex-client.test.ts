@@ -77,6 +77,45 @@ describe("SpireCodexClient", () => {
     await expect(client.fetchCards()).rejects.toBeDefined();
     expect(signal?.aborted).toBe(true);
   });
+
+  it("keeps request metadata when the response body stream fails", async () => {
+    const client = new SpireCodexClient({
+      baseUrl: "https://example.test",
+      fetchImpl: async () => new Response(new ReadableStream({
+        start(controller) {
+          controller.error(new Error("stream body must not leak"));
+        },
+      }), {
+        headers: { "retry-after": "60", "x-ratelimit-remaining": "0" },
+      }),
+    });
+
+    await expect(client.fetchCards()).rejects.toMatchObject({
+      name: "SpireCodexRequestError",
+      context: {
+        url: "https://example.test/api/cards?lang=eng",
+        status: 200,
+        retryAfter: "60",
+        rateLimitRemaining: "0",
+      },
+    });
+  });
+
+  it("does not retain response content as the cause of invalid JSON", async () => {
+    const client = new SpireCodexClient({
+      baseUrl: "https://example.test",
+      fetchImpl: async () => new Response('{"secret":"response content"'),
+    });
+
+    await expect(client.fetchCards()).rejects.toSatisfy((error: unknown) => {
+      expect(error).toMatchObject({
+        name: "SpireCodexRequestError",
+        message: "Spire Codex returned invalid JSON",
+      });
+      expect(error).not.toHaveProperty("cause");
+      return true;
+    });
+  });
 });
 
 describe("loadConfig", () => {
