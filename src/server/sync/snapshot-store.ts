@@ -1,5 +1,5 @@
 import { mkdir, open, realpath, rename, rm, stat } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 export interface ActiveSnapshot {
   buildId: string;
@@ -116,7 +116,12 @@ function parsePointer(value: string): { buildId: string } {
 
 function isWithin(candidate: string, parent: string): boolean {
   const pathToCandidate = relative(parent, candidate);
-  return pathToCandidate !== "" && !pathToCandidate.startsWith("..") && !pathToCandidate.includes(":");
+  return (
+    pathToCandidate !== "" &&
+    !isAbsolute(pathToCandidate) &&
+    !pathToCandidate.startsWith("..") &&
+    !pathToCandidate.includes(":")
+  );
 }
 
 function isValidBuildId(buildId: string): boolean {

@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SnapshotStore } from "../../src/server/sync/snapshot-store.js";
 
 const temporaryDirectories: string[] = [];
@@ -109,5 +109,35 @@ describe("SnapshotStore", () => {
       buildId: staging.buildId,
       path: join(dataDir, "snapshots", staging.buildId),
     });
+  });
+
+  it("rejects a Windows UNC root returned by a junction realpath", async () => {
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs/promises")>();
+      return {
+        ...actual,
+        open: async () => ({
+          readFile: async () => JSON.stringify({ buildId: "linked-build" }),
+          close: async () => undefined,
+        }),
+        realpath: async (path: string) => (
+          path.endsWith("snapshots") ? "C:\\store\\snapshots" : "\\\\server\\share\\outside"
+        ),
+        stat: async () => ({ isDirectory: () => true }),
+      };
+    });
+
+    try {
+      const { SnapshotStore: MockedSnapshotStore } = await import(
+        "../../src/server/sync/snapshot-store.js"
+      );
+      await expect(new MockedSnapshotStore("C:\\store").loadActive()).rejects.toThrow(
+        "escapes snapshots directory",
+      );
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
   });
 });
