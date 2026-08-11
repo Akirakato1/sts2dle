@@ -78,8 +78,8 @@
   min-height: 80px;
   transform: rotateY(0deg);
   transform-style: preserve-3d;
-  transition: transform 420ms ease;
-  transition-delay: calc((var(--reveal-index) + 1) * 110ms);
+  transition: transform var(--reveal-duration) ease;
+  transition-delay: calc((var(--reveal-index) + 1) * var(--reveal-stagger));
 }
 
 .feature-tile--revealed .feature-tile__surface {

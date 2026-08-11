@@ -8,6 +8,9 @@ const games = vi.hoisted(() => vi.fn());
 vi.mock("../../src/client/api/load-snapshot.js", () => ({ loadSnapshot: loads }));
 vi.mock("../../src/client/game/use-game.js", () => ({ useGame: games }));
 import { App } from "../../src/client/App.js";
+import { REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "../../src/client/components/FeatureTile.js";
+import { REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid.js";
+import { FEATURE_ORDER } from "../../src/shared/domain.js";
 
 const card = (id: string, name: string) => ({
   id, name, hasUpgrade: true, artUrl: `${id}.png`, baseCardUrl: null, upgradedCardUrl: null,
@@ -33,6 +36,9 @@ const makeResult = (feature: (typeof appFeatureNames)[number]) => ({
   hint: "none" as const,
 });
 const submittedGuess = { cardId: "apparition", results: appFeatureNames.map(makeResult) };
+const revealFallbackMs = FEATURE_ORDER.length * REVEAL_STAGGER_MS
+  + REVEAL_DURATION_MS
+  + REVEAL_FALLBACK_SAFETY_MS;
 
 function dispatchTransformEnd(target: Element): void {
   const event = new Event("transitionend", { bubbles: true });
@@ -193,7 +199,7 @@ describe("App snapshot cleanup", () => {
     gameState = { ...gameState, round: { ...gameState.round, guesses: [submittedGuess] } };
     view.rerender(<App />);
     expect(screen.getByRole("combobox")).toBeDisabled();
-    act(() => vi.advanceTimersByTime(1_699));
+    act(() => vi.advanceTimersByTime(revealFallbackMs - 1));
     expect(screen.getByRole("combobox")).toBeDisabled();
     act(() => vi.advanceTimersByTime(1));
     expect(screen.getByRole("combobox")).toBeEnabled();

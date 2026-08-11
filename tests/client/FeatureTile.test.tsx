@@ -3,7 +3,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import React from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { FeatureTile } from "../../src/client/components/FeatureTile.js";
+import { FeatureTile, REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "../../src/client/components/FeatureTile.js";
 import type { FeatureResult } from "../../src/shared/comparison.js";
 
 afterEach(() => {
@@ -68,7 +68,12 @@ describe("FeatureTile", () => {
     render(<FeatureTile result={result()} revealIndex={4} animate={false} />);
 
     const tile = screen.getByRole("cell");
-    expect(tile).toHaveStyle({ "--reveal-index": "4", "--tile-color": "#2f7d4a" });
+    expect(tile).toHaveStyle({
+      "--reveal-index": "4",
+      "--tile-color": "#2f7d4a",
+      "--reveal-stagger": `${REVEAL_STAGGER_MS}ms`,
+      "--reveal-duration": `${REVEAL_DURATION_MS}ms`,
+    });
     expect(tile).toHaveClass("feature-tile--immediate");
   });
 

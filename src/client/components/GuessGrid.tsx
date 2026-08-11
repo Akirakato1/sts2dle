@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SubmittedGuess } from "../game/game-reducer.js";
 import { FEATURE_ORDER, type CardIdentity, type SpriteMap } from "../../shared/domain.js";
-import { FEATURE_LABELS, FeatureTile } from "./FeatureTile.js";
+import { FEATURE_LABELS, FeatureTile, REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "./FeatureTile.js";
 import { SpriteArt } from "./SpriteArt.js";
 
 export interface GuessGridProps {
@@ -14,12 +14,10 @@ export interface GuessGridProps {
   onRevealComplete?: () => void;
 }
 
-const REVEAL_STAGGER_MS = 110;
-const REVEAL_DURATION_MS = 420;
-const REVEAL_FALLBACK_PADDING_MS = 70;
+export const REVEAL_FALLBACK_SAFETY_MS = 70;
 const REVEAL_FALLBACK_MS = FEATURE_ORDER.length * REVEAL_STAGGER_MS
   + REVEAL_DURATION_MS
-  + REVEAL_FALLBACK_PADDING_MS;
+  + REVEAL_FALLBACK_SAFETY_MS;
 
 interface RevealController {
   key: string;
@@ -47,15 +45,18 @@ function usePrefersReducedMotion(): boolean {
 export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFromIndex, onRevealComplete }: GuessGridProps) {
   const reducedMotion = usePrefersReducedMotion();
   const controllerRef = useRef<RevealController | null>(null);
+  const completedRevealKeyRef = useRef<string | null>(null);
   const onRevealCompleteRef = useRef(onRevealComplete);
   onRevealCompleteRef.current = onRevealComplete;
   const hasPendingReveal = animateFromIndex < guesses.length;
   const activeRevealKey = `${String(roundKey)}:${animateFromIndex}:${guesses.length}:${guesses.at(-1)?.cardId ?? ""}`;
 
   const completeReveal = useCallback((revealKey: string) => {
+    if (completedRevealKeyRef.current === revealKey) return;
     const controller = controllerRef.current;
     if (!controller || controller.key !== revealKey || controller.completed) return;
     controller.completed = true;
+    completedRevealKeyRef.current = revealKey;
     if (controller.timeoutId !== null) {
       clearTimeout(controller.timeoutId);
       controller.timeoutId = null;
@@ -70,7 +71,8 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
     }
     const controller: RevealController = { key: activeRevealKey, completed: false, timeoutId: null };
     controllerRef.current = controller;
-    if (reducedMotion) completeReveal(activeRevealKey);
+    if (completedRevealKeyRef.current === activeRevealKey) controller.completed = true;
+    else if (reducedMotion) completeReveal(activeRevealKey);
     else controller.timeoutId = setTimeout(() => completeReveal(activeRevealKey), REVEAL_FALLBACK_MS);
     return () => {
       if (controller.timeoutId !== null) clearTimeout(controller.timeoutId);

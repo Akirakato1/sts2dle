@@ -3,6 +3,9 @@ import React, { useEffect, useState, type CSSProperties } from "react";
 import type { FeatureResult, ManaHint, TileColor } from "../../shared/comparison.js";
 import type { FeatureName } from "../../shared/domain.js";
 
+export const REVEAL_STAGGER_MS = 110;
+export const REVEAL_DURATION_MS = 420;
+
 export const FEATURE_LABELS: Record<FeatureName, string> = {
   cardClass: "Class",
   cardType: "Type",
@@ -88,6 +91,8 @@ export function FeatureTile({ result, revealIndex, animate = true, onRevealEnd }
   const style = {
     "--reveal-index": String(revealIndex),
     "--tile-color": TILE_COLORS[result.color],
+    "--reveal-stagger": `${REVEAL_STAGGER_MS}ms`,
+    "--reveal-duration": `${REVEAL_DURATION_MS}ms`,
   } as CSSProperties;
 
   return <div

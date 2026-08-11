@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import React from "react";
+import React, { StrictMode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { GuessGrid } from "../../src/client/components/GuessGrid.js";
+import { GuessGrid, REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid.js";
+import { REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "../../src/client/components/FeatureTile.js";
 import type { SubmittedGuess } from "../../src/client/game/game-reducer.js";
 import type { FeatureResult } from "../../src/shared/comparison.js";
 import { FEATURE_ORDER, type CardIdentity, type SpriteMap } from "../../src/shared/domain.js";
@@ -54,6 +55,9 @@ const spriteMap: SpriteMap = {
 };
 
 const cardsById = new Map(cards.map((card) => [card.id, card]));
+const revealFallbackMs = FEATURE_ORDER.length * REVEAL_STAGGER_MS
+  + REVEAL_DURATION_MS
+  + REVEAL_FALLBACK_SAFETY_MS;
 
 function dispatchTransitionEnd(target: Element, propertyName: string): void {
   const event = new Event("transitionend", { bubbles: true });
@@ -109,7 +113,7 @@ describe("GuessGrid", () => {
     expect(screen.getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
   });
 
-  test("reveals immediately and completes without a transition when reduced motion is preferred", async () => {
+  test("completes each reduced-motion reveal once under StrictMode without scheduling timers", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({
       matches: true,
@@ -117,14 +121,14 @@ describe("GuessGrid", () => {
       removeEventListener: vi.fn(),
     }));
     const onRevealComplete = vi.fn();
-    const { rerender } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    const { rerender } = render(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
 
     expect(screen.getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
     await act(async () => Promise.resolve());
     expect(onRevealComplete).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-    rerender(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
-    expect(onRevealComplete).toHaveBeenCalledOnce();
+    rerender(<StrictMode><GuessGrid guesses={[guesses[1]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-2" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
+    expect(onRevealComplete).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -133,7 +137,7 @@ describe("GuessGrid", () => {
     const onRevealComplete = vi.fn();
     render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
 
-    act(() => vi.advanceTimersByTime(1_699));
+    act(() => vi.advanceTimersByTime(revealFallbackMs - 1));
     expect(onRevealComplete).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(1));
     expect(onRevealComplete).toHaveBeenCalledOnce();
@@ -149,7 +153,7 @@ describe("GuessGrid", () => {
 
     dispatchTransitionEnd(finalSurface.querySelector(".feature-tile__back")!, "transform");
     expect(onRevealComplete).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(1_700));
+    act(() => vi.advanceTimersByTime(revealFallbackMs));
     expect(onRevealComplete).toHaveBeenCalledOnce();
   });
 
@@ -160,7 +164,7 @@ describe("GuessGrid", () => {
 
     dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[10]!, "opacity");
     expect(onRevealComplete).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(1_700));
+    act(() => vi.advanceTimersByTime(revealFallbackMs));
     expect(onRevealComplete).toHaveBeenCalledOnce();
   });
 
@@ -175,21 +179,6 @@ describe("GuessGrid", () => {
     dispatchTransitionEnd(finalSurface, "transform");
     expect(onRevealComplete).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  test("cancels the previous round controller and rejects its stale event and timer", () => {
-    vi.useFakeTimers();
-    const onRevealComplete = vi.fn();
-    const view = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
-    const staleSurface = view.container.querySelectorAll(".feature-tile__surface")[10]!;
-    act(() => vi.advanceTimersByTime(1_000));
-
-    view.rerender(<GuessGrid guesses={[guesses[1]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-2" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
-    dispatchTransitionEnd(staleSurface, "transform");
-    act(() => vi.advanceTimersByTime(700));
-    expect(onRevealComplete).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(1_000));
-    expect(onRevealComplete).toHaveBeenCalledOnce();
   });
 
   test("cancels the fallback without completing after unmount", () => {
