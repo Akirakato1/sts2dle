@@ -2,7 +2,7 @@
   "name": "stsdle",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=22.12" },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "tsx watch src/server/main.ts",
@@ -11,6 +11,8 @@
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/main.js",
+    "fixture:snapshot": "tsx tests/e2e/fixtures/build-test-snapshot.ts",
+    "start:e2e": "npm run build && npm run fixture:snapshot && node dist/server/main.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",

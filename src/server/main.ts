@@ -76,14 +76,17 @@ export async function main(dependencies: MainDependencies = {}): Promise<MainApp
   }
   app.log?.info({
     sourceRevision: active.manifest.sourceRevision,
-    generatedAt: active.manifest.generatedAt,
+    sourceLastModified: active.manifest.sourceLastModified,
     cardCount: active.report.cardCount,
+    upgradeCount: active.report.upgradeCount,
     baseGroupCount: active.report.baseGroupCount,
     pairGroupCount: active.report.pairGroupCount,
+    baseGroupHistogram: active.report.baseGroupHistogram,
+    pairGroupHistogram: active.report.pairGroupHistogram,
+    candidateSpriteBytes: active.report.candidateSprite.bytes,
+    guessSpriteBytes: active.report.guessSprite.bytes,
     fallbackCardCount: active.report.fallbackCardIds.length,
-    candidateSprite: active.report.candidateSprite,
-    guessSprite: active.report.guessSprite,
-  }, "Serving validated snapshot");
+  }, "Snapshot startup acceptance passed");
   await app.listen({ host: config.host, port: config.port });
   return app;
 }

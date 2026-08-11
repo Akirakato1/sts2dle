@@ -14,6 +14,9 @@ export interface ServerConfig {
 
 type Environment = Record<string, string | undefined>;
 
+const OFFICIAL_SPIRE_CODEX_ORIGIN = "https://spire-codex.com";
+const OFFICIAL_SPIRE_CODEX_CDN_ORIGIN = "https://cdn.spire-codex.com";
+
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback;
   const parsed = Number(value);
@@ -37,12 +40,15 @@ export function loadConfig(env: Environment): ServerConfig {
     [env.SPIRE_CODEX_BASE_URL ?? "https://spire-codex.com"],
     "Spire Codex",
   );
+  const defaultImageOrigins = spireCodexBaseUrl === OFFICIAL_SPIRE_CODEX_ORIGIN
+    ? [spireCodexBaseUrl, OFFICIAL_SPIRE_CODEX_CDN_ORIGIN]
+    : [spireCodexBaseUrl!];
   const artworkAllowedOrigins = parseAllowedImageOrigins(
-    splitOrigins(env.STSDLE_ARTWORK_ALLOWED_ORIGINS, spireCodexBaseUrl!),
+    splitOrigins(env.STSDLE_ARTWORK_ALLOWED_ORIGINS, defaultImageOrigins),
     "Artwork",
   );
   const fullCardAllowedOrigins = parseAllowedImageOrigins(
-    splitOrigins(env.STSDLE_FULL_CARD_ALLOWED_ORIGINS, spireCodexBaseUrl!),
+    splitOrigins(env.STSDLE_FULL_CARD_ALLOWED_ORIGINS, defaultImageOrigins),
     "Full-card",
   );
 
@@ -63,7 +69,7 @@ export function loadConfig(env: Environment): ServerConfig {
   };
 }
 
-function splitOrigins(value: string | undefined, fallback: string): string[] {
-  if (value === undefined) return [fallback];
+function splitOrigins(value: string | undefined, fallback: string[]): string[] {
+  if (value === undefined) return fallback;
   return value.split(",").map((origin) => origin.trim()).filter(Boolean);
 }

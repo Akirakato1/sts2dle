@@ -215,8 +215,8 @@ describe("main", () => {
     });
 
     expect(loadPrior).toHaveBeenCalledWith(prior.path, {
-      allowedArtworkOrigins: ["https://spire-codex.com"],
-      allowedFullCardOrigins: ["https://spire-codex.com"],
+      allowedArtworkOrigins: ["https://cdn.spire-codex.com", "https://spire-codex.com"],
+      allowedFullCardOrigins: ["https://cdn.spire-codex.com", "https://spire-codex.com"],
     });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ snapshotRoot: prior.path }));
     expect(listen).toHaveBeenCalledTimes(1);
@@ -224,11 +224,20 @@ describe("main", () => {
       { errorName: "Error" },
       "Snapshot refresh failed; serving validated prior snapshot",
     );
-    expect(info).toHaveBeenCalledWith(expect.objectContaining({
+    expect(info).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledWith({
       sourceRevision: "prior-revision",
+      sourceLastModified: null,
       cardCount: 0,
+      upgradeCount: 0,
+      baseGroupCount: 0,
+      pairGroupCount: 0,
+      baseGroupHistogram: {},
+      pairGroupHistogram: {},
+      candidateSpriteBytes: 1,
+      guessSpriteBytes: 1,
       fallbackCardCount: 0,
-    }), "Serving validated snapshot");
+    }, "Snapshot startup acceptance passed");
     expect(JSON.stringify([warn.mock.calls, info.mock.calls])).not.toContain("refresh unavailable");
   });
 

@@ -33,6 +33,23 @@ describe("loadSnapshot", () => {
     expect(snapshot.pairGroupsByKey.get("pair")?.cardIds).toContain("ALCHEMIZE");
   });
 
+  test("accepts the canonical en dash mana value emitted for unplayable cards", async () => {
+    const dashCard = {
+      ...card,
+      base: { ...card.base, mana: "\u2013" },
+      upgraded: { ...card.upgraded, mana: "\u2013" },
+    };
+    const snapshot = await loadSnapshot(jsonFetch({
+      "/runtime/manifest.json": manifest,
+      "/runtime/cards.json": [dashCard],
+      "/runtime/base-groups.json": baseGroups,
+      "/runtime/pair-groups.json": pairGroups,
+      "/runtime/sprite-map.json": spriteMap,
+    }));
+
+    expect(snapshot.cards[0]?.base.mana).toBe("\u2013");
+  });
+
   test("includes a failed runtime URL in a non-success response error", async () => {
     const fetchImpl = (async (input: string | URL | Request) => new Response("missing", { status: String(input).includes("cards") ? 404 : 200 })) as typeof fetch;
     await expect(loadSnapshot(fetchImpl)).rejects.toThrow("/runtime/cards.json");

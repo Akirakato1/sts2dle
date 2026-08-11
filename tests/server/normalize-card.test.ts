@@ -1,5 +1,7 @@
 import fixture from "../fixtures/spire-cards.json";
 import { describe, expect, it } from "vitest";
+import { loadConfig } from "../../src/server/config.js";
+import { assertAllowedImageUrl } from "../../src/server/images/url-policy.js";
 import { RawSpireCardsSchema } from "../../src/server/spire-codex/schema.js";
 import { normalizeCard } from "../../src/server/sync/normalize-card.js";
 
@@ -15,6 +17,22 @@ function card(id: string) {
 describe("normalizeCard", () => {
   it("applies keyword-only upgrades without an upgraded description", () => {
     expect(normalizeCard(card("AFTERIMAGE"), BASE_URL).upgraded.innate).toBe(true);
+  });
+
+  it("uses the official canonical CDN URL for hosted Spire Codex card artwork", () => {
+    expect(normalizeCard(card("ALCHEMIZE"), "https://spire-codex.com").artUrl)
+      .toBe("https://cdn.spire-codex.com/cards/alchemize.webp");
+  });
+
+  it("allows canonical official artwork with the default production configuration", () => {
+    const config = loadConfig({});
+    const normalized = normalizeCard(card("ALCHEMIZE"), config.spireCodexBaseUrl);
+
+    expect(() => assertAllowedImageUrl(
+      normalized.artUrl,
+      config.artworkAllowedOrigins,
+      "Artwork",
+    )).not.toThrow();
   });
 
   it("removes base keywords when an upgrade requests it", () => {

@@ -52,6 +52,34 @@ afterEach(async () => {
 });
 
 describe("buildSnapshot", () => {
+  it("passes canonical hosted artwork to both sprite and fallback rendering", async () => {
+    const store = await createStore();
+    const raw = fixture[3] as RawSpireCard;
+    const requestedUrls: string[] = [];
+    const render = vi.fn(async (_raw: RawSpireCard, _upgraded: boolean, destination: string) => {
+      await writeFile(destination, fallbackImage);
+    });
+
+    await buildSnapshot({
+      client: fixtureClient([raw]),
+      store,
+      baseUrl: "https://spire-codex.com",
+      fetchImpl: async (input) => {
+        requestedUrls.push(String(input));
+        return new Response(new Uint8Array(artwork));
+      },
+      fallbackRenderer: { render },
+      artworkConcurrency: 1,
+      allowedArtworkOrigins: ["https://cdn.spire-codex.com"],
+      allowedFullCardOrigins: ["https://cdn.test"],
+    });
+
+    expect(requestedUrls).toEqual(["https://cdn.spire-codex.com/cards/mad_science_attack.webp"]);
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(render.mock.calls.every(([rendered]) => rendered.image_url === "https://cdn.spire-codex.com/cards/mad_science_attack.webp"))
+      .toBe(true);
+  });
+
   it("builds, validates, and activates a stable snapshot with only required fallbacks", async () => {
     const store = await createStore();
     const render = vi.fn(async (_raw: RawSpireCard, _upgraded: boolean, destination: string) => {

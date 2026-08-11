@@ -22,6 +22,10 @@ const CLASS_BY_COLOR = {
   curse: "Neutral",
 } as const satisfies Record<string, CardClass>;
 
+const OFFICIAL_ARTWORK_SOURCE_ORIGIN = "https://spire-codex.com";
+const OFFICIAL_ARTWORK_SOURCE_PREFIX = "/static/images/cards/";
+const OFFICIAL_ARTWORK_CDN_ORIGIN = "https://cdn.spire-codex.com";
+
 const KEYWORDS = [
   "eternal", "ethereal", "exhaust", "innate",
   "retain", "sly", "unplayable",
@@ -88,6 +92,22 @@ function applyUpgrade(base: FeatureVector, raw: RawSpireCard): FeatureVector {
   return upgraded;
 }
 
+function resolveArtworkUrl(value: string, baseUrl: string): string {
+  const resolved = new URL(value, baseUrl);
+  const filename = resolved.pathname.startsWith(OFFICIAL_ARTWORK_SOURCE_PREFIX)
+    ? resolved.pathname.slice(OFFICIAL_ARTWORK_SOURCE_PREFIX.length)
+    : "";
+  if (
+    resolved.origin === OFFICIAL_ARTWORK_SOURCE_ORIGIN
+    && resolved.search === ""
+    && resolved.hash === ""
+    && /^[A-Za-z0-9_-]+\.webp$/.test(filename)
+  ) {
+    return new URL(`/cards/${filename}`, OFFICIAL_ARTWORK_CDN_ORIGIN).toString();
+  }
+  return resolved.toString();
+}
+
 export function normalizeCard(raw: RawSpireCard, baseUrl: string): CardIdentity {
   if (!raw.image_url) throw new Error("Card image URL is required: " + raw.id);
 
@@ -99,7 +119,7 @@ export function normalizeCard(raw: RawSpireCard, baseUrl: string): CardIdentity 
     id: raw.id,
     name: raw.name,
     hasUpgrade,
-    artUrl: new URL(raw.image_url, baseUrl).toString(),
+    artUrl: resolveArtworkUrl(raw.image_url, baseUrl),
     baseCardUrl: raw.image_url_card,
     upgradedCardUrl: raw.image_url_card_upg,
     base,

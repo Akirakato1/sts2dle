@@ -188,13 +188,14 @@ async function renderMissingFullCards(
   let createdFallbackDirectory = false;
   for (const card of cards) {
     const raw = rawById.get(card.id)!;
+    const renderableRaw = raw.image_url === card.artUrl ? raw : { ...raw, image_url: card.artUrl };
     if (!card.baseCardUrl) {
       if (!createdFallbackDirectory) {
         await mkdir(fallbackPath, { recursive: true });
         createdFallbackDirectory = true;
       }
       const filename = fallbackFilename(card.id, false);
-      await renderer.render(raw, false, join(fallbackPath, filename));
+      await renderer.render(renderableRaw, false, join(fallbackPath, filename));
       card.baseCardUrl = fallbackUrl(card.id, false);
     }
     if (card.hasUpgrade && !card.upgradedCardUrl) {
@@ -203,7 +204,7 @@ async function renderMissingFullCards(
         createdFallbackDirectory = true;
       }
       const filename = fallbackFilename(card.id, true);
-      await renderer.render(raw, true, join(fallbackPath, filename));
+      await renderer.render(renderableRaw, true, join(fallbackPath, filename));
       card.upgradedCardUrl = fallbackUrl(card.id, true);
     }
   }
