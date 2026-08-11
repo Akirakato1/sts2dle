@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser } from "playwright";
 import sharp from "sharp";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import fixture from "../fixtures/spire-cards.json";
 import { FallbackRenderer } from "../../src/server/images/fallback-renderer.js";
 import { RawSpireCardsSchema } from "../../src/server/spire-codex/schema.js";
@@ -66,6 +66,59 @@ afterEach(async () => {
 });
 
 describe("FallbackRenderer", () => {
+  it("uses one Chromium browser and context for multiple fallback outputs", async () => {
+    const outputDir = await createOutputDirectory();
+    let browser: Browser | undefined;
+    const launchImpl = vi.fn(async () => {
+      browser = await chromium.launch({ headless: true });
+      return browser;
+    });
+    const renderer = new FallbackRenderer({
+      fetchImpl: async () => imageResponse(portraitBytes),
+      launchImpl,
+    });
+    const basePath = join(outputDir, "batch-base.webp");
+    const upgradedPath = join(outputDir, "batch-upgraded.webp");
+
+    await renderer.renderBatch([
+      { raw: card("MAD_SCIENCE"), upgraded: false, destination: basePath },
+      { raw: card("MAD_SCIENCE"), upgraded: true, destination: upgradedPath },
+    ]);
+
+    expect(launchImpl).toHaveBeenCalledOnce();
+    await expect(sharp(await readFile(basePath)).metadata()).resolves.toMatchObject({
+      format: "webp", width: 400, height: 520,
+    });
+    await expect(sharp(await readFile(upgradedPath)).metadata()).resolves.toMatchObject({
+      format: "webp", width: 400, height: 520,
+    });
+    expect(browser?.isConnected()).toBe(false);
+  });
+
+  it("closes the batch page, context, and browser after a mid-batch render failure", async () => {
+    const outputDir = await createOutputDirectory();
+    let browser: Browser | undefined;
+    let requests = 0;
+    const renderer = new FallbackRenderer({
+      fetchImpl: async () => {
+        requests += 1;
+        return imageResponse(requests === 1 ? portraitBytes : Buffer.from("not an image"));
+      },
+      launchImpl: async () => {
+        browser = await chromium.launch({ headless: true });
+        return browser;
+      },
+    });
+
+    await expect(renderer.renderBatch([
+      { raw: card("MAD_SCIENCE"), upgraded: false, destination: join(outputDir, "first.webp") },
+      { raw: card("MAD_SCIENCE"), upgraded: true, destination: join(outputDir, "second.webp") },
+    ])).rejects.toThrow(/portrait|decode/i);
+
+    expect(browser).toBeDefined();
+    expect(browser?.isConnected()).toBe(false);
+  });
+
   it("renders approved relative and absolute Mad Science portraits as distinct WebPs", async () => {
     const outputDir = await createOutputDirectory();
     const basePath = join(outputDir, "mad-science.webp");
@@ -182,8 +235,10 @@ describe("FallbackRenderer", () => {
   });
 
   it("forbids redirects when fetching an approved portrait", async () => {
+    let requests = 0;
     const renderer = new FallbackRenderer({
       fetchImpl: async (_input, init) => {
+        requests += 1;
         expect(init?.redirect).toBe("error");
         return new Response(null, {
           status: 302,
@@ -200,6 +255,73 @@ describe("FallbackRenderer", () => {
       false,
       join(tmpdir(), "unused-redirect.webp"),
     )).rejects.toThrow(/portrait redirects are not allowed.*MAD_SCIENCE/i);
+    expect(requests).toBe(1);
+  });
+
+  it("does not retry a response whose effective portrait URL changed", async () => {
+    let requests = 0;
+    const renderer = new FallbackRenderer({
+      fetchImpl: async () => {
+        requests += 1;
+        const response = imageResponse(portraitBytes);
+        Object.defineProperty(response, "url", {
+          configurable: true,
+          value: "https://127.0.0.1/private.webp",
+        });
+        return response;
+      },
+      launchImpl: async () => { throw new Error("Unexpected browser launch"); },
+    });
+
+    await expect(renderer.render(
+      card("MAD_SCIENCE"),
+      false,
+      join(tmpdir(), "unused-effective-url.webp"),
+    )).rejects.toThrow(/portrait redirects are not allowed.*MAD_SCIENCE/i);
+    expect(requests).toBe(1);
+  });
+
+  it("times out and aborts stalled portrait headers before browser launch", async () => {
+    const signals: AbortSignal[] = [];
+    const renderer = new FallbackRenderer({
+      requestTimeoutMs: 5,
+      fetchImpl: ((_input: string | URL | Request, init?: RequestInit) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error("Expected an abort signal");
+        signals.push(signal);
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }) as typeof fetch,
+      launchImpl: async () => { throw new Error("Unexpected browser launch"); },
+    });
+
+    await expect(renderer.render(
+      card("MAD_SCIENCE"),
+      false,
+      join(tmpdir(), "unused-timeout.webp"),
+    )).rejects.toThrow("Failed to fetch portrait for card MAD_SCIENCE");
+    expect(signals).toHaveLength(3);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("retries a transient portrait response before continuing to rendering", async () => {
+    let requests = 0;
+    const renderer = new FallbackRenderer({
+      requestTimeoutMs: 100,
+      fetchImpl: async () => {
+        requests += 1;
+        return requests === 1 ? new Response(null, { status: 503 }) : imageResponse(portraitBytes);
+      },
+      launchImpl: async () => { throw new Error("render reached"); },
+    });
+
+    await expect(renderer.render(
+      card("MAD_SCIENCE"),
+      false,
+      join(tmpdir(), "unused-transient.webp"),
+    )).rejects.toThrow("render reached");
+    expect(requests).toBe(2);
   });
 
   it("sanitizes portrait body-stream failures", async () => {

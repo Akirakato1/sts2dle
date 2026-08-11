@@ -11,6 +11,7 @@ import type { SpireCodexClient } from "../spire-codex/client.js";
 import { normalizeCard } from "./normalize-card.js";
 import type { SnapshotStore } from "./snapshot-store.js";
 import {
+  SnapshotValidationError,
   validateSnapshot,
   type SnapshotAcceptanceReport,
 } from "./validate-snapshot.js";
@@ -19,6 +20,13 @@ const DEFAULT_BASE_URL = "https://spire-codex.com";
 
 export interface FallbackRendererLike {
   render(raw: RawSpireCard, upgraded: boolean, destination: string): Promise<void>;
+  renderBatch?(requests: readonly FallbackRenderRequest[]): Promise<void>;
+}
+
+export interface FallbackRenderRequest {
+  raw: RawSpireCard;
+  upgraded: boolean;
+  destination: string;
 }
 
 export interface BuildSnapshotDependencies {
@@ -30,6 +38,7 @@ export interface BuildSnapshotDependencies {
   artworkConcurrency?: number;
   allowedArtworkOrigins: readonly string[];
   allowedFullCardOrigins: readonly string[];
+  requestTimeoutMs?: number;
   writeStableJsonImpl?: typeof writeStableJson;
   hashFileImpl?: (path: string) => Promise<string>;
   now?: () => Date;
@@ -43,6 +52,15 @@ export interface ActivatedSnapshot {
 }
 
 export async function buildSnapshot(
+  dependencies: BuildSnapshotDependencies,
+): Promise<ActivatedSnapshot> {
+  return dependencies.store.withSyncLock(async () => {
+    await dependencies.store.cleanupAbandonedStaging();
+    return buildSnapshotLocked(dependencies);
+  });
+}
+
+async function buildSnapshotLocked(
   dependencies: BuildSnapshotDependencies,
 ): Promise<ActivatedSnapshot> {
   const fetched = await dependencies.client.fetchCards();
@@ -71,6 +89,7 @@ export async function buildSnapshot(
       fetchImpl: dependencies.fetchImpl,
       concurrency: dependencies.artworkConcurrency ?? 4,
       allowedArtworkOrigins,
+      requestTimeoutMs: dependencies.requestTimeoutMs ?? 30_000,
     });
     await renderMissingFullCards(rawCards, cards, staging.path, dependencies.fallbackRenderer);
     const writeJson = dependencies.writeStableJsonImpl ?? writeStableJson;
@@ -100,7 +119,17 @@ export async function buildSnapshot(
     });
     const activatedPath = await staging.activate();
     settled = true;
-    return { buildId: staging.buildId, path: activatedPath, manifest, report };
+    const active = { buildId: staging.buildId, path: activatedPath };
+    await dependencies.store.retainValidatedSnapshots(active, async (path) => {
+      try {
+        await validateSnapshot(path, { allowedArtworkOrigins, allowedFullCardOrigins });
+        return true;
+      } catch (error: unknown) {
+        if (error instanceof SnapshotValidationError) return false;
+        throw error;
+      }
+    });
+    return { ...active, manifest, report };
   } catch (error: unknown) {
     if (!settled) {
       try {
@@ -186,6 +215,7 @@ async function renderMissingFullCards(
   const rawById = new Map(rawCards.map((raw) => [raw.id, raw]));
   const fallbackPath = join(stagingPath, "fallback");
   let createdFallbackDirectory = false;
+  const requests: FallbackRenderRequest[] = [];
   for (const card of cards) {
     const raw = rawById.get(card.id)!;
     const renderableRaw = raw.image_url === card.artUrl ? raw : { ...raw, image_url: card.artUrl };
@@ -195,7 +225,7 @@ async function renderMissingFullCards(
         createdFallbackDirectory = true;
       }
       const filename = fallbackFilename(card.id, false);
-      await renderer.render(renderableRaw, false, join(fallbackPath, filename));
+      requests.push({ raw: renderableRaw, upgraded: false, destination: join(fallbackPath, filename) });
       card.baseCardUrl = fallbackUrl(card.id, false);
     }
     if (card.hasUpgrade && !card.upgradedCardUrl) {
@@ -204,8 +234,15 @@ async function renderMissingFullCards(
         createdFallbackDirectory = true;
       }
       const filename = fallbackFilename(card.id, true);
-      await renderer.render(renderableRaw, true, join(fallbackPath, filename));
+      requests.push({ raw: renderableRaw, upgraded: true, destination: join(fallbackPath, filename) });
       card.upgradedCardUrl = fallbackUrl(card.id, true);
+    }
+  }
+  if (renderer.renderBatch) {
+    await renderer.renderBatch(requests);
+  } else {
+    for (const request of requests) {
+      await renderer.render(request.raw, request.upgraded, request.destination);
     }
   }
 }

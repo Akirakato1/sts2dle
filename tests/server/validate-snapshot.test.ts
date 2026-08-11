@@ -47,7 +47,7 @@ async function createValidSnapshot(): Promise<string> {
         return {
           cards: fixture as RawSpireCard[],
           rawBody: JSON.stringify(fixture),
-          sourceRevision: "validation-revision",
+          sourceRevision: "cd".repeat(32),
           lastModified: null,
           fetchedAt: "2026-08-12T00:00:00.000Z",
         };
@@ -129,6 +129,21 @@ describe("validateSnapshot", () => {
     ["baseGroupCount", 99, /base group count mismatch/i],
     ["pairGroupCount", 99, /pair group count mismatch/i],
   ] as const)("rejects a manifest %s mismatch", async (field, value, pattern) => {
+    const path = await createValidSnapshot();
+    const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
+    manifest[field] = value;
+    await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
+
+    await expectIssues(path, [pattern]);
+  });
+
+  it.each([
+    ["sourceRevision", "ABC", /sourceRevision/i],
+    ["sourceRevision", "AB".repeat(32), /sourceRevision/i],
+    ["fetchedAt", "2026-08-12T00:00:00Z", /fetchedAt/i],
+    ["generatedAt", "2026-08-12T09:00:01.000+09:00", /generatedAt/i],
+    ["generatedAt", "not-a-date", /generatedAt/i],
+  ] as const)("rejects corrupt recovery manifest metadata %s=%s", async (field, value, pattern) => {
     const path = await createValidSnapshot();
     const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
     manifest[field] = value;

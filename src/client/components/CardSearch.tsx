@@ -31,9 +31,11 @@ export function searchCards(
 export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false, onSelect }: CardSearchProps) {
   const listboxId = useId();
   const pointerSelecting = useRef(false);
+  const optionRefs = useRef(new Map<string, HTMLLIElement>());
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [scrollRequest, setScrollRequest] = useState(0);
   const results = useMemo(() => searchCards(cards, query, guessedCardIds), [cards, guessedCardIds, query]);
   const duplicateNames = useMemo(() => {
     const counts = new Map<string, number>();
@@ -51,6 +53,16 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
     setIsOpen(false);
   }, [disabled]);
 
+  useEffect(() => {
+    if (!menuOpen || activeIndex < 0 || scrollRequest === 0) return;
+    const card = results[activeIndex];
+    if (!card) return;
+    const option = optionRefs.current.get(card.id);
+    if (typeof option?.scrollIntoView === "function") {
+      option.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex, menuOpen, results, scrollRequest]);
+
   function choose(card: CardIdentity) {
     if (disabled) return;
     pointerSelecting.current = false;
@@ -63,6 +75,7 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
   function moveActive(direction: 1 | -1) {
     if (disabled || results.length === 0) return;
     setIsOpen(true);
+    setScrollRequest((current) => current + 1);
     setActiveIndex((current) => {
       if (current < 0) return direction === 1 ? 0 : results.length - 1;
       return (current + direction + results.length) % results.length;
@@ -110,9 +123,11 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
         } else if (event.key === "Home" && menuOpen) {
           event.preventDefault();
           setActiveIndex(0);
+          setScrollRequest((current) => current + 1);
         } else if (event.key === "End" && menuOpen) {
           event.preventDefault();
           setActiveIndex(results.length - 1);
+          setScrollRequest((current) => current + 1);
         } else if (event.key === "Enter" && menuOpen && activeIndex >= 0) {
           event.preventDefault();
           choose(results[activeIndex]!);
@@ -127,6 +142,10 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
       {results.map((card, index) => <li
         id={optionId(card.id)}
         key={card.id}
+        ref={(element) => {
+          if (element) optionRefs.current.set(card.id, element);
+          else optionRefs.current.delete(card.id);
+        }}
         className="card-search__option"
         role="option"
         aria-selected={index === activeIndex}

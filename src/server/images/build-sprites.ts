@@ -3,12 +3,14 @@ import { join } from "node:path";
 import sharp from "sharp";
 import type { CardIdentity, SpriteMap } from "../../shared/domain.js";
 import { assertAllowedImageUrl, parseAllowedImageOrigins } from "./url-policy.js";
+import { fetchImageWithRetry, ImageFetchRejectedError } from "./fetch-image.js";
 
 export interface BuildSpritesOptions {
   cards: readonly CardIdentity[];
   outputDir: string;
   fetchImpl: typeof fetch;
   concurrency: number;
+  requestTimeoutMs: number;
   allowedArtworkOrigins: readonly string[];
   transformCellImpl?: TransformCell;
 }
@@ -44,6 +46,7 @@ export async function buildSprites(options: BuildSpritesOptions): Promise<Sprite
     options.fetchImpl,
     options.concurrency,
     allowedArtworkOrigins,
+    options.requestTimeoutMs,
   );
   const spriteMap = createSpriteMap(cards, columns, rows);
   const transformCellImpl = options.transformCellImpl ?? transformCell;
@@ -98,6 +101,7 @@ async function downloadArtwork(
   fetchImpl: typeof fetch,
   concurrency: number,
   allowedArtworkOrigins: readonly string[],
+  requestTimeoutMs: number,
 ): Promise<Map<string, Buffer>> {
   const requests = new Map<string, CardIdentity>();
   for (const card of cards) {
@@ -115,24 +119,37 @@ async function downloadArtwork(
       nextIndex += 1;
       if (!card) return;
       try {
-        const response = await fetchImpl(card.artUrl, { redirect: "manual" });
-        if (
-          response.redirected ||
-          (response.status >= 300 && response.status < 400) ||
-          (response.url !== "" && response.url !== card.artUrl)
-        ) {
-          throw new Error(`Artwork redirect is not allowed for card ${card.id}`);
-        }
-        if (response.url !== "") {
-          assertAllowedImageUrl(response.url, allowedArtworkOrigins, `Artwork for card ${card.id}`);
-        }
-        if (!response.ok) {
-          throw new Error(`Failed to download artwork for card ${card.id}: HTTP ${response.status}`);
-        }
-        const bytes = Buffer.from(await response.arrayBuffer());
-        if (bytes.length === 0) {
-          throw new Error(`Empty artwork response for card ${card.id}`);
-        }
+        const { bytes } = await fetchImageWithRetry({
+          url: card.artUrl,
+          fetchImpl,
+          requestTimeoutMs,
+          redirect: "manual",
+          validateResponse(response) {
+            if (
+              response.redirected ||
+              (response.status >= 300 && response.status < 400) ||
+              (response.url !== "" && response.url !== card.artUrl)
+            ) {
+              throw new ImageFetchRejectedError(
+                new Error(`Artwork redirect is not allowed for card ${card.id}`),
+              );
+            }
+            if (response.url !== "") {
+              try {
+                assertAllowedImageUrl(response.url, allowedArtworkOrigins, `Artwork for card ${card.id}`);
+              } catch {
+                throw new ImageFetchRejectedError(
+                  new Error(`Artwork response URL is not allowed for card ${card.id}`),
+                );
+              }
+            }
+          },
+          httpError: (status) => new Error(
+            `Failed to download artwork for card ${card.id}: HTTP ${status}`,
+          ),
+          emptyError: () => new Error(`Empty artwork response for card ${card.id}`),
+          networkError: () => new Error(`Failed to download artwork for card ${card.id}`),
+        });
         try {
           await sharp(bytes).metadata();
         } catch (error: unknown) {

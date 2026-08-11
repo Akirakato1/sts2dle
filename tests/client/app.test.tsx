@@ -57,6 +57,18 @@ afterEach(() => {
 });
 
 describe("App snapshot cleanup", () => {
+  test("shows visible Spire Codex attribution and an explicit unofficial Mega Crit disclaimer", () => {
+    loads.mockImplementation(() => new Promise(() => undefined));
+    render(<App />);
+
+    const footer = screen.getByRole("contentinfo");
+    expect(footer).toHaveTextContent(/unofficial fan project/i);
+    expect(footer).toHaveTextContent(/not affiliated with or endorsed by Mega Crit/i);
+    expect(screen.getByRole("link", { name: "Spire Codex" })).toHaveAttribute(
+      "href",
+      "https://spire-codex.com/",
+    );
+  });
   test("StrictMode aborts all pending loads without showing an error and remounts successfully", async () => {
     const calls: AbortSignal[] = [];
     loads.mockImplementation((_fetch: typeof fetch, signal: AbortSignal) => new Promise((_resolve, reject) => {

@@ -223,6 +223,27 @@ describe("useGame", () => {
     expect(timeoutSpy.mock.calls.filter((call) => call[1] === 86_400_000)).toHaveLength(1);
   });
 
+  test("keeps an active Practice round intact across UTC midnight and uses the new date when Daily is selected", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await game.result.current.setMode("practice"); });
+    const practiceToken = game.result.current.roundToken;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+    expect(game.result.current.round?.mode).toBe("practice");
+    expect(game.result.current.roundToken).toBe(practiceToken);
+    expect(game.result.current.dailyUtcDate).toBe("2026-08-13");
+    expect(createDailyRandom).not.toHaveBeenCalledWith("2026-08-13", "revision");
+
+    await act(async () => { await game.result.current.setMode("daily"); });
+    expect(game.result.current.round?.mode).toBe("daily");
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
+  });
+
   test("re-arms after an early timer fires before the UTC date changes", async () => {
     vi.useRealTimers();
     vi.useFakeTimers();
@@ -254,6 +275,24 @@ describe("useGame", () => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
     expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
+  });
+
+  test("visibility rollover advances Daily availability without replacing Practice", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T18:00:00Z"));
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await game.result.current.setMode("practice"); });
+    const practiceToken = game.result.current.roundToken;
+
+    vi.setSystemTime(new Date("2026-08-13T08:00:00Z"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+
+    expect(game.result.current.round?.mode).toBe("practice");
+    expect(game.result.current.roundToken).toBe(practiceToken);
+    expect(game.result.current.dailyUtcDate).toBe("2026-08-13");
   });
 
   test("cleans up the UTC rollover timer and visibility listener on unmount", async () => {

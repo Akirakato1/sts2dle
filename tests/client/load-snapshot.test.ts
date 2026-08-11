@@ -9,7 +9,8 @@ const card = {
   upgraded: { cardClass: "Silent", cardType: "Skill", mana: 0, rarity: "Rare", eternal: false, ethereal: false, exhaust: true, innate: false, retain: false, sly: false, unplayable: false },
 };
 
-const manifest = { schemaVersion: 1, sourceRevision: "revision", sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00Z", generatedAt: "2026-08-12T00:00:00Z", cardCount: 1, upgradeCount: 1, baseGroupCount: 1, pairGroupCount: 1, files: {} };
+const REVISION = "ab".repeat(32);
+const manifest = { schemaVersion: 1, sourceRevision: REVISION, sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00.000Z", generatedAt: "2026-08-12T00:00:00.000Z", cardCount: 1, upgradeCount: 1, baseGroupCount: 1, pairGroupCount: 1, files: {} };
 const baseGroups = [{ key: "base", cardIds: ["ALCHEMIZE"] }];
 const pairGroups = [{ key: "pair", cardIds: ["ALCHEMIZE"] }];
 const spriteMap = { candidate: { url: "/candidate.png", width: 1, height: 1, displayScale: 1 }, guess: { url: "/guess.png", width: 1, height: 1, displayScale: 1 }, cards: { ALCHEMIZE: { candidate: { x: 0, y: 0, width: 1, height: 1 }, guess: { x: 0, y: 0, width: 1, height: 1 } } } };
@@ -28,7 +29,7 @@ describe("loadSnapshot", () => {
       "/runtime/pair-groups.json": pairGroups, "/runtime/sprite-map.json": spriteMap,
     }));
 
-    expect(snapshot.manifest.sourceRevision).toBe("revision");
+    expect(snapshot.manifest.sourceRevision).toBe(REVISION);
     expect(snapshot.cardsById.get("ALCHEMIZE")?.name).toBe("Alchemize");
     expect(snapshot.pairGroupsByKey.get("pair")?.cardIds).toContain("ALCHEMIZE");
   });
@@ -60,6 +61,22 @@ describe("loadSnapshot", () => {
       "/runtime/manifest.json": { ...manifest, cardCount: 2 }, "/runtime/cards.json": [card], "/runtime/base-groups.json": baseGroups,
       "/runtime/pair-groups.json": pairGroups, "/runtime/sprite-map.json": spriteMap,
     }))).rejects.toThrow("cardCount");
+  });
+
+  test.each([
+    ["short revision", { sourceRevision: "abc" }],
+    ["uppercase revision", { sourceRevision: "AB".repeat(32) }],
+    ["non-canonical fetchedAt", { fetchedAt: "2026-08-12T00:00:00Z" }],
+    ["offset generatedAt", { generatedAt: "2026-08-12T09:00:00.000+09:00" }],
+    ["invalid timestamp", { generatedAt: "not-a-date" }],
+  ])("rejects %s manifest metadata", async (_label, metadata) => {
+    await expect(loadSnapshot(jsonFetch({
+      "/runtime/manifest.json": { ...manifest, ...metadata },
+      "/runtime/cards.json": [card],
+      "/runtime/base-groups.json": baseGroups,
+      "/runtime/pair-groups.json": pairGroups,
+      "/runtime/sprite-map.json": spriteMap,
+    }))).rejects.toThrow("/runtime/manifest.json");
   });
 
   test("rejects a group that references an unknown card", async () => {

@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+export const SOURCE_REVISION_PATTERN = /^[a-f0-9]{64}$/;
+
+export function isCanonicalIsoTimestamp(value: string): boolean {
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.valueOf()) && timestamp.toISOString() === value;
+}
+
+const sourceRevisionSchema = z.string().regex(SOURCE_REVISION_PATTERN);
+const canonicalTimestampSchema = z.string().refine(isCanonicalIsoTimestamp);
+
 const featureVectorSchema = z.object({
   cardClass: z.enum(["Ironclad", "Silent", "Defect", "Necrobinder", "Regent", "Neutral", "Event"]),
   cardType: z.enum(["Attack", "Skill", "Power", "Quest", "Status", "Curse"]),
@@ -14,7 +24,7 @@ export const cardIdentitySchema = z.object({
 });
 export const groupSchema = z.object({ key: z.string(), cardIds: z.array(z.string()).min(1) });
 export const snapshotManifestSchema = z.object({
-  schemaVersion: z.literal(1), sourceRevision: z.string(), sourceLastModified: z.string().nullable(), fetchedAt: z.string(), generatedAt: z.string(),
+  schemaVersion: z.literal(1), sourceRevision: sourceRevisionSchema, sourceLastModified: z.string().nullable(), fetchedAt: canonicalTimestampSchema, generatedAt: canonicalTimestampSchema,
   cardCount: z.number().int().nonnegative(), upgradeCount: z.number().int().nonnegative(), baseGroupCount: z.number().int().nonnegative(), pairGroupCount: z.number().int().nonnegative(), files: z.record(z.string(), z.string()),
 });
 const rectSchema = z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() });

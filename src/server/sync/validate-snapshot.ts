@@ -15,6 +15,7 @@ import type {
   SpriteRect,
 } from "../../shared/domain.js";
 import { FEATURE_ORDER } from "../../shared/domain.js";
+import { isCanonicalIsoTimestamp, SOURCE_REVISION_PATTERN } from "../../shared/snapshot-schema.js";
 import type { ActivatedSnapshot } from "./build-snapshot.js";
 import { assertAllowedImageUrl, parseAllowedImageOrigins } from "../images/url-policy.js";
 import { fallbackUrl } from "../images/fallback-path.js";
@@ -159,8 +160,11 @@ export async function loadActivatedSnapshot(
 
 function validateManifestShape(manifest: Record<string, unknown>, issues: string[]): void {
   if (manifest.schemaVersion !== 1) issues.push("Unsupported snapshot schema version");
-  for (const field of ["sourceRevision", "fetchedAt", "generatedAt"] as const) {
-    if (typeof manifest[field] !== "string" || manifest[field].length === 0) {
+  if (typeof manifest.sourceRevision !== "string" || !SOURCE_REVISION_PATTERN.test(manifest.sourceRevision)) {
+    issues.push("Invalid manifest field: sourceRevision");
+  }
+  for (const field of ["fetchedAt", "generatedAt"] as const) {
+    if (typeof manifest[field] !== "string" || !isCanonicalIsoTimestamp(manifest[field])) {
       issues.push(`Invalid manifest field: ${field}`);
     }
   }

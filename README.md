@@ -74,9 +74,11 @@ $env:STSDLE_FULL_CARD_ALLOWED_ORIGINS = "https://spire-codex.com,https://cdn.spi
 npm start
 ```
 
-On every normal restart, the server fetches the current stable English card response once, builds sprites and any required fallback cards in a staging snapshot, validates all files and hashes, atomically activates the snapshot, logs a payload-free startup acceptance record, and only then begins listening. A source patch changes the content revision even when no explicit game-version header is available.
+On every normal restart, the server fetches the current stable English card response once, builds sprites and any required fallback cards in a staging snapshot, validates all files and hashes, atomically activates the snapshot, logs a payload-free startup acceptance record, and only then begins listening. A source patch changes the content revision even when no explicit game-version header is available. Artwork and fallback-portrait requests use `STSDLE_REQUEST_TIMEOUT_MS` for both response headers and body reads and retry only bounded transient failures (HTTP 408/429/5xx or network/timeout failures); URL-policy, redirect, credential, IP, and other HTTP 4xx failures are never retried.
 
 If refresh fails, the server revalidates the previous active snapshot before serving it and logs only a fixed error category. If no valid previous snapshot exists, startup fails closed. Never use `STSDLE_SKIP_SYNC=1` as a production refresh bypass.
+
+Production synchronization is serialized per resolved `STSDLE_DATA_DIR`, including across server processes. After a validated activation, the store keeps the active snapshot plus the most recent validated prior recovery snapshot (two validated snapshots total) and prunes only older validated snapshots. Invalid, unknown, unrelated, linked, junction, or escaped paths are preserved. A lock with ambiguous ownership fails closed; a confirmed dead-process lock can be recovered. Recognizably owned `.staging` directories from crashed builds are removed only while the exclusive synchronization lock is held. Size the writable data volume for two complete snapshots plus one temporary in-progress staging snapshot during startup.
 
 The server stores and serves the candidate/guess artwork atlases plus exceptional 400 x 520 fallback full cards. Ordinary base and upgraded full-card images remain the responsibility of the trusted CDN and are loaded directly by the browser; the server does not proxy or persist them.
 

@@ -165,6 +165,56 @@ describe("CardSearch", () => {
     expect(onSelect).toHaveBeenCalledWith("apparition");
   });
 
+  test("scrolls each keyboard-active option into the nearest visible area", () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const { input } = renderSearch();
+    fireEvent.change(input, { target: { value: "a" } });
+    const options = screen.getAllByRole("option");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(options[0]);
+    fireEvent.keyDown(input, { key: "End" });
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(options.at(-1));
+    fireEvent.keyDown(input, { key: "Home" });
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(options[0]);
+  });
+
+  test("does not scroll stale options after close, empty reset, disable, or unmount", () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const onSelect = vi.fn();
+    const view = render(<CardSearch
+      cards={cards}
+      spriteMap={spriteMap}
+      guessedCardIds={new Set()}
+      onSelect={onSelect}
+    />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "a" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    fireEvent.change(input, { target: { value: "" } });
+    view.rerender(<CardSearch
+      cards={cards}
+      spriteMap={spriteMap}
+      guessedCardIds={new Set()}
+      disabled
+      onSelect={onSelect}
+    />);
+    view.unmount();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
   test("Home and End leave empty or explicitly closed listboxes closed", () => {
     const { input } = renderSearch();
     fireEvent.keyDown(input, { key: "Home" });

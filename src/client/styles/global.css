@@ -258,6 +258,25 @@ h1 {
   color: #f8dfd2;
 }
 
+.site-footer {
+  max-width: 46rem;
+  margin: 2rem auto 0;
+  padding: 1.15rem 1rem 0;
+  border-top: 1px solid rgb(232 190 105 / 24%);
+  color: var(--muted);
+  font-size: .86rem;
+  line-height: 1.55;
+}
+
+.site-footer p { margin: .3rem 0; }
+
+.site-footer a {
+  color: var(--gold);
+  text-underline-offset: .18em;
+}
+
+.site-footer a:hover { color: var(--focus); }
+
 @media (max-width: 640px) {
   .app-shell {
     width: min(calc(100% - 1rem), 980px);

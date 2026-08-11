@@ -114,6 +114,13 @@ test("Daily and Practice complete the full paired-card experience without leakin
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:3000" });
 
   await page.goto("/");
+  const attribution = page.getByRole("contentinfo");
+  await expect(attribution.getByRole("link", { name: "Spire Codex" })).toHaveAttribute(
+    "href",
+    "https://spire-codex.com/",
+  );
+  await expect(attribution).toContainText(/unofficial fan project/i);
+  await expect(attribution).toContainText(/not affiliated with or endorsed by Mega Crit/i);
   await expect(page.getByText(/Each guess compares its base card and upgrade together/i)).toBeVisible();
   const dailyTab = page.getByRole("button", { name: "Daily" });
   await expectAccessibleTarget(dailyTab);

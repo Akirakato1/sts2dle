@@ -114,7 +114,9 @@ export function createProductionDependencies(
     fallbackRenderer: new FallbackRenderer({
       portraitBaseUrl: config.spireCodexBaseUrl,
       allowedPortraitOrigins: config.artworkAllowedOrigins,
+      requestTimeoutMs: config.requestTimeoutMs,
     }),
+    requestTimeoutMs: config.requestTimeoutMs,
     artworkConcurrency: config.artworkConcurrency,
     allowedArtworkOrigins: config.artworkAllowedOrigins,
     allowedFullCardOrigins: config.fullCardAllowedOrigins,

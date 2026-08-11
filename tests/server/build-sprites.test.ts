@@ -9,10 +9,15 @@ import type { CardIdentity } from "../../src/shared/domain.js";
 const temporaryDirectories: string[] = [];
 const artworkByUrl = new Map<string, Buffer>();
 
-function buildTestSprites(options: Omit<BuildSpritesOptions, "allowedArtworkOrigins"> & {
+function buildTestSprites(options: Omit<BuildSpritesOptions, "allowedArtworkOrigins" | "requestTimeoutMs"> & {
   allowedArtworkOrigins?: readonly string[];
+  requestTimeoutMs?: number;
 }) {
-  return buildSprites({ allowedArtworkOrigins: ["https://art.example"], ...options });
+  return buildSprites({
+    allowedArtworkOrigins: ["https://art.example"],
+    requestTimeoutMs: 100,
+    ...options,
+  });
 }
 
 function card(id: string): CardIdentity {
@@ -325,12 +330,18 @@ describe("buildSprites", () => {
       }),
     ]);
     if (timeout) clearTimeout(timeout);
+    await vi.waitFor(() => {
+      expect(requestedUrls.filter((url) => url === card("CARD_A").artUrl)).toHaveLength(3);
+    });
     releaseSecondDownload();
 
     await expect(buildPromise).rejects.toThrow(/download artwork.*CARD_A.*503/i);
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(earlyOutcome).toBe("pending");
-    expect(requestedUrls).toEqual([card("CARD_A").artUrl, card("CARD_B").artUrl]);
+    expect(requestedUrls.filter((url) => url === card("CARD_A").artUrl)).toHaveLength(3);
+    expect(requestedUrls.filter((url) => url === card("CARD_B").artUrl).length).toBeGreaterThanOrEqual(1);
+    expect(requestedUrls.filter((url) => url === card("CARD_B").artUrl).length).toBeLessThanOrEqual(3);
+    expect(requestedUrls).not.toContain(card("CARD_C").artUrl);
     await expectNoFinalAtlases(outputDir);
   });
 
@@ -439,5 +450,103 @@ describe("buildSprites", () => {
       concurrency: 1,
     })).rejects.toThrow(/artwork redirect.*CARD_A/i);
     expect(redirectMode).toBe("manual");
+  });
+
+  it("times out and aborts every stalled artwork header attempt", async () => {
+    const outputDir = await createOutputDirectory();
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) throw new Error("Expected an abort signal");
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }) as typeof fetch;
+
+    await expect(buildTestSprites({
+      cards: [card("CARD_A")],
+      outputDir,
+      fetchImpl,
+      concurrency: 1,
+      requestTimeoutMs: 5,
+    })).rejects.toThrow(/failed to download artwork.*CARD_A/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("times out and aborts every stalled artwork body attempt", async () => {
+    const outputDir = await createOutputDirectory();
+    let abortedBodies = 0;
+    const fetchImpl = vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) throw new Error("Expected an abort signal");
+      let streamController: ReadableStreamDefaultController<Uint8Array>;
+      signal.addEventListener("abort", () => {
+        abortedBodies += 1;
+        streamController.error(new Error("aborted body"));
+      }, { once: true });
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        start(controller) { streamController = controller; },
+      }), { status: 200 }));
+    }) as typeof fetch;
+
+    await expect(buildTestSprites({
+      cards: [card("CARD_A")],
+      outputDir,
+      fetchImpl,
+      concurrency: 1,
+      requestTimeoutMs: 5,
+    })).rejects.toThrow(/failed to download artwork.*CARD_A/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(abortedBodies).toBe(3);
+  });
+
+  it("retries a transient artwork response and succeeds without aborting the completed attempt", async () => {
+    const outputDir = await createOutputDirectory();
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      return signals.length === 1
+        ? new Response(null, { status: 503 })
+        : imageResponse(artworkByUrl.get(card("CARD_A").artUrl)!);
+    });
+
+    await buildTestSprites({
+      cards: [card("CARD_A")],
+      outputDir,
+      fetchImpl,
+      concurrency: 1,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+  });
+
+  it("exhausts the bounded retry budget for retryable artwork statuses", async () => {
+    const outputDir = await createOutputDirectory();
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 429 }));
+
+    await expect(buildTestSprites({
+      cards: [card("CARD_A")],
+      outputDir,
+      fetchImpl,
+      concurrency: 1,
+    })).rejects.toThrow(/download artwork.*CARD_A.*429/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry a non-transient artwork 4xx response", async () => {
+    const outputDir = await createOutputDirectory();
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 404 }));
+
+    await expect(buildTestSprites({
+      cards: [card("CARD_A")],
+      outputDir,
+      fetchImpl,
+      concurrency: 1,
+    })).rejects.toThrow(/download artwork.*CARD_A.*404/i);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 });

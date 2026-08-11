@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -73,7 +74,7 @@ async function validSnapshot(dataDir: string, sourceRevision: string): Promise<A
         return {
           cards: fixture as RawSpireCard[],
           rawBody: JSON.stringify(fixture),
-          sourceRevision,
+          sourceRevision: createHash("sha256").update(sourceRevision).digest("hex"),
           lastModified: null,
           fetchedAt: "2026-08-12T00:00:00.000Z",
         };

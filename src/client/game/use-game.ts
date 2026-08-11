@@ -27,6 +27,7 @@ export function useGame(snapshot: LoadedSnapshot) {
   const [roundUtcDate, setRoundUtcDate] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
+  const activeMode = useRef<PlayMode>("daily");
   const groups = useMemo(() => ({
     baseGroups: snapshot.baseGroups,
     pairGroups: snapshot.pairGroups,
@@ -39,7 +40,7 @@ export function useGame(snapshot: LoadedSnapshot) {
       : await Promise.resolve(createPracticeRandom());
     return selectAnswer(groups, snapshot.cardsById, source);
   }, [groups, snapshot]);
-  const start = useCallback(async (mode: PlayMode, dailyDate = activeUtcDate) => {
+  const start = useCallback(async (mode: PlayMode, dailyDate: string) => {
     const generation = ++requestGeneration.current;
     try {
       setError(null);
@@ -52,15 +53,16 @@ export function useGame(snapshot: LoadedSnapshot) {
         ruleset: DAILY_RULESET_VERSION,
       }, snapshot.cardsById, answer) : null;
       setRound(restored ?? { mode, answer, guesses: [], status: "playing", error: null });
+      activeMode.current = mode;
       setRoundUtcDate(mode === "daily" ? dailyDate : null);
       setRoundToken((current) => current + 1);
       void preloadAnswerImages(answer, snapshot.cardsById);
     } catch (caught) {
       if (generation === requestGeneration.current) setError(caught instanceof Error ? caught.message : "Unable to start a round.");
     }
-  }, [activeUtcDate, choose, snapshot.cardsById, snapshot.manifest.sourceRevision]);
+  }, [choose, snapshot.cardsById, snapshot.manifest.sourceRevision]);
   useEffect(() => {
-    void start("daily", activeUtcDate);
+    if (activeMode.current === "daily") void start("daily", activeUtcDate);
     return () => { requestGeneration.current += 1; };
   }, [activeUtcDate, start]);
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
@@ -20,13 +20,16 @@ async function createStore(): Promise<SnapshotStore> {
   return new SnapshotStore(directory);
 }
 
-function fixtureClient(cards: RawSpireCard[] = fixture as RawSpireCard[]) {
+function fixtureClient(
+  cards: RawSpireCard[] = fixture as RawSpireCard[],
+  sourceRevision = "ab".repeat(32),
+) {
   return {
     async fetchCards() {
       return {
         cards,
         rawBody: JSON.stringify(cards),
-        sourceRevision: "abcdef0123456789",
+        sourceRevision,
         lastModified: "Tue, 11 Aug 2026 15:34:42 GMT",
         fetchedAt: "2026-08-11T23:59:00.000Z",
       };
@@ -52,6 +55,136 @@ afterEach(async () => {
 });
 
 describe("buildSnapshot", () => {
+  it("serializes builds for one data directory and leaves the later activation active", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "stsdle-snapshot-serialized-"));
+    temporaryDirectories.push(dataDir);
+    const store = new SnapshotStore(dataDir);
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let firstStarted = false;
+    const secondFetch = vi.fn(async () => fixtureClient(
+      [fixture[0] as RawSpireCard],
+      "22".repeat(32),
+    ).fetchCards());
+    const common = {
+      store,
+      baseUrl: "https://spire-codex.test",
+      fetchImpl: async () => new Response(new Uint8Array(artwork)),
+      fallbackRenderer: { render: vi.fn() },
+      artworkConcurrency: 1,
+      allowedArtworkOrigins: ["https://spire-codex.test"],
+      allowedFullCardOrigins: ["https://cdn.test"],
+    } as const;
+    const first = buildSnapshot({
+      ...common,
+      client: {
+        async fetchCards() {
+          firstStarted = true;
+          await firstGate;
+          return fixtureClient([fixture[0] as RawSpireCard], "11".repeat(32)).fetchCards();
+        },
+      },
+    });
+    await vi.waitFor(() => expect(firstStarted).toBe(true));
+    const second = buildSnapshot({ ...common, client: { fetchCards: secondFetch } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(secondFetch).not.toHaveBeenCalled();
+
+    releaseFirst();
+    await first;
+    const secondActivated = await second;
+
+    expect(secondFetch).toHaveBeenCalledOnce();
+    await expect(store.loadActive()).resolves.toMatchObject({ buildId: secondActivated.buildId });
+  });
+
+  it("retains the active and most recent validated recovery snapshot only", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "stsdle-snapshot-retention-"));
+    temporaryDirectories.push(dataDir);
+    const store = new SnapshotStore(dataDir);
+    const build = (revisionByte: string) => buildSnapshot({
+      client: fixtureClient([fixture[0] as RawSpireCard], revisionByte.repeat(64)),
+      store,
+      baseUrl: "https://spire-codex.test",
+      fetchImpl: async () => new Response(new Uint8Array(artwork)),
+      fallbackRenderer: { render: vi.fn() },
+      artworkConcurrency: 1,
+      allowedArtworkOrigins: ["https://spire-codex.test"],
+      allowedFullCardOrigins: ["https://cdn.test"],
+    });
+
+    const first = await build("1");
+    const second = await build("2");
+    const third = await build("3");
+    const entries = await readdir(join(dataDir, "snapshots"));
+
+    expect(entries.sort()).toEqual([second.buildId, third.buildId].sort());
+    expect(entries).not.toContain(first.buildId);
+  });
+
+  it("preserves invalid, unrelated, and linked production-looking snapshot paths", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "stsdle-snapshot-retention-preserve-"));
+    const outside = await mkdtemp(join(tmpdir(), "stsdle-snapshot-retention-outside-"));
+    temporaryDirectories.push(dataDir, outside);
+    const snapshots = join(dataDir, "snapshots");
+    await mkdir(snapshots, { recursive: true });
+    const invalid = "deadbeefdead-1234567890123";
+    const linked = "feedfacefeed-1234567890123";
+    await mkdir(join(snapshots, invalid));
+    await writeFile(join(snapshots, invalid, "manifest.json"), "{}\n");
+    await symlink(outside, join(snapshots, linked), "junction");
+    await writeFile(join(snapshots, "operator-notes.txt"), "keep");
+    const store = new SnapshotStore(dataDir);
+    const build = (revision: string) => buildSnapshot({
+      client: fixtureClient([fixture[0] as RawSpireCard], revision),
+      store,
+      baseUrl: "https://spire-codex.test",
+      fetchImpl: async () => new Response(new Uint8Array(artwork)),
+      fallbackRenderer: { render: vi.fn() },
+      artworkConcurrency: 1,
+      allowedArtworkOrigins: ["https://spire-codex.test"],
+      allowedFullCardOrigins: ["https://cdn.test"],
+    });
+
+    await build("4".repeat(64));
+    await build("5".repeat(64));
+    await build("6".repeat(64));
+
+    const entries = await readdir(snapshots);
+    expect(entries).toEqual(expect.arrayContaining([invalid, linked, "operator-notes.txt"]));
+    await expect(writeFile(join(outside, "still-present"), "yes")).resolves.toBeUndefined();
+  });
+
+  it("cleans abandoned owned staging directories while preserving unknown and linked paths", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "stsdle-snapshot-staging-"));
+    const outside = await mkdtemp(join(tmpdir(), "stsdle-snapshot-staging-outside-"));
+    temporaryDirectories.push(dataDir, outside);
+    const snapshots = join(dataDir, "snapshots");
+    await mkdir(snapshots, { recursive: true });
+    const abandoned = "abcdef123456-1234567890123.staging";
+    const unknown = "operator-notes.staging";
+    const linked = "abcdef123457-1234567890123.staging";
+    await mkdir(join(snapshots, abandoned));
+    await mkdir(join(snapshots, unknown));
+    await symlink(outside, join(snapshots, linked), "junction");
+
+    await buildSnapshot({
+      client: fixtureClient([fixture[0] as RawSpireCard]),
+      store: new SnapshotStore(dataDir),
+      baseUrl: "https://spire-codex.test",
+      fetchImpl: async () => new Response(new Uint8Array(artwork)),
+      fallbackRenderer: { render: vi.fn() },
+      artworkConcurrency: 1,
+      allowedArtworkOrigins: ["https://spire-codex.test"],
+      allowedFullCardOrigins: ["https://cdn.test"],
+    });
+
+    const entries = await readdir(snapshots);
+    expect(entries).not.toContain(abandoned);
+    expect(entries).toContain(unknown);
+    expect(entries).toContain(linked);
+    await expect(writeFile(join(outside, "still-present"), "yes")).resolves.toBeUndefined();
+  });
   it("passes canonical hosted artwork to both sprite and fallback rendering", async () => {
     const store = await createStore();
     const raw = fixture[3] as RawSpireCard;
@@ -80,6 +213,36 @@ describe("buildSnapshot", () => {
       .toBe(true);
   });
 
+  it("renders every required fallback through one batch API", async () => {
+    const store = await createStore();
+    const render = vi.fn(async () => { throw new Error("single render must not be used"); });
+    const renderBatch = vi.fn(async (requests: ReadonlyArray<{
+      raw: RawSpireCard;
+      upgraded: boolean;
+      destination: string;
+    }>) => {
+      await Promise.all(requests.map((request) => writeFile(request.destination, fallbackImage)));
+    });
+
+    await buildSnapshot({
+      client: fixtureClient([fixture[3] as RawSpireCard]),
+      store,
+      baseUrl: "https://spire-codex.test",
+      fetchImpl: async () => new Response(new Uint8Array(artwork)),
+      fallbackRenderer: { render, renderBatch },
+      artworkConcurrency: 1,
+      allowedArtworkOrigins: ["https://spire-codex.test"],
+      allowedFullCardOrigins: ["https://cdn.test"],
+    });
+
+    expect(render).not.toHaveBeenCalled();
+    expect(renderBatch).toHaveBeenCalledOnce();
+    expect(renderBatch.mock.calls[0]?.[0].map(({ raw, upgraded }) => [raw.id, upgraded])).toEqual([
+      ["MAD_SCIENCE", false],
+      ["MAD_SCIENCE", true],
+    ]);
+  });
+
   it("builds, validates, and activates a stable snapshot with only required fallbacks", async () => {
     const store = await createStore();
     const render = vi.fn(async (_raw: RawSpireCard, _upgraded: boolean, destination: string) => {
@@ -99,7 +262,7 @@ describe("buildSnapshot", () => {
     });
 
     expect(activated.manifest).toMatchObject({
-      sourceRevision: "abcdef0123456789",
+      sourceRevision: "ab".repeat(32),
       fetchedAt: "2026-08-11T23:59:00.000Z",
       generatedAt: "2026-08-12T00:00:00.000Z",
       cardCount: fixture.length,

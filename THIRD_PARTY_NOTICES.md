@@ -101,4 +101,17 @@ The following two font files were copied from the installed STS2 Dashboard:
 - `C:\Users\zhuyl\AppData\Roaming\sts2-dashboard\Assets\fonts\kreon_bold.ttf`
 - `C:\Users\zhuyl\AppData\Roaming\sts2-dashboard\Assets\fonts\kreon_regular.ttf`
 
+Both binaries identify themselves as Kreon version 2.001 and contain this
+embedded copyright notice:
+
+> Copyright 2018 The Kreon Project Authors (https://github.com/googlefonts/kreon)
+
+Their embedded license metadata identifies the SIL Open Font License,
+Version 1.1. The complete unmodified license text is tracked at
+[`LICENSES/OFL-1.1.txt`](LICENSES/OFL-1.1.txt). The font metadata does not
+declare a Reserved Font Name. It does contain the trademark statement
+"Kreon Light is a trademark of Julia Petretta." This distribution preserves
+that statement; neither the project authors nor the designers are used to
+promote or endorse STS-dle.
+
 No other STS2 Dashboard files were copied.
