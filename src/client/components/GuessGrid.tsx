@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SubmittedGuess } from "../game/game-reducer.js";
 import { FEATURE_ORDER, type CardIdentity, type SpriteMap } from "../../shared/domain.js";
@@ -44,19 +44,22 @@ function usePrefersReducedMotion(): boolean {
 
 export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFromIndex, onRevealComplete }: GuessGridProps) {
   const reducedMotion = usePrefersReducedMotion();
-  const controllerRef = useRef<RevealController | null>(null);
+  const activeControllerRef = useRef<RevealController | null>(null);
   const completedRevealKeyRef = useRef<string | null>(null);
   const onRevealCompleteRef = useRef(onRevealComplete);
   onRevealCompleteRef.current = onRevealComplete;
   const hasPendingReveal = animateFromIndex < guesses.length;
   const activeRevealKey = `${String(roundKey)}:${animateFromIndex}:${guesses.length}:${guesses.at(-1)?.cardId ?? ""}`;
+  const renderedController = useMemo<RevealController | null>(() => hasPendingReveal
+    ? { key: activeRevealKey, completed: false, timeoutId: null }
+    : null, [activeRevealKey, hasPendingReveal]);
 
-  const completeReveal = useCallback((revealKey: string) => {
-    if (completedRevealKeyRef.current === revealKey) return;
-    const controller = controllerRef.current;
-    if (!controller || controller.key !== revealKey || controller.completed) return;
+  const completeReveal = useCallback((controller: RevealController) => {
+    if (activeControllerRef.current !== controller
+      || completedRevealKeyRef.current === controller.key
+      || controller.completed) return;
     controller.completed = true;
-    completedRevealKeyRef.current = revealKey;
+    completedRevealKeyRef.current = controller.key;
     if (controller.timeoutId !== null) {
       clearTimeout(controller.timeoutId);
       controller.timeoutId = null;
@@ -65,25 +68,25 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
   }, []);
 
   useEffect(() => {
-    if (!hasPendingReveal) {
-      controllerRef.current = null;
+    if (!renderedController) {
+      activeControllerRef.current = null;
       completedRevealKeyRef.current = null;
       return;
     }
-    const controller: RevealController = { key: activeRevealKey, completed: false, timeoutId: null };
-    controllerRef.current = controller;
-    if (completedRevealKeyRef.current === activeRevealKey) controller.completed = true;
-    else if (reducedMotion) completeReveal(activeRevealKey);
-    else controller.timeoutId = setTimeout(() => completeReveal(activeRevealKey), REVEAL_FALLBACK_MS);
+    const controller = renderedController;
+    activeControllerRef.current = controller;
+    if (completedRevealKeyRef.current === controller.key) controller.completed = true;
+    else if (reducedMotion) completeReveal(controller);
+    else controller.timeoutId = setTimeout(() => completeReveal(controller), REVEAL_FALLBACK_MS);
     return () => {
       if (controller.timeoutId !== null) clearTimeout(controller.timeoutId);
-      if (controllerRef.current === controller) controllerRef.current = null;
+      if (activeControllerRef.current === controller) activeControllerRef.current = null;
     };
-  }, [activeRevealKey, completeReveal, hasPendingReveal, reducedMotion]);
+  }, [completeReveal, reducedMotion, renderedController]);
 
-  const handleFinalTransition = useCallback((revealKey: string, event: React.TransitionEvent<HTMLDivElement>) => {
+  const handleFinalTransition = useCallback((controller: RevealController, event: React.TransitionEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget || event.propertyName !== "transform") return;
-    completeReveal(revealKey);
+    completeReveal(controller);
   }, [completeReveal]);
 
   return <section className="guess-grid-scroll" aria-label="Guess results">
@@ -111,8 +114,8 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
             result={result}
             revealIndex={featureIndex}
             animate={animate}
-            {...(animate && rowIndex === guesses.length - 1 && featureIndex === FEATURE_ORDER.length - 1 && onRevealComplete
-              ? { onRevealEnd: (event: React.TransitionEvent<HTMLDivElement>) => handleFinalTransition(activeRevealKey, event) }
+            {...(animate && rowIndex === guesses.length - 1 && featureIndex === FEATURE_ORDER.length - 1 && onRevealComplete && renderedController
+              ? { onRevealEnd: (event: React.TransitionEvent<HTMLDivElement>) => handleFinalTransition(renderedController, event) }
               : {})}
           />)}
         </div>;

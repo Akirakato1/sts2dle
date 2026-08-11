@@ -58,22 +58,40 @@ afterEach(() => {
 });
 
 describe("GuessGrid stale reveal handler", () => {
-  test("rejects the captured prior-round handler after a new reveal key becomes active", () => {
+  test("rejects retained handler and timeout callbacks from a settled identical-key lifecycle", () => {
+    const timeoutCallbacks: Array<() => void> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: TimerHandler) => {
+      if (typeof handler !== "function") throw new TypeError("Expected a function timeout handler");
+      timeoutCallbacks.push(() => handler());
+      return timeoutCallbacks.length as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
     const onRevealComplete = vi.fn();
     const view = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
     const staleHandler = capturedTiles.findLast((props) => props.onRevealEnd)?.onRevealEnd;
     expect(staleHandler).toBeTypeOf("function");
-
-    capturedTiles.length = 0;
-    view.rerender(<GuessGrid guesses={[guesses[1]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-2" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
-    const currentHandler = capturedTiles.findLast((props) => props.onRevealEnd)?.onRevealEnd;
-    expect(currentHandler).toBeTypeOf("function");
+    const staleTimeout = timeoutCallbacks.at(-1);
+    expect(staleTimeout).toBeTypeOf("function");
     const surface = document.createElement("div");
     const event = { target: surface, currentTarget: surface, propertyName: "transform" } as unknown as React.TransitionEvent<HTMLDivElement>;
 
     act(() => staleHandler?.(event));
-    expect(onRevealComplete).not.toHaveBeenCalled();
-    act(() => currentHandler?.(event));
     expect(onRevealComplete).toHaveBeenCalledOnce();
+
+    capturedTiles.length = 0;
+    view.rerender(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} />);
+    view.rerender(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    const currentHandler = capturedTiles.findLast((props) => props.onRevealEnd)?.onRevealEnd;
+    expect(currentHandler).toBeTypeOf("function");
+    const currentTimeout = timeoutCallbacks.at(-1);
+    expect(currentTimeout).toBeTypeOf("function");
+
+    act(() => staleHandler?.(event));
+    expect(onRevealComplete).toHaveBeenCalledOnce();
+    act(() => staleTimeout?.());
+    expect(onRevealComplete).toHaveBeenCalledOnce();
+    act(() => currentHandler?.(event));
+    expect(onRevealComplete).toHaveBeenCalledTimes(2);
+    act(() => currentTimeout?.());
+    expect(onRevealComplete).toHaveBeenCalledTimes(2);
   });
 });
