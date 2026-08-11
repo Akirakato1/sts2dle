@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { RawSpireCardsSchema, type RawSpireCard } from "../../../src/server/spire-codex/schema.js";
 import { buildSnapshot } from "../../../src/server/sync/build-snapshot.js";
 import { SnapshotStore } from "../../../src/server/sync/snapshot-store.js";
+import { pruneSupersededFixtureSnapshots } from "./prune-test-snapshots.js";
 
 const ART_ORIGIN = "https://fixture.test";
 const FULL_CARD_ORIGIN = "https://cdn.test";
@@ -89,6 +90,10 @@ async function main(): Promise<void> {
     allowedArtworkOrigins: [ART_ORIGIN],
     allowedFullCardOrigins: [FULL_CARD_ORIGIN],
     now: () => new Date(FIXED_TIME),
+  });
+  await pruneSupersededFixtureSnapshots(dataDir, active, {
+    allowedArtworkOrigins: [ART_ORIGIN],
+    allowedFullCardOrigins: [FULL_CARD_ORIGIN],
   });
 
   process.stdout.write(`${JSON.stringify({

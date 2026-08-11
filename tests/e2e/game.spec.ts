@@ -4,6 +4,10 @@ import type { CardIdentity, PairGroup, SnapshotManifest } from "../../src/shared
 import { compareGuess } from "../../src/shared/comparison.js";
 import { createDailyRandom } from "../../src/shared/random.js";
 import { selectAnswer, type SelectedAnswer } from "../../src/shared/selection.js";
+import {
+  installOfficialCodexBlock,
+  type OfficialCodexNetworkGuard,
+} from "./support/offline-network.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -22,6 +26,27 @@ interface FullCardFailureGate {
   allow: boolean;
   url: string;
 }
+
+test("offline network guard aborts both official Codex origins", async ({ page }) => {
+  const guard = await installOfficialCodexBlock(page);
+  const probeUrls = [
+    "https://spire-codex.com/__stsdle_e2e_probe__",
+    "https://cdn.spire-codex.com/__stsdle_e2e_probe__",
+  ];
+
+  const rejected = await page.evaluate(async (urls) => Promise.all(urls.map(async (url) => {
+    try {
+      await fetch(url);
+      return false;
+    } catch {
+      return true;
+    }
+  })), probeUrls);
+
+  expect(rejected).toEqual([true, true]);
+  expect(guard.attemptedRequests).toEqual(probeUrls);
+  expect(guard.blockedRequests).toEqual(probeUrls);
+});
 
 async function loadFixtureModel(request: APIRequestContext): Promise<FixtureModel> {
   const [manifest, cards, baseGroups, pairGroups] = await Promise.all([
@@ -48,12 +73,11 @@ async function chooseCard(page: Page, name: string): Promise<void> {
   await page.getByRole("option", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} artwork ${name}`) }).click();
 }
 
-async function prepareOfflinePage(page: Page, fullCardFailure?: FullCardFailureGate): Promise<string[]> {
-  const codexRequests: string[] = [];
-  page.on("request", (request) => {
-    if (request.url().includes("spire-codex")) codexRequests.push(request.url());
-  });
-  await page.route("https://spire-codex.com/**", (route) => route.abort("blockedbyclient"));
+async function prepareOfflinePage(
+  page: Page,
+  fullCardFailure?: FullCardFailureGate,
+): Promise<OfficialCodexNetworkGuard> {
+  const guard = await installOfficialCodexBlock(page);
   await page.route("https://cdn.test/**", (route) => {
     if (fullCardFailure && !fullCardFailure.allow && route.request().url() === fullCardFailure.url) {
       return route.fulfill({ status: 503, body: "fixture retry" });
@@ -70,7 +94,7 @@ async function prepareOfflinePage(page: Page, fullCardFailure?: FullCardFailureG
       },
     });
   });
-  return codexRequests;
+  return guard;
 }
 
 async function expectAccessibleTarget(locator: Locator): Promise<void> {
@@ -86,7 +110,7 @@ test("Daily and Practice complete the full paired-card experience without leakin
     .map((id) => model.cards.find((card) => card.id === id)!)
     .find((card) => card.baseCardUrl?.startsWith("https://cdn.test/"))!;
   const fullCardFailure = { allow: false, url: retryCard.baseCardUrl! };
-  const codexRequests = await prepareOfflinePage(page, fullCardFailure);
+  const codexGuard = await prepareOfflinePage(page, fullCardFailure);
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:3000" });
 
   await page.goto("/");
@@ -180,7 +204,8 @@ test("Daily and Practice complete the full paired-card experience without leakin
   await expect(page.getByRole("button", { name: /copy/i })).toHaveCount(0);
   expect(await page.evaluate(() => Object.fromEntries(Object.entries(localStorage)
     .filter(([key]) => key.startsWith("stsdle:daily:") || key === "stsdle:stats:v1")))).toEqual(dailyStorage);
-  expect(codexRequests).toEqual([]);
+  expect(codexGuard.attemptedRequests).toEqual([]);
+  expect(codexGuard.blockedRequests).toEqual([]);
 });
 
 for (const viewport of [
@@ -189,7 +214,7 @@ for (const viewport of [
   { width: 1440, height: 900 },
 ]) {
   test(`keeps ${viewport.width}x${viewport.height} page contained while the guess grid owns overflow`, async ({ page }) => {
-    const codexRequests = await prepareOfflinePage(page);
+    const codexGuard = await prepareOfflinePage(page);
     await page.setViewportSize(viewport);
     await page.goto("/");
     await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
@@ -205,6 +230,7 @@ for (const viewport of [
     });
     expect(dimensions.pageScrollWidth).toBeLessThanOrEqual(dimensions.pageClientWidth);
     expect(dimensions.scrollerScrollWidth).toBeGreaterThan(dimensions.scrollerClientWidth);
-    expect(codexRequests).toEqual([]);
+    expect(codexGuard.attemptedRequests).toEqual([]);
+    expect(codexGuard.blockedRequests).toEqual([]);
   });
 }
