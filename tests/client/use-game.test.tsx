@@ -50,4 +50,14 @@ describe("useGame", () => {
     await act(async () => { resolveDaily({ nextUint32: () => 1 }); });
     expect(game.result.current.round?.mode).toBe("practice");
   });
+
+  test("does not surface a stale Daily rejection after Practice succeeds", async () => {
+    let rejectDaily!: (error: Error) => void;
+    vi.mocked(createDailyRandom).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectDaily = reject; }));
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await game.result.current.setMode("practice"); });
+    await act(async () => { rejectDaily(new Error("stale failure")); });
+    expect(game.result.current.round?.mode).toBe("practice");
+    expect(game.result.current.error).toBeNull();
+  });
 });

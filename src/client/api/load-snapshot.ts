@@ -16,7 +16,7 @@ const runtimeUrls = ["/runtime/manifest.json", "/runtime/cards.json", "/runtime/
 async function getJson(fetchImpl: typeof fetch, url: string, signal?: AbortSignal): Promise<unknown> {
   let response: Response;
   try { response = await fetchImpl(url, signal ? { signal } : undefined); }
-  catch (caught) { throw new Error(`Failed to load ${url}: ${caught instanceof Error ? caught.message : "request failed"}`); }
+  catch { throw new Error(`Failed to load ${url}`); }
   if (!response.ok) throw new Error(`Failed to load ${url}: ${response.status}`);
   try { return await response.json(); }
   catch { throw new Error(`Failed to parse ${url}`); }

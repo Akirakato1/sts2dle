@@ -60,6 +60,12 @@ describe("loadSnapshot", () => {
     await expect(loadSnapshot(jsonFetch({ "/runtime/manifest.json": manifest, "/runtime/cards.json": [{}], "/runtime/base-groups.json": baseGroups, "/runtime/pair-groups.json": pairGroups, "/runtime/sprite-map.json": spriteMap }))).rejects.toThrow("/runtime/cards.json");
   });
 
+  test("does not expose a network error message while identifying its URL", async () => {
+    const fetchImpl = (async (input: string | URL | Request) => { if (String(input).endsWith("manifest.json")) throw new Error("SECRET_TOKEN=do-not-show"); return new Response("{}", { status: 200 }); }) as typeof fetch;
+    await expect(loadSnapshot(fetchImpl)).rejects.toThrow("Failed to load /runtime/manifest.json");
+    await expect(loadSnapshot(fetchImpl)).rejects.not.toThrow("SECRET_TOKEN");
+  });
+
   test("forwards an abort signal and validates upgrade counts", async () => {
     let seen: AbortSignal | undefined;
     const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => { seen = init?.signal ?? undefined; return new Response(JSON.stringify(manifest), { status: 200 }); }) as typeof fetch;
