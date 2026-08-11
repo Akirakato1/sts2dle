@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { RawSpireCardsSchema, type RawSpireCard } from "../../../src/server/spire-codex/schema.js";
 import { buildSnapshot } from "../../../src/server/sync/build-snapshot.js";
 import { SnapshotStore } from "../../../src/server/sync/snapshot-store.js";
+import { withE2eFixtureDataLock } from "./fixture-data-lock.js";
 import { pruneSupersededFixtureSnapshots } from "./prune-test-snapshots.js";
 
 const ART_ORIGIN = "https://fixture.test";
@@ -48,52 +49,54 @@ async function main(): Promise<void> {
     },
   }).webp().toBuffer();
   const dataDir = process.env.STSDLE_DATA_DIR ?? ".tmp/e2e-var";
-  const store = new SnapshotStore(dataDir);
-
-  const active = await buildSnapshot({
-    client: {
-      fetchCards: async () => ({
-        cards,
-        rawBody: sourceBody,
-        sourceRevision,
-        lastModified: "Tue, 12 Aug 2026 00:00:00 GMT",
-        fetchedAt: FIXED_TIME,
-      }),
-    },
-    store,
-    baseUrl: ART_ORIGIN,
-    fetchImpl: async (input) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (new URL(url).origin !== ART_ORIGIN) {
-        throw new Error(`E2E fixture blocked unexpected network request: ${url}`);
-      }
-      return new Response(Uint8Array.from(portrait).buffer, {
-        status: 200,
-        headers: { "content-type": "image/webp" },
-      });
-    },
-    fallbackRenderer: {
-      render: async (_raw, upgraded, destination) => {
-        await sharp({
-          create: {
-            width: 400,
-            height: 520,
-            channels: 4,
-            background: upgraded
-              ? { r: 66, g: 103, b: 116, alpha: 1 }
-              : { r: 126, g: 55, b: 37, alpha: 1 },
-          },
-        }).webp().toFile(destination);
+  const active = await withE2eFixtureDataLock(dataDir, async (lockedDataDir) => {
+    const store = new SnapshotStore(lockedDataDir);
+    const built = await buildSnapshot({
+      client: {
+        fetchCards: async () => ({
+          cards,
+          rawBody: sourceBody,
+          sourceRevision,
+          lastModified: "Tue, 12 Aug 2026 00:00:00 GMT",
+          fetchedAt: FIXED_TIME,
+        }),
       },
-    },
-    artworkConcurrency: 2,
-    allowedArtworkOrigins: [ART_ORIGIN],
-    allowedFullCardOrigins: [FULL_CARD_ORIGIN],
-    now: () => new Date(FIXED_TIME),
-  });
-  await pruneSupersededFixtureSnapshots(dataDir, active, {
-    allowedArtworkOrigins: [ART_ORIGIN],
-    allowedFullCardOrigins: [FULL_CARD_ORIGIN],
+      store,
+      baseUrl: ART_ORIGIN,
+      fetchImpl: async (input) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (new URL(url).origin !== ART_ORIGIN) {
+          throw new Error(`E2E fixture blocked unexpected network request: ${url}`);
+        }
+        return new Response(Uint8Array.from(portrait).buffer, {
+          status: 200,
+          headers: { "content-type": "image/webp" },
+        });
+      },
+      fallbackRenderer: {
+        render: async (_raw, upgraded, destination) => {
+          await sharp({
+            create: {
+              width: 400,
+              height: 520,
+              channels: 4,
+              background: upgraded
+                ? { r: 66, g: 103, b: 116, alpha: 1 }
+                : { r: 126, g: 55, b: 37, alpha: 1 },
+            },
+          }).webp().toFile(destination);
+        },
+      },
+      artworkConcurrency: 2,
+      allowedArtworkOrigins: [ART_ORIGIN],
+      allowedFullCardOrigins: [FULL_CARD_ORIGIN],
+      now: () => new Date(FIXED_TIME),
+    });
+    await pruneSupersededFixtureSnapshots(lockedDataDir, built, {
+      allowedArtworkOrigins: [ART_ORIGIN],
+      allowedFullCardOrigins: [FULL_CARD_ORIGIN],
+    });
+    return built;
   });
 
   process.stdout.write(`${JSON.stringify({
