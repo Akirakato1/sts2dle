@@ -7,10 +7,12 @@ vi.mock("../../src/shared/random.js", async (importOriginal) => ({
   createDailyRandom: vi.fn(async () => ({ nextUint32: () => 0 })),
   createPracticeRandom: vi.fn(() => ({ nextUint32: () => 0 })),
 }));
+vi.mock("../../src/client/game/preload-images.js", () => ({ preloadAnswerImages: vi.fn(() => Promise.resolve()) }));
 
 import { createDailyRandom, createPracticeRandom } from "../../src/shared/random.js";
 import { pairKey } from "../../src/shared/feature-keys.js";
 import { useGame } from "../../src/client/game/use-game.js";
+import { preloadAnswerImages } from "../../src/client/game/preload-images.js";
 import type { LoadedSnapshot } from "../../src/client/api/load-snapshot.js";
 
 const base = { cardClass: "Silent" as const, cardType: "Skill" as const, mana: 1, rarity: "Rare" as const, eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false, unplayable: false };
@@ -22,7 +24,13 @@ const snapshot: LoadedSnapshot = {
 };
 
 describe("useGame", () => {
-  beforeEach(() => { vi.clearAllMocks(); vi.setSystemTime(new Date("2026-08-12T12:00:00Z")); });
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(createDailyRandom).mockResolvedValue({ nextUint32: () => 0 });
+    vi.mocked(createPracticeRandom).mockReturnValue({ nextUint32: () => 0 });
+    vi.mocked(preloadAnswerImages).mockResolvedValue();
+    vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+  });
 
   test("selects the same Daily answer for two mounts with the same revision", async () => {
     const first = renderHook(() => useGame(snapshot));
@@ -47,8 +55,26 @@ describe("useGame", () => {
     const game = renderHook(() => useGame(snapshot));
     await act(async () => { await game.result.current.setMode("practice"); });
     expect(game.result.current.round?.mode).toBe("practice");
+    vi.mocked(preloadAnswerImages).mockClear();
     await act(async () => { resolveDaily({ nextUint32: () => 1 }); });
     expect(game.result.current.round?.mode).toBe("practice");
+    expect(preloadAnswerImages).not.toHaveBeenCalled();
+  });
+
+  test("last overlapping Practice request wins and preloads once", async () => {
+    let first!: (source: { nextUint32(): number }) => void;
+    let second!: (source: { nextUint32(): number }) => void;
+    vi.mocked(createPracticeRandom)
+      .mockImplementationOnce(() => new Promise((resolve) => { first = resolve; }) as never)
+      .mockImplementationOnce(() => new Promise((resolve) => { second = resolve; }) as never);
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round).not.toBeNull());
+    await act(async () => { void game.result.current.setMode("practice"); void game.result.current.setMode("practice"); });
+    await act(async () => { second({ nextUint32: () => 1 }); });
+    vi.mocked(preloadAnswerImages).mockClear();
+    await act(async () => { first({ nextUint32: () => 0 }); });
+    expect(game.result.current.round?.answer.selectedCardId).toBe("SECOND");
+    expect(preloadAnswerImages).not.toHaveBeenCalled();
   });
 
   test("does not surface a stale Daily rejection after Practice succeeds", async () => {

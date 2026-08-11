@@ -64,14 +64,30 @@ describe("loadSnapshot", () => {
     const fetchImpl = (async (input: string | URL | Request) => { if (String(input).endsWith("manifest.json")) throw new Error("SECRET_TOKEN=do-not-show"); return new Response("{}", { status: 200 }); }) as typeof fetch;
     await expect(loadSnapshot(fetchImpl)).rejects.toThrow("Failed to load /runtime/manifest.json");
     await expect(loadSnapshot(fetchImpl)).rejects.not.toThrow("SECRET_TOKEN");
+    const error = await loadSnapshot(fetchImpl).catch((caught: unknown) => caught as Error) as Error;
+    expect(error.cause).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain("SECRET_TOKEN");
   });
 
   test("forwards an abort signal and validates upgrade counts", async () => {
-    let seen: AbortSignal | undefined;
-    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => { seen = init?.signal ?? undefined; return new Response(JSON.stringify(manifest), { status: 200 }); }) as typeof fetch;
+    const seen: Array<{ url: string; signal: AbortSignal | undefined }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => { seen.push({ url: String(input), signal: init?.signal ?? undefined }); return new Response(JSON.stringify(manifest), { status: 200 }); }) as typeof fetch;
     const controller = new AbortController();
     await expect(loadSnapshot(fetchImpl, controller.signal)).rejects.toThrow("/runtime/cards.json");
-    expect(seen).toBe(controller.signal);
+    expect(seen).toEqual([
+      "/runtime/manifest.json", "/runtime/cards.json", "/runtime/base-groups.json", "/runtime/pair-groups.json", "/runtime/sprite-map.json",
+    ].map((url) => ({ url, signal: controller.signal })));
     await expect(loadSnapshot(jsonFetch({ "/runtime/manifest.json": { ...manifest, upgradeCount: 0 }, "/runtime/cards.json": [card], "/runtime/base-groups.json": baseGroups, "/runtime/pair-groups.json": pairGroups, "/runtime/sprite-map.json": spriteMap }))).rejects.toThrow("upgradeCount");
+  });
+
+  test("propagates an actual abort without exposing its message", async () => {
+    const controller = new AbortController();
+    const fetchImpl = ((_: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("secret abort detail", "AbortError")), { once: true });
+    })) as typeof fetch;
+    const loading = loadSnapshot(fetchImpl, controller.signal);
+    controller.abort();
+    await expect(loading).rejects.toThrow("/runtime/manifest.json");
+    await expect(loading).rejects.not.toThrow("secret abort detail");
   });
 });

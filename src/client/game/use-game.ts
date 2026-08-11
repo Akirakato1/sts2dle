@@ -21,7 +21,7 @@ export function useGame(snapshot: LoadedSnapshot) {
   const choose = useCallback(async (mode: PlayMode): Promise<SelectedAnswer> => {
     const source = mode === "daily"
       ? await createDailyRandom(utcDate(), snapshot.manifest.sourceRevision)
-      : createPracticeRandom();
+      : await Promise.resolve(createPracticeRandom());
     return selectAnswer(groups, snapshot.cardsById, source);
   }, [groups, snapshot]);
   const start = useCallback(async (mode: PlayMode) => {
