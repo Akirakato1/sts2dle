@@ -88,6 +88,12 @@ async function writeBytesAndRehash(path: string, filename: string, bytes: Buffer
   await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
 }
 
+function corruptWebpPayload(bytes: Buffer): Buffer {
+  const corrupted = Buffer.from(bytes);
+  corrupted.fill(0, 40);
+  return corrupted;
+}
+
 async function expectIssues(path: string, patterns: readonly RegExp[]): Promise<void> {
   await expect(validateSnapshot(path, VALIDATION_OPTIONS)).rejects.toSatisfy((error: unknown) => {
     expect(error).toBeInstanceOf(SnapshotValidationError);
@@ -193,6 +199,19 @@ describe("validateSnapshot", () => {
     await expectIssues(path, [pattern]);
   });
 
+  it.each(["candidate.webp", "guess.webp"] as const)(
+    "rejects rehashed %s payload corruption that preserves readable metadata",
+    async (filename) => {
+      const path = await createValidSnapshot();
+      const corrupted = corruptWebpPayload(await readFile(join(path, filename)));
+      await expect(sharp(corrupted).metadata()).resolves.toMatchObject({ format: "webp" });
+      await expect(sharp(corrupted).raw().toBuffer()).rejects.toThrow();
+      await writeBytesAndRehash(path, filename, corrupted);
+
+      await expectIssues(path, [new RegExp(`invalid sprite file ${filename.replace(".", "\\.")}`, "i")]);
+    },
+  );
+
   it("inspects and rejects an unreferenced emitted fallback image", async () => {
     const path = await createValidSnapshot();
     await writeBytesAndRehash(path, "fallback/unreferenced.webp", Buffer.from("not an image"));
@@ -244,6 +263,22 @@ describe("validateSnapshot", () => {
     await expectIssues(path, [pattern]);
   });
 
+  it("rejects rehashed fallback payload corruption that preserves readable metadata", async () => {
+    const path = await createValidSnapshot();
+    const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
+    const fallbackFile = Object.keys(manifest.files).find((filename) => filename.startsWith("fallback/"))!;
+    const corrupted = corruptWebpPayload(await readFile(join(path, ...fallbackFile.split("/"))));
+    await expect(sharp(corrupted).metadata()).resolves.toMatchObject({
+      format: "webp",
+      width: 400,
+      height: 520,
+    });
+    await expect(sharp(corrupted).raw().toBuffer()).rejects.toThrow();
+    await writeBytesAndRehash(path, fallbackFile, corrupted);
+
+    await expectIssues(path, [/invalid fallback WebP/i]);
+  });
+
   it("rejects a rehashed reveal URL outside the configured origin allowlist", async () => {
     const path = await createValidSnapshot();
     const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
@@ -281,6 +316,39 @@ describe("validateSnapshot", () => {
     const path = await createValidSnapshot();
     const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
     cards.find(({ id }) => id === "AFTERIMAGE")!.base[field] = value;
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [pattern]);
+  });
+
+  it("accepts semantically equal non-upgradable features with different property order", async () => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    const dazed = cards.find(({ id }) => id === "DAZED")!;
+    dazed.upgraded = Object.fromEntries(Object.entries(dazed.upgraded).reverse());
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expect(validateSnapshot(path, VALIDATION_OPTIONS)).resolves.toMatchObject({ cardCount: 6 });
+  });
+
+  it("still rejects a changed feature on a non-upgradable card", async () => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    const dazed = cards.find(({ id }) => id === "DAZED")!;
+    dazed.upgraded.innate = !dazed.base.innate;
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [/non-upgradable card has different effective upgraded features.*DAZED/i]);
+  });
+
+  it.each([
+    ["null", null, /invalid card at index 0.*object/i],
+    ["array", [], /invalid card at index 0.*object/i],
+    ["malformed object", { id: "BROKEN" }, /missing card name.*BROKEN/i],
+  ] as const)("aggregates a %s card entry without leaking a raw runtime error", async (_label, entry, pattern) => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<unknown[]>(path, "cards.json");
+    cards[0] = entry;
     await writeJsonAndRehash(path, "cards.json", cards);
 
     await expectIssues(path, [pattern]);

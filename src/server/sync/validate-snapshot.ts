@@ -14,6 +14,7 @@ import type {
   SpriteMap,
   SpriteRect,
 } from "../../shared/domain.js";
+import { FEATURE_ORDER } from "../../shared/domain.js";
 import type { ActivatedSnapshot } from "./build-snapshot.js";
 import { assertAllowedImageUrl, parseAllowedImageOrigins } from "../images/url-policy.js";
 import { fallbackUrl } from "../images/fallback-path.js";
@@ -267,13 +268,20 @@ function validateCards(
     validateFeatureVector(value.base, "base", id, issues);
     validateFeatureVector(value.upgraded, "upgraded", id, issues);
     if (value.hasUpgrade === false && isRecord(value.base) && isRecord(value.upgraded)) {
-      if (JSON.stringify(value.base) !== JSON.stringify(value.upgraded)) {
+      if (!featureVectorsEqual(value.base, value.upgraded)) {
         issues.push(`Non-upgradable card has different effective upgraded features: ${id}`);
       }
     }
   }
   validateDuplicateNameMarkers(cards, issues);
   return cardsById;
+}
+
+function featureVectorsEqual(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): boolean {
+  return FEATURE_ORDER.every((feature) => left[feature] === right[feature]);
 }
 
 function validateRevealUrl(
@@ -539,6 +547,7 @@ async function inspectSprite(
         issues.push(`${filename} dimensions do not match sprite map`);
       }
     }
+    await sharp(bytes).raw().toBuffer();
     return { width: metadata.width, height: metadata.height, bytes: bytes.length };
   } catch (error: unknown) {
     if (isNotFound(error)) issues.push(`Missing snapshot file: ${filename}`);
@@ -549,13 +558,14 @@ async function inspectSprite(
 
 async function inspectFallbackImages(
   snapshotPath: string,
-  cards: readonly CardIdentity[],
+  cards: readonly unknown[],
   issues: string[],
 ): Promise<null> {
   const filenames = new Set<string>();
   for (const card of cards) {
-    if (isFallbackUrl(card.baseCardUrl)) filenames.add(card.baseCardUrl!.slice("/runtime/".length));
-    if (isFallbackUrl(card.upgradedCardUrl)) filenames.add(card.upgradedCardUrl!.slice("/runtime/".length));
+    if (!isRecord(card)) continue;
+    if (isFallbackUrl(card.baseCardUrl)) filenames.add(card.baseCardUrl.slice("/runtime/".length));
+    if (isFallbackUrl(card.upgradedCardUrl)) filenames.add(card.upgradedCardUrl.slice("/runtime/".length));
   }
   try {
     for (const filename of (await listFiles(snapshotPath)).filter((name) => name.startsWith("fallback/"))) {
@@ -573,6 +583,7 @@ async function inspectFallbackImages(
       if (metadata.width !== 400 || metadata.height !== 520) {
         issues.push(`Fallback ${filename} must be 400x520 WebP`);
       }
+      await sharp(bytes).raw().toBuffer();
     } catch {
       issues.push(`Invalid fallback WebP: ${filename}`);
     }
@@ -622,7 +633,7 @@ function isMana(value: unknown): boolean {
   return (Number.isInteger(value) && typeof value === "number" && value >= 0) || value === "X" || value === "\u2013";
 }
 
-function isFallbackUrl(value: string | null | undefined): boolean {
+function isFallbackUrl(value: unknown): value is string {
   return typeof value === "string" && value.startsWith("/runtime/fallback/");
 }
 
