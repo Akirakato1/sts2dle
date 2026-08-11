@@ -1,0 +1,16 @@
+:root { color: #f6e8bd; background: #121813; font-family: Georgia, "Times New Roman", serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button { font: inherit; }
+.app-shell { width: min(100% - 2rem, 720px); margin: 0 auto; padding: 3.5rem 0 5rem; text-align: center; }
+header { margin-bottom: 2rem; }
+.eyebrow { margin: 0; color: #bba66a; font-size: .76rem; letter-spacing: .17em; text-transform: uppercase; }
+h1 { margin: .2rem 0 0; color: #e5bf60; font-size: clamp(3rem, 12vw, 5.2rem); letter-spacing: .06em; text-shadow: 0 3px #654a21; }
+.subtitle, .round-note { color: #cabf9a; }
+.mode-tabs { display: inline-flex; gap: .45rem; padding: .35rem; background: #263126; border: 1px solid #546146; border-radius: .35rem; }
+.mode-tabs button, .new-round, .load-error button { cursor: pointer; border: 1px solid #77805b; border-radius: .2rem; padding: .55rem 1rem; color: #e8dfbd; background: #1b241c; }
+.mode-tabs button.active { color: #201c13; background: #d7b664; border-color: #f5d77e; }
+.round-note { max-width: 38rem; margin: 1.5rem auto; line-height: 1.5; }
+.game-slot, .load-error { margin: .8rem 0; padding: 1.5rem; border: 1px dashed #59624b; background: #192018; color: #afa987; }
+.load-error { border-style: solid; border-color: #a34f3d; }
+.load-error button, .new-round { margin-top: 1rem; }
