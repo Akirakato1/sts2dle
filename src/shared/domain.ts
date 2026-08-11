@@ -29,6 +29,7 @@ export interface FeatureVector {
 export interface CardIdentity {
   id: string;
   name: string;
+  duplicateName?: boolean;
   hasUpgrade: boolean;
   artUrl: string;
   baseCardUrl: string | null;

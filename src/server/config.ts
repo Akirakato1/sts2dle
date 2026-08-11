@@ -33,7 +33,7 @@ export function loadConfig(env: Environment): ServerConfig {
     host: env.STSDLE_HOST ?? "127.0.0.1",
     port: positiveInteger(env.STSDLE_PORT, 3000, "port"),
     dataDir: env.STSDLE_DATA_DIR ?? "./var",
-    spireCodexBaseUrl: env.STSDLE_SPIRE_CODEX_BASE_URL ?? "https://spire-codex.com",
+    spireCodexBaseUrl: env.SPIRE_CODEX_BASE_URL ?? "https://spire-codex.com",
     requestTimeoutMs: positiveInteger(
       env.STSDLE_REQUEST_TIMEOUT_MS,
       30_000,
