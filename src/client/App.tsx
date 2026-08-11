@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from "react";
 
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
+import { CardSearch } from "./components/CardSearch.js";
 import { useGame } from "./game/use-game.js";
 import type { RoundState } from "./game/game-reducer.js";
 
 interface GameSlotProps { round: RoundState; onSubmit(cardId: string): void }
-function CandidateSlot(_props: GameSlotProps) { return <section className="game-slot" aria-label="Card search"><p>Your card search will appear here.</p></section>; }
 function ResultsSlot(_props: GameSlotProps) { return <section className="game-slot" aria-label="Guess results"><p>Comparison results will appear here.</p></section>; }
 
 function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
@@ -19,7 +19,12 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
     </nav>
     <p className="round-note">Each guess compares its base card and upgrade together. Match every trait to find today&apos;s card.</p>
     <main>
-      <CandidateSlot round={round} onSubmit={game.submit} />
+      <CardSearch
+        cards={snapshot.cards}
+        spriteMap={snapshot.spriteMap}
+        guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}
+        onSelect={game.submit}
+      />
       <ResultsSlot round={round} onSubmit={game.submit} />
       {round.mode === "practice" && <button type="button" className="new-round" onClick={game.nextRound}>New practice round</button>}
       {round.error && <p role="alert">{round.error}</p>}
