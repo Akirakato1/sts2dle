@@ -8,12 +8,13 @@ import type { RoundState } from "./game/game-reducer.js";
 
 interface RoundGameProps {
   round: RoundState;
+  roundKey: number;
   snapshot: LoadedSnapshot;
   onSubmit(cardId: string): void;
   onNextRound(): void;
 }
 
-function RoundGame({ round, snapshot, onSubmit, onNextRound }: RoundGameProps) {
+function RoundGame({ round, roundKey, snapshot, onSubmit, onNextRound }: RoundGameProps) {
   const [animateFromIndex, setAnimateFromIndex] = useState(round.guesses.length);
   const isRevealing = animateFromIndex < round.guesses.length;
   return <main>
@@ -28,6 +29,7 @@ function RoundGame({ round, snapshot, onSubmit, onNextRound }: RoundGameProps) {
       guesses={round.guesses}
       cardsById={snapshot.cardsById}
       spriteMap={snapshot.spriteMap}
+      roundKey={roundKey}
       animateFromIndex={animateFromIndex}
       onRevealComplete={() => setAnimateFromIndex(round.guesses.length)}
     />
@@ -46,7 +48,7 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
       {(["daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={round.mode === mode ? "page" : undefined} className={round.mode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{mode === "daily" ? "Daily" : "Practice"}</button>)}
     </nav>
     <p className="round-note">Each guess compares its base card and upgrade together. Match every trait to find today&apos;s card.</p>
-    <RoundGame key={game.roundToken} round={round} snapshot={snapshot} onSubmit={game.submit} onNextRound={game.nextRound} />
+    <RoundGame key={game.roundToken} round={round} roundKey={game.roundToken} snapshot={snapshot} onSubmit={game.submit} onNextRound={game.nextRound} />
   </>;
 }
 

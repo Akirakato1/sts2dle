@@ -63,7 +63,7 @@ export interface FeatureTileProps {
   result: FeatureResult;
   revealIndex: number;
   animate?: boolean;
-  onRevealEnd?: () => void;
+  onRevealEnd?: (event: React.TransitionEvent<HTMLDivElement>) => void;
 }
 
 export function FeatureTile({ result, revealIndex, animate = true, onRevealEnd }: FeatureTileProps) {

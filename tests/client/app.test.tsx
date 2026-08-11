@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React, { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -25,13 +25,30 @@ const searchSnapshot = {
     cards: { apotheosis: appSprite, apparition: appSprite },
   },
 };
+const appFeatureNames = ["cardClass", "cardType", "mana", "rarity", "eternal", "ethereal", "exhaust", "innate", "retain", "sly", "unplayable"] as const;
+const makeResult = (feature: (typeof appFeatureNames)[number]) => ({
+  feature,
+  color: "red" as const,
+  displayValue: String(appCards[1]!.base[feature]),
+  hint: "none" as const,
+});
+const submittedGuess = { cardId: "apparition", results: appFeatureNames.map(makeResult) };
+
+function dispatchTransformEnd(target: Element): void {
+  const event = new Event("transitionend", { bubbles: true });
+  Object.defineProperty(event, "propertyName", { value: "transform" });
+  fireEvent(target, event);
+}
 
 beforeEach(() => {
   loads.mockReset();
   games.mockReset();
   games.mockReturnValue({ round: null, roundToken: 0, error: null, submit: vi.fn(), setMode: vi.fn(), nextRound: vi.fn() });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("App snapshot cleanup", () => {
   test("StrictMode aborts all pending loads without showing an error and remounts successfully", async () => {
@@ -116,18 +133,12 @@ describe("App snapshot cleanup", () => {
   });
 
   test("locks the search from row insertion through the eleventh tile reveal", async () => {
-    const makeResult = (feature: keyof typeof appCards[0]["base"]) => ({
-      feature,
-      color: "red" as const,
-      displayValue: String(appCards[1]!.base[feature]),
-      hint: "none" as const,
-    });
     const submit = vi.fn();
     let gameState = {
       round: {
         mode: "daily" as const,
         answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
-        guesses: [] as Array<{ cardId: string; results: ReturnType<typeof makeResult>[] }>,
+        guesses: [] as Array<typeof submittedGuess>,
         status: "playing" as const,
         error: null,
       },
@@ -147,17 +158,46 @@ describe("App snapshot cleanup", () => {
       ...gameState,
       round: {
         ...gameState.round,
-        guesses: [{
-          cardId: "apparition",
-          results: ["cardClass", "cardType", "mana", "rarity", "eternal", "ethereal", "exhaust", "innate", "retain", "sly", "unplayable"].map((feature) => makeResult(feature as keyof typeof appCards[0]["base"])),
-        }],
+        guesses: [submittedGuess],
       },
     };
     view.rerender(<App />);
     expect(screen.getByRole("combobox")).toBeDisabled();
 
     const surfaces = view.container.querySelectorAll(".feature-tile__surface");
-    fireEvent.transitionEnd(surfaces[surfaces.length - 1]!);
+    dispatchTransformEnd(surfaces[surfaces.length - 1]!);
+    expect(screen.getByRole("combobox")).toBeEnabled();
+  });
+
+  test("keeps the search locked until a missing transition reaches the fallback", async () => {
+    let gameState = {
+      round: {
+        mode: "daily" as const,
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+        guesses: [] as Array<typeof submittedGuess>,
+        status: "playing" as const,
+        error: null,
+      },
+      roundToken: 1,
+      error: null,
+      submit: vi.fn(),
+      setMode: vi.fn(),
+      nextRound: vi.fn(),
+    };
+    games.mockImplementation(() => gameState);
+    loads.mockResolvedValue(searchSnapshot);
+    const view = render(<App />);
+    await screen.findByRole("combobox");
+    vi.useFakeTimers();
+
+    gameState = { ...gameState, round: { ...gameState.round, guesses: [submittedGuess] } };
+    view.rerender(<App />);
+    expect(screen.getByRole("combobox")).toBeDisabled();
+    act(() => vi.advanceTimersByTime(1_699));
+    expect(screen.getByRole("combobox")).toBeDisabled();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByRole("combobox")).toBeEnabled();
+    act(() => vi.advanceTimersByTime(10_000));
     expect(screen.getByRole("combobox")).toBeEnabled();
   });
 });
