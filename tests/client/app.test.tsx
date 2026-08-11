@@ -21,6 +21,7 @@ describe("App snapshot cleanup", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     loads.mockResolvedValueOnce({});
     render(<App />);
-    expect(await screen.findByRole("status")).toHaveTextContent("Preparing");
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading card data");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
