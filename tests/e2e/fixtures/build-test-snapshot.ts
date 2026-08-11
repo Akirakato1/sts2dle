@@ -107,7 +107,7 @@ async function main(): Promise<void> {
   })}\n`);
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+main().catch(() => {
+  process.stderr.write("E2E fixture snapshot build failed\n");
   process.exitCode = 1;
 });

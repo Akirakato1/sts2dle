@@ -1,6 +1,7 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,16 +11,24 @@ import type { RawSpireCard } from "../../src/server/spire-codex/schema.js";
 import { buildSnapshot, type ActivatedSnapshot } from "../../src/server/sync/build-snapshot.js";
 import { SnapshotStore } from "../../src/server/sync/snapshot-store.js";
 import { validateSnapshot } from "../../src/server/sync/validate-snapshot.js";
-import { withE2eFixtureDataLock } from "../e2e/fixtures/fixture-data-lock.js";
+import {
+  withE2eFixtureDataLock,
+  type FixtureDataLockOperations,
+} from "../e2e/fixtures/fixture-data-lock.js";
 import { pruneSupersededFixtureSnapshots } from "../e2e/fixtures/prune-test-snapshots.js";
 
 const temporaryDirectories: string[] = [];
+const childProcesses: ChildProcess[] = [];
 const VALIDATION_OPTIONS = {
   allowedArtworkOrigins: ["https://spire-codex.test"],
   allowedFullCardOrigins: ["https://cdn.test"],
 } as const;
 
 afterEach(async () => {
+  for (const child of childProcesses.splice(0)) {
+    if (child.exitCode === null) child.kill();
+  }
+  await delay(20);
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, {
     force: true,
     recursive: true,
@@ -80,6 +89,69 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
   let resolve!: () => void;
   const promise = new Promise<void>((complete) => { resolve = complete; });
   return { promise, resolve };
+}
+
+function owner(token: string): string {
+  return `${JSON.stringify({ token, processId: 999, acquiredAt: "2026-08-12T00:00:00.000Z" })}\n`;
+}
+
+async function rejected(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error: unknown) {
+    return error;
+  }
+  throw new Error("Expected promise to reject");
+}
+
+function recursivelyDisplayedText(value: unknown, seen = new Set<unknown>()): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null || seen.has(value)) return "";
+  seen.add(value);
+  return Object.getOwnPropertyNames(value)
+    .map((key) => recursivelyDisplayedText((value as Record<string, unknown>)[key], seen))
+    .join("\n");
+}
+
+async function expectSanitizedFailure(
+  promise: Promise<unknown>,
+  secretPath: string,
+  secretToken: string,
+): Promise<void> {
+  const error = await rejected(promise);
+  const displayed = recursivelyDisplayedText(error);
+  expect(displayed).not.toContain(secretPath);
+  expect(displayed).not.toContain(secretToken);
+  expect(displayed).not.toContain("injected filesystem secret");
+}
+
+async function waitForChildSignal(child: ChildProcess, signal: string): Promise<void> {
+  let output = "";
+  await Promise.race([
+    new Promise<void>((complete, reject) => {
+      child.stdout?.on("data", (chunk: Buffer) => {
+        output += chunk.toString("utf8");
+        if (output.includes(signal)) complete();
+      });
+      child.once("error", reject);
+      child.once("exit", (code) => {
+        if (!output.includes(signal)) reject(new Error(`Lock worker exited before signal (${code})`));
+      });
+    }),
+    delay(10_000).then(() => { throw new Error("Timed out waiting for lock worker signal"); }),
+  ]);
+}
+
+async function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) {
+    expect(child.exitCode).toBe(0);
+    return;
+  }
+  const code = await Promise.race([
+    new Promise<number | null>((complete) => child.once("exit", complete)),
+    delay(10_000).then(() => { throw new Error("Timed out waiting for lock worker exit"); }),
+  ]);
+  expect(code).toBe(0);
 }
 
 describe("pruneSupersededFixtureSnapshots", () => {
@@ -206,5 +278,208 @@ describe("withE2eFixtureDataLock", () => {
     releaseHolder.resolve();
     await holder;
     expect(await readdir(dataDir)).not.toContain(".stsdle-e2e-fixture.lock");
+  });
+
+  it("does not acquire after a monotonic deadline when the holder releases before the next attempt", async () => {
+    const dataDir = await temporaryDirectory("stsdle-e2e-lock-boundary-");
+    const lockPath = join(dataDir, ".stsdle-e2e-fixture.lock");
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), owner("holder-token"));
+    let monotonicTime = 0;
+    let entered = false;
+    let waitCalls = 0;
+
+    await expect(withE2eFixtureDataLock(dataDir, async () => {
+      entered = true;
+    }, {
+      retryDelayMs: 30,
+      timeoutMs: 30,
+      operations: {
+        monotonicNow: () => monotonicTime,
+        wait: async () => {
+          waitCalls += 1;
+          monotonicTime = 31;
+          await rm(lockPath, { force: true, recursive: true });
+        },
+      },
+    })).rejects.toThrow("Timed out after 30ms waiting for E2E fixture data lock");
+
+    expect(waitCalls).toBe(1);
+    expect(entered).toBe(false);
+    expect(await readdir(dataDir)).not.toContain(".stsdle-e2e-fixture.lock");
+  });
+
+  it("releases a slow successful acquisition without entering after its monotonic deadline", async () => {
+    const dataDir = await temporaryDirectory("stsdle-e2e-lock-slow-acquire-");
+    let monotonicTime = 0;
+    let entered = false;
+
+    await expect(withE2eFixtureDataLock(dataDir, async () => {
+      entered = true;
+    }, {
+      timeoutMs: 30,
+      operations: {
+        monotonicNow: () => monotonicTime,
+        acquireDirectory: async (path) => {
+          await mkdir(path);
+          monotonicTime = 31;
+        },
+      },
+    })).rejects.toThrow("Timed out after 30ms waiting for E2E fixture data lock");
+
+    expect(entered).toBe(false);
+    expect(await readdir(dataDir)).not.toContain(".stsdle-e2e-fixture.lock");
+  });
+
+  it("preserves a foreign replacement when initialization fails", async () => {
+    const dataDir = await temporaryDirectory("stsdle-e2e-lock-init-foreign-");
+    const lockPath = join(dataDir, ".stsdle-e2e-fixture.lock");
+    const secretToken = "secret-owner-token";
+    const foreignToken = "foreign-owner-token";
+
+    await expectSanitizedFailure(withE2eFixtureDataLock(dataDir, async () => undefined, {
+      operations: {
+        createToken: () => secretToken,
+        writeOwner: async () => {
+          await rm(lockPath, { force: true, recursive: true });
+          await mkdir(lockPath);
+          await writeFile(join(lockPath, "owner.json"), owner(foreignToken));
+          throw new Error(`injected filesystem secret ${dataDir} ${secretToken}`);
+        },
+      },
+    }), dataDir, secretToken);
+
+    expect(await readFile(join(lockPath, "owner.json"), "utf8")).toBe(owner(foreignToken));
+  });
+
+  it("preserves foreign ownership on mismatch instead of deleting it", async () => {
+    const dataDir = await temporaryDirectory("stsdle-e2e-lock-owner-mismatch-");
+    const lockPath = join(dataDir, ".stsdle-e2e-fixture.lock");
+    const secretToken = "secret-owner-token";
+    const foreignToken = "foreign-owner-token";
+
+    await expectSanitizedFailure(withE2eFixtureDataLock(dataDir, async () => {
+      await rm(lockPath, { force: true, recursive: true });
+      await mkdir(lockPath);
+      await writeFile(join(lockPath, "owner.json"), owner(foreignToken));
+    }, { operations: { createToken: () => secretToken } }), dataDir, secretToken);
+
+    const artifacts = await readdir(dataDir);
+    const preserved = artifacts.find((name) => name === ".stsdle-e2e-fixture.lock"
+      || name.startsWith(".stsdle-e2e-fixture.release-"));
+    expect(preserved).toBeDefined();
+    expect(await readFile(join(dataDir, preserved!, "owner.json"), "utf8")).toBe(owner(foreignToken));
+  });
+
+  it("never deletes a successor that acquires after quarantine rename", async () => {
+    const dataDir = await temporaryDirectory("stsdle-e2e-lock-successor-");
+    const lockPath = join(dataDir, ".stsdle-e2e-fixture.lock");
+    const successorToken = "successor-owner-token";
+    let replacementCreated = false;
+
+    await withE2eFixtureDataLock(dataDir, async () => undefined, {
+      operations: {
+        readOwner: async (path) => {
+          const body = await readFile(path, "utf8");
+          if (!replacementCreated) {
+            replacementCreated = true;
+            await rm(lockPath, { force: true, recursive: true });
+            await mkdir(lockPath);
+            await writeFile(join(lockPath, "owner.json"), owner(successorToken));
+          }
+          return body;
+        },
+      },
+    });
+
+    expect(await readFile(join(lockPath, "owner.json"), "utf8")).toBe(owner(successorToken));
+  });
+
+  it("sanitizes unexpected failures from every filesystem operation class", async () => {
+    const secretToken = "secret-owner-token";
+    const injected = (dataDir: string) => new Error(
+      `injected filesystem secret ${dataDir} ${secretToken}`,
+    );
+    const cases: Array<{
+      name: string;
+      prepare?(dataDir: string): Promise<void>;
+      operations(dataDir: string): Partial<FixtureDataLockOperations>;
+    }> = [
+      { name: "mkdir", operations: (path) => ({ ensureDirectory: async () => { throw injected(path); } }) },
+      { name: "realpath", operations: (path) => ({ resolvePath: async () => { throw injected(path); } }) },
+      { name: "acquire", operations: (path) => ({ acquireDirectory: async () => { throw injected(path); } }) },
+      { name: "write", operations: (path) => ({ writeOwner: async () => { throw injected(path); } }) },
+      { name: "read", operations: (path) => ({ readOwner: async () => { throw injected(path); } }) },
+      { name: "rename", operations: (path) => ({ renamePath: async () => { throw injected(path); } }) },
+      { name: "remove", operations: (path) => ({ removeOwnedDirectory: async () => { throw injected(path); } }) },
+      {
+        name: "wait",
+        prepare: async (path) => { await mkdir(join(path, ".stsdle-e2e-fixture.lock")); },
+        operations: (path) => ({ wait: async () => { throw injected(path); } }),
+      },
+    ];
+
+    for (const failureCase of cases) {
+      const dataDir = await temporaryDirectory(`stsdle-e2e-lock-${failureCase.name}-`);
+      await failureCase.prepare?.(dataDir);
+      await expectSanitizedFailure(withE2eFixtureDataLock(dataDir, async () => undefined, {
+        operations: {
+          createToken: () => secretToken,
+          ...failureCase.operations(dataDir),
+        },
+        timeoutMs: 30,
+      }), dataDir, secretToken);
+    }
+  });
+
+  it("coordinates with a real child-process lock holder", async () => {
+    const dataDir = await temporaryDirectory("stsdle-e2e-lock-child-");
+    const releaseSignal = join(await temporaryDirectory("stsdle-e2e-lock-control-"), "release");
+    const workerPath = resolve("tests/e2e/fixtures/fixture-lock-worker.ts");
+    const child = spawn(process.execPath, ["--import", "tsx", workerPath, dataDir, releaseSignal], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    childProcesses.push(child);
+    await waitForChildSignal(child, "LOCK_ACQUIRED\n");
+
+    let contenderEntered = false;
+    await expect(withE2eFixtureDataLock(dataDir, async () => {
+      contenderEntered = true;
+    }, { retryDelayMs: 5, timeoutMs: 30 })).rejects.toThrow(
+      "Timed out after 30ms waiting for E2E fixture data lock",
+    );
+    expect(contenderEntered).toBe(false);
+
+    await writeFile(releaseSignal, "release");
+    await waitForChildExit(child);
+    let nextEntered = false;
+    await withE2eFixtureDataLock(dataDir, async () => { nextEntered = true; });
+    expect(nextEntered).toBe(true);
+  });
+
+  it("keeps build-script stderr fixed when lock setup fails", async () => {
+    const root = await temporaryDirectory("stsdle-e2e-build-stderr-");
+    const secretDataPath = join(root, "secret-data-file");
+    await writeFile(secretDataPath, "not a directory");
+    const scriptPath = resolve("tests/e2e/fixtures/build-test-snapshot.ts");
+    const child = spawn(process.execPath, ["--import", "tsx", scriptPath], {
+      cwd: process.cwd(),
+      env: { ...process.env, STSDLE_DATA_DIR: secretDataPath },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    childProcesses.push(child);
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+    const code = await new Promise<number | null>((complete, reject) => {
+      child.once("error", reject);
+      child.once("exit", complete);
+    });
+
+    expect(code).toBe(1);
+    expect(stderr).toBe("E2E fixture snapshot build failed\n");
+    expect(stderr).not.toContain(secretDataPath);
   });
 });
