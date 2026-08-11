@@ -66,7 +66,12 @@ export class FallbackRenderer {
         `Failed to fetch portrait for card ${raw.id}: HTTP ${portraitResponse.status}`,
       );
     }
-    const portraitBytes = Buffer.from(await portraitResponse.arrayBuffer());
+    let portraitBytes: Buffer;
+    try {
+      portraitBytes = Buffer.from(await portraitResponse.arrayBuffer());
+    } catch {
+      throw new Error(`Failed to fetch portrait for card ${raw.id}`);
+    }
     if (portraitBytes.length === 0) throw new Error(`Empty portrait for card ${raw.id}`);
     const portraitContentType = portraitResponse.headers.get("content-type") ?? "image/webp";
     const rendererScript = await readFile(RENDERER_PATH, "utf8");
@@ -202,7 +207,8 @@ function isSafePortraitUrl(url: URL): boolean {
   ) {
     return false;
   }
-  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  let hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (hostname.endsWith(".")) hostname = hostname.slice(0, -1);
   return (
     isIP(hostname) === 0 &&
     hostname.includes(".") &&

@@ -201,4 +201,48 @@ describe("FallbackRenderer", () => {
       join(tmpdir(), "unused-redirect.webp"),
     )).rejects.toThrow(/portrait redirects are not allowed.*MAD_SCIENCE/i);
   });
+
+  it("sanitizes portrait body-stream failures", async () => {
+    const secretMarker = "STREAM_SECRET_7f3a";
+    const imageUrl = "https://spire-codex.com/static/card.webp?token=url-secret";
+    const renderer = new FallbackRenderer({
+      fetchImpl: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error(`body failed ${secretMarker} ${imageUrl}`));
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "image/webp" },
+      }),
+      launchImpl: async () => {
+        throw new Error("Unexpected browser launch");
+      },
+    });
+    let message = "";
+    try {
+      await renderer.render(
+        madScienceWithPortrait(imageUrl),
+        false,
+        join(tmpdir(), "unused-stream.webp"),
+      );
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toBe("Failed to fetch portrait for card MAD_SCIENCE");
+    expect(message).not.toContain(secretMarker);
+    expect(message).not.toContain(imageUrl);
+    expect(message).not.toContain("url-secret");
+  });
+
+  it.each([
+    "https://localhost./",
+    "https://foo.local./",
+    "https://localhost。/",
+    "https://foo．local｡/",
+  ])("rejects unsafe configured origin with a DNS root dot: %s", (portraitBaseUrl) => {
+    expect(() => new FallbackRenderer({ portraitBaseUrl })).toThrow(
+      /portrait source configuration is invalid/i,
+    );
+  });
 });
