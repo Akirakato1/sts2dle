@@ -241,6 +241,41 @@ describe("App snapshot cleanup", () => {
     expect(screen.queryByRole("button", { name: "Next random card" })).not.toBeInTheDocument();
   });
 
+  test("waits for the winning row reveal to finish before showing result UI", async () => {
+    let gameState = {
+      round: {
+        mode: "daily" as const,
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+        guesses: [] as Array<typeof submittedGuess>,
+        status: "playing" as "playing" | "won",
+        error: null,
+      },
+      roundToken: 1,
+      dailyUtcDate: "2026-08-12",
+      error: null,
+      submit: vi.fn(),
+      setMode: vi.fn(),
+      nextRound: vi.fn(),
+    };
+    games.mockImplementation(() => gameState);
+    loads.mockResolvedValue(searchSnapshot);
+    const view = render(<App />);
+    await screen.findByRole("combobox");
+
+    gameState = {
+      ...gameState,
+      round: { ...gameState.round, guesses: [submittedGuess], status: "won" },
+    };
+    view.rerender(<App />);
+    expect(screen.queryByRole("heading", { name: "Accepted answer" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy Daily result" })).not.toBeInTheDocument();
+
+    const surfaces = view.container.querySelectorAll(".feature-tile__surface");
+    dispatchTransformEnd(surfaces[surfaces.length - 1]!);
+    expect(screen.getByRole("heading", { name: "Accepted answer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Daily result" })).toBeInTheDocument();
+  });
+
   test("shows a next-random-card action without Practice sharing after a Practice win", async () => {
     const nextRound = vi.fn();
     loads.mockResolvedValue(searchSnapshot);

@@ -64,20 +64,38 @@ export function useGame(snapshot: LoadedSnapshot) {
     return () => { requestGeneration.current += 1; };
   }, [activeUtcDate, start]);
   useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let timerGeneration = 0;
     const checkUtcDate = () => {
       const nextDate = utcDate();
       setActiveUtcDate((current) => current === nextDate ? current : nextDate);
     };
-    const timer = setTimeout(checkUtcDate, msUntilNextUtcDay());
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") checkUtcDate();
+    const armTimer = () => {
+      if (disposed) return;
+      if (timer !== null) clearTimeout(timer);
+      const generation = ++timerGeneration;
+      timer = setTimeout(() => {
+        if (disposed || generation !== timerGeneration) return;
+        timer = null;
+        checkUtcDate();
+        armTimer();
+      }, Math.max(1, msUntilNextUtcDay()));
     };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      checkUtcDate();
+      armTimer();
+    };
+    armTimer();
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      clearTimeout(timer);
+      disposed = true;
+      timerGeneration += 1;
+      if (timer !== null) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [activeUtcDate]);
+  }, []);
   useEffect(() => {
     if (!round || round.mode !== "daily" || roundUtcDate === null) return;
     const storage = browserStorage();

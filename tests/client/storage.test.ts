@@ -9,8 +9,8 @@ import {
   recordDailyCompletion,
   saveDailyRound,
 } from "../../src/client/game/storage.js";
-import type { FeatureResult } from "../../src/shared/comparison.js";
-import { FEATURE_ORDER, type CardIdentity } from "../../src/shared/domain.js";
+import { compareGuess } from "../../src/shared/comparison.js";
+import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
 import type { RoundState } from "../../src/client/game/game-reducer.js";
 
 class MemoryStorage implements Storage {
@@ -37,7 +37,7 @@ const base = {
   unplayable: false,
 };
 
-function card(id: string): CardIdentity {
+function card(id: string, vector: FeatureVector = base): CardIdentity {
   return {
     id,
     name: `Name ${id}`,
@@ -45,19 +45,21 @@ function card(id: string): CardIdentity {
     artUrl: `https://art.example/${id}.png`,
     baseCardUrl: `https://cards.example/${id}.png`,
     upgradedCardUrl: null,
-    base,
-    upgraded: base,
+    base: vector,
+    upgraded: vector,
   };
 }
 
-const results: FeatureResult[] = FEATURE_ORDER.map((feature) => ({
-  feature,
-  color: feature === "mana" ? "yellow" : "red",
-  displayValue: feature === "mana" ? "2" : "hidden",
-  hint: feature === "mana" ? "down" : "none",
-}));
 const answerCard = card("ANSWER");
-const guessCard = card("GUESS");
+const guessCard = card("GUESS", {
+  ...base,
+  cardClass: "Ironclad",
+  cardType: "Attack",
+  mana: 2,
+  rarity: "Common",
+  eternal: true,
+});
+const results = compareGuess(guessCard, answerCard);
 const cardsById = new Map([[answerCard.id, answerCard], [guessCard.id, guessCard]]);
 const identity = { sourceRevision: "abc", utcDate: "2026-08-12", ruleset: "v1" };
 const round: RoundState = {
@@ -128,6 +130,62 @@ describe("Daily round storage", () => {
     expect(loadDailyRound(storage, identity, cardsById, round.answer)?.guesses).toEqual(round.guesses);
   });
 
+  test("rejects tampered results instead of trusting structurally valid values", () => {
+    const storage = new MemoryStorage();
+    saveDailyRound(storage, identity, round);
+    const key = dailyStorageKey(identity);
+    const stored = JSON.parse(storage.getItem(key)!);
+    stored.guesses[0].results[0].color = "green";
+    storage.setItem(key, JSON.stringify(stored));
+
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
+    expect(storage.getItem(key)).toBeNull();
+  });
+
+  test("rejects status that disagrees with whether an accepted answer was guessed", () => {
+    const storage = new MemoryStorage();
+    const winningGuess = { cardId: answerCard.id, results: compareGuess(answerCard, answerCard) };
+
+    saveDailyRound(storage, identity, { ...round, guesses: [winningGuess], status: "playing" });
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
+
+    saveDailyRound(storage, identity, { ...round, status: "won" });
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
+  });
+
+  test("rejects duplicate guesses and guesses submitted after the winning answer", () => {
+    const storage = new MemoryStorage();
+    const winningGuess = { cardId: answerCard.id, results: compareGuess(answerCard, answerCard) };
+
+    saveDailyRound(storage, identity, { ...round, guesses: [round.guesses[0]!, round.guesses[0]!] });
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
+
+    saveDailyRound(storage, identity, { ...round, guesses: [winningGuess, round.guesses[0]!], status: "won" });
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
+
+    const alternateAnswerCard = card("ANSWER_ALT");
+    const multiAnswer = { ...round.answer, acceptedCardIds: [answerCard.id, alternateAnswerCard.id] };
+    const multiCardsById = new Map([...cardsById, [alternateAnswerCard.id, alternateAnswerCard] as const]);
+    saveDailyRound(storage, identity, {
+      ...round,
+      answer: multiAnswer,
+      guesses: [winningGuess, { cardId: alternateAnswerCard.id, results: compareGuess(alternateAnswerCard, answerCard) }],
+      status: "won",
+    });
+    expect(loadDailyRound(storage, identity, multiCardsById, multiAnswer)).toBeNull();
+  });
+
+  test("returns canonical recomputed results for a valid winning round", () => {
+    const storage = new MemoryStorage();
+    const winningGuess = { cardId: answerCard.id, results: compareGuess(answerCard, answerCard) };
+    saveDailyRound(storage, identity, { ...round, guesses: [round.guesses[0]!, winningGuess], status: "won" });
+
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toMatchObject({
+      status: "won",
+      guesses: [round.guesses[0]!, winningGuess],
+    });
+  });
+
   test("does not write Daily state for Practice", () => {
     const storage = new MemoryStorage();
     saveDailyRound(storage, identity, { ...round, mode: "practice" });
@@ -190,6 +248,36 @@ describe("global Daily streak storage", () => {
       lastCompletedUtcDate: "2026-08-12",
       currentStreak: 1,
       maxStreak: 1,
+    });
+  });
+
+  test.each([
+    { lastCompletedUtcDate: "2026-08-12", currentStreak: Number.MAX_SAFE_INTEGER + 1, maxStreak: Number.MAX_SAFE_INTEGER + 1 },
+    { lastCompletedUtcDate: "2026-08-12", currentStreak: 1, maxStreak: Number.MAX_SAFE_INTEGER + 1 },
+    { lastCompletedUtcDate: "2026-08-12", currentStreak: -1, maxStreak: 1 },
+    { lastCompletedUtcDate: "2026-08-12", currentStreak: 2, maxStreak: 1 },
+    { lastCompletedUtcDate: null, currentStreak: 0, maxStreak: 1 },
+    { lastCompletedUtcDate: "2026-08-12", currentStreak: 0, maxStreak: 0 },
+  ])("rejects invalid safe-integer and cross-field stats invariants: $currentStreak/$maxStreak/$lastCompletedUtcDate", (stats) => {
+    const storage = new MemoryStorage();
+    storage.setItem(DAILY_STATS_KEY, JSON.stringify(stats));
+    storage.setItem("unrelated", "keep me");
+    expect(loadDailyStats(storage)).toEqual({ lastCompletedUtcDate: null, currentStreak: 0, maxStreak: 0 });
+    expect(storage.getItem(DAILY_STATS_KEY)).toBeNull();
+    expect(storage.getItem("unrelated")).toBe("keep me");
+  });
+
+  test("keeps streak arithmetic within safe integers", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(DAILY_STATS_KEY, JSON.stringify({
+      lastCompletedUtcDate: "2026-08-11",
+      currentStreak: Number.MAX_SAFE_INTEGER,
+      maxStreak: Number.MAX_SAFE_INTEGER,
+    }));
+    expect(recordDailyCompletion(storage, "2026-08-12")).toEqual({
+      lastCompletedUtcDate: "2026-08-12",
+      currentStreak: Number.MAX_SAFE_INTEGER,
+      maxStreak: Number.MAX_SAFE_INTEGER,
     });
   });
 });

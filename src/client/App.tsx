@@ -20,6 +20,7 @@ interface RoundGameProps {
 function RoundGame({ round, roundKey, snapshot, utcDate, onSubmit, onNextRound }: RoundGameProps) {
   const [animateFromIndex, setAnimateFromIndex] = useState(round.guesses.length);
   const isRevealing = animateFromIndex < round.guesses.length;
+  const showResult = round.status === "won" && !isRevealing;
   return <main>
     <CardSearch
       cards={snapshot.cards}
@@ -36,13 +37,13 @@ function RoundGame({ round, roundKey, snapshot, utcDate, onSubmit, onNextRound }
       animateFromIndex={animateFromIndex}
       onRevealComplete={() => setAnimateFromIndex(round.guesses.length)}
     />
-    {round.status === "won" && <AnswerReveal answer={round.answer} cardsById={snapshot.cardsById} />}
-    <SharePanel
+    {showResult && <AnswerReveal answer={round.answer} cardsById={snapshot.cardsById} />}
+    {showResult && <SharePanel
       round={round}
       utcDate={utcDate}
       siteUrl={typeof window === "undefined" ? "https://stsdle.invalid/" : new URL("/", window.location.href).toString()}
       onNextRound={onNextRound}
-    />
+    />}
     {round.error && <p role="alert">{round.error}</p>}
   </main>;
 }

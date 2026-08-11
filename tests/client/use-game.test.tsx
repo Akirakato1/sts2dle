@@ -172,6 +172,21 @@ describe("useGame", () => {
     });
   });
 
+  test("does not award a streak for forged won storage", async () => {
+    const key = dailyStorageKey({ sourceRevision: "revision", utcDate: "2026-08-12", ruleset: "v1" });
+    localStorage.setItem(key, JSON.stringify({
+      version: 1,
+      answer: dailyAnswer,
+      guesses: [],
+      status: "won",
+    }));
+
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round).not.toBeNull());
+    expect(game.result.current.round?.status).toBe("playing");
+    expect(localStorage.getItem(DAILY_STATS_KEY)).toBeNull();
+  });
+
   test("a completed Practice round never reads or writes Daily streak stats", async () => {
     localStorage.setItem(DAILY_STATS_KEY, JSON.stringify({
       lastCompletedUtcDate: "2026-08-11",
@@ -204,6 +219,25 @@ describe("useGame", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
+    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 86_400_000)).toHaveLength(1);
+  });
+
+  test("re-arms after an early timer fires before the UTC date changes", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    renderHook(() => useGame(snapshot));
+    await act(async () => { await Promise.resolve(); });
+    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 100)).toHaveLength(1);
+
+    vi.setSystemTime(new Date("2026-08-12T23:59:59.800Z"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(createDailyRandom).not.toHaveBeenCalledWith("2026-08-13", "revision");
+    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 100)).toHaveLength(2);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
     expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
     expect(timeoutSpy.mock.calls.filter((call) => call[1] === 86_400_000)).toHaveLength(1);
   });

@@ -1,4 +1,4 @@
-import type { FeatureResult, ManaHint, TileColor } from "../../shared/comparison.js";
+import { compareGuess, type FeatureResult, type ManaHint, type TileColor } from "../../shared/comparison.js";
 import { FEATURE_ORDER, type CardIdentity, type FeatureName } from "../../shared/domain.js";
 import type { SelectedAnswer } from "../../shared/selection.js";
 import type { RoundState, RoundStatus, SubmittedGuess } from "./game-reducer.js";
@@ -91,10 +91,43 @@ function sameAnswer(left: SelectedAnswer, right: SelectedAnswer): boolean {
     && left.acceptedCardIds.every((id, index) => id === right.acceptedCardIds[index]);
 }
 
-function referencesActiveSnapshot(stored: StoredDailyRound, cardsById: ReadonlyMap<string, CardIdentity>): boolean {
-  return cardsById.has(stored.answer.selectedCardId)
-    && stored.answer.acceptedCardIds.every((id) => cardsById.has(id))
-    && stored.guesses.every((guess) => cardsById.has(guess.cardId));
+function sameResults(stored: readonly FeatureResult[], canonical: readonly FeatureResult[]): boolean {
+  return stored.length === canonical.length && stored.every((result, index) => {
+    const expected = canonical[index];
+    return expected !== undefined
+      && result.feature === expected.feature
+      && result.color === expected.color
+      && result.displayValue === expected.displayValue
+      && result.hint === expected.hint;
+  });
+}
+
+function canonicalStoredGuesses(
+  stored: StoredDailyRound,
+  cardsById: ReadonlyMap<string, CardIdentity>,
+): SubmittedGuess[] | null {
+  const answerCard = cardsById.get(stored.answer.selectedCardId);
+  if (!answerCard || !stored.answer.acceptedCardIds.every((id) => cardsById.has(id))) return null;
+  const acceptedIds = new Set(stored.answer.acceptedCardIds);
+  const seenIds = new Set<string>();
+  const guesses: SubmittedGuess[] = [];
+  let winningIndex = -1;
+
+  for (const [index, guess] of stored.guesses.entries()) {
+    if (winningIndex !== -1) return null;
+    if (seenIds.has(guess.cardId)) return null;
+    seenIds.add(guess.cardId);
+    const card = cardsById.get(guess.cardId);
+    if (!card) return null;
+    const results = compareGuess(card, answerCard);
+    if (!sameResults(guess.results, results)) return null;
+    if (acceptedIds.has(guess.cardId)) winningIndex = index;
+    guesses.push({ cardId: card.id, results });
+  }
+
+  const derivedStatus: RoundStatus = winningIndex === -1 ? "playing" : "won";
+  if (derivedStatus !== stored.status || (winningIndex !== -1 && winningIndex !== guesses.length - 1)) return null;
+  return guesses;
 }
 
 function removeItem(storage: Storage, key: string): void {
@@ -134,15 +167,19 @@ export function loadDailyRound(
   try {
     const value: unknown = JSON.parse(raw);
     if (!isStoredDailyRound(value)
-      || !referencesActiveSnapshot(value, cardsById)
       || (expectedAnswer !== undefined && !sameAnswer(value.answer, expectedAnswer))) {
+      removeItem(storage, key);
+      return null;
+    }
+    const guesses = canonicalStoredGuesses(value, cardsById);
+    if (guesses === null) {
       removeItem(storage, key);
       return null;
     }
     return {
       mode: "daily",
       answer: value.answer,
-      guesses: value.guesses,
+      guesses,
       status: value.status,
       error: null,
     };
@@ -155,11 +192,11 @@ export function loadDailyRound(
 function isDailyStats(value: unknown): value is DailyStats {
   return isRecord(value)
     && (value.lastCompletedUtcDate === null || isUtcDate(value.lastCompletedUtcDate))
-    && Number.isInteger(value.currentStreak)
+    && Number.isSafeInteger(value.currentStreak)
     && (value.currentStreak as number) >= 0
-    && Number.isInteger(value.maxStreak)
+    && Number.isSafeInteger(value.maxStreak)
     && (value.maxStreak as number) >= (value.currentStreak as number)
-    && ((value.lastCompletedUtcDate === null && value.currentStreak === 0)
+    && ((value.lastCompletedUtcDate === null && value.currentStreak === 0 && value.maxStreak === 0)
       || (value.lastCompletedUtcDate !== null && (value.currentStreak as number) > 0));
 }
 
@@ -189,7 +226,7 @@ export function recordDailyCompletion(storage: Storage, utcDate: string): DailyS
 
   const currentStreak = previous.lastCompletedUtcDate !== null
     && utcDayNumber(utcDate) - utcDayNumber(previous.lastCompletedUtcDate) === 1
-    ? previous.currentStreak + 1
+    ? Math.min(Number.MAX_SAFE_INTEGER, previous.currentStreak + 1)
     : 1;
   const next: DailyStats = {
     lastCompletedUtcDate: utcDate,
