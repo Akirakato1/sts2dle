@@ -68,6 +68,29 @@ describe("searchCards", () => {
       .toEqual(["Apotheosis", "Apparition"]);
     expect(searchCards(cards, "rap", new Set())).toEqual([]);
   });
+
+  test("uses a locale-independent card-ID tie-break for duplicate names in every input order", () => {
+    const originalLocaleCompare = String.prototype.localeCompare;
+    const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(function (
+      this: string,
+      that: string,
+      locales?: Intl.LocalesArgument,
+      options?: Intl.CollatorOptions,
+    ) {
+      if (locales === undefined) return originalLocaleCompare.call(that, this);
+      return originalLocaleCompare.call(this, that, locales, options);
+    });
+    const first = card("z-id", "Echo");
+    const second = card("a-id", "Echo");
+    try {
+      expect([
+        searchCards([first, second], "e", new Set()).map((item) => item.id),
+        searchCards([second, first], "e", new Set()).map((item) => item.id),
+      ]).toEqual([["a-id", "z-id"], ["a-id", "z-id"]]);
+    } finally {
+      localeCompare.mockRestore();
+    }
+  });
 });
 
 describe("CardSearch", () => {
@@ -117,6 +140,36 @@ describe("CardSearch", () => {
     expect(input).toHaveAttribute("aria-activedescendant", options[0]!.id);
   });
 
+  test("Home and End move to list boundaries and Enter selects the active boundary option", () => {
+    const { input, onSelect } = renderSearch();
+    fireEvent.change(input, { target: { value: "a" } });
+    const options = screen.getAllByRole("option");
+    fireEvent.keyDown(input, { key: "End" });
+    expect(input).toHaveAttribute("aria-activedescendant", options.at(-1)!.id);
+    expect(options.at(-1)).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "Home" });
+    expect(input).toHaveAttribute("aria-activedescendant", options[0]!.id);
+    fireEvent.keyDown(input, { key: "End" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith("apparition");
+  });
+
+  test("Home and End leave empty or explicitly closed listboxes closed", () => {
+    const { input } = renderSearch();
+    fireEvent.keyDown(input, { key: "Home" });
+    fireEvent.keyDown(input, { key: "End" });
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "a" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    fireEvent.keyDown(input, { key: "End" });
+    expect(input).toHaveAttribute("aria-expanded", "false");
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
   test("Enter selects the active card exactly once and clears the menu", () => {
     const { input, onSelect } = renderSearch();
     fireEvent.change(input, { target: { value: "ap" } });
@@ -137,6 +190,22 @@ describe("CardSearch", () => {
     fireEvent.click(option);
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith("apparition");
+  });
+
+  test("a pointer selection does not cause the next genuine blur to be ignored or submit twice", () => {
+    const { input, onSelect } = renderSearch();
+    fireEvent.change(input, { target: { value: "ap" } });
+    const option = screen.getAllByRole("option")[0]!;
+    fireEvent.pointerDown(option);
+    fireEvent.mouseDown(option);
+    fireEvent.click(option);
+    expect(onSelect).toHaveBeenCalledOnce();
+
+    fireEvent.change(input, { target: { value: "ap" } });
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.blur(input);
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(onSelect).toHaveBeenCalledOnce();
   });
 
   test("Escape closes the menu without selecting a card", () => {

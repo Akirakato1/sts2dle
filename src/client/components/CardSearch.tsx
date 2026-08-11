@@ -10,6 +10,10 @@ export interface CardSearchProps {
   onSelect(cardId: string): void;
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export function searchCards(
   cards: readonly CardIdentity[],
   query: string,
@@ -20,7 +24,7 @@ export function searchCards(
   return cards
     .filter((card) => !excluded.has(card.id))
     .filter((card) => card.name.toLocaleLowerCase("en-US").startsWith(prefix))
-    .sort((left, right) => left.name.localeCompare(right.name, "en-US") || left.id.localeCompare(right.id));
+    .sort((left, right) => left.name.localeCompare(right.name, "en-US") || compareCodeUnits(left.id, right.id));
 }
 
 export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardSearchProps) {
@@ -39,6 +43,7 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardS
   const optionId = (cardId: string) => `${listboxId}-option-${encodeURIComponent(cardId)}`;
 
   function choose(card: CardIdentity) {
+    pointerSelecting.current = false;
     onSelect(card.id);
     setQuery("");
     setActiveIndex(-1);
@@ -89,6 +94,12 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardS
         } else if (event.key === "ArrowUp") {
           event.preventDefault();
           moveActive(-1);
+        } else if (event.key === "Home" && menuOpen) {
+          event.preventDefault();
+          setActiveIndex(0);
+        } else if (event.key === "End" && menuOpen) {
+          event.preventDefault();
+          setActiveIndex(results.length - 1);
         } else if (event.key === "Enter" && menuOpen && activeIndex >= 0) {
           event.preventDefault();
           choose(results[activeIndex]!);
@@ -108,7 +119,9 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, onSelect }: CardS
         aria-selected={index === activeIndex}
         onPointerDown={() => { pointerSelecting.current = true; }}
         onMouseDown={(event) => { event.preventDefault(); pointerSelecting.current = true; }}
+        onPointerUp={() => { pointerSelecting.current = false; }}
         onPointerCancel={() => { pointerSelecting.current = false; }}
+        onMouseUp={() => { pointerSelecting.current = false; }}
         onMouseEnter={() => setActiveIndex(index)}
         onClick={() => choose(card)}
       >

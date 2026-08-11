@@ -10,6 +10,7 @@ function utcDate(now = new Date()): string { return now.toISOString().slice(0, 1
 
 export function useGame(snapshot: LoadedSnapshot) {
   const [round, setRound] = useState<RoundState | null>(null);
+  const [roundToken, setRoundToken] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
   const groups = useMemo(() => ({
@@ -33,6 +34,7 @@ export function useGame(snapshot: LoadedSnapshot) {
       setRound((current) => current
         ? gameReducer(current, { type: "set-mode", mode, answer })
         : { mode, answer, guesses: [], status: "playing", error: null });
+      setRoundToken((current) => current + 1);
       void preloadAnswerImages(answer, snapshot.cardsById);
     } catch (caught) {
       if (generation === requestGeneration.current) setError(caught instanceof Error ? caught.message : "Unable to start a round.");
@@ -50,5 +52,5 @@ export function useGame(snapshot: LoadedSnapshot) {
     return gameReducer(current, { type: "submit", card, answerCard });
   }), [snapshot.cardsById]);
   const nextRound = useCallback(() => { if (round?.mode === "practice") void start("practice"); }, [round?.mode, start]);
-  return { round, error, submit, setMode: start, nextRound };
+  return { round, roundToken, error, submit, setMode: start, nextRound };
 }

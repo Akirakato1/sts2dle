@@ -20,6 +20,7 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
     <p className="round-note">Each guess compares its base card and upgrade together. Match every trait to find today&apos;s card.</p>
     <main>
       <CardSearch
+        key={game.roundToken}
         cards={snapshot.cards}
         spriteMap={snapshot.spriteMap}
         guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}

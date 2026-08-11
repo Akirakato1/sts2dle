@@ -50,6 +50,24 @@ describe("useGame", () => {
     expect(createPracticeRandom).toHaveBeenCalledTimes(2);
   });
 
+  test("changes its stable round token only when an active round is replaced", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round).not.toBeNull());
+    const dailyToken = game.result.current.roundToken;
+    expect(dailyToken).toBeGreaterThan(0);
+    game.rerender();
+    expect(game.result.current.roundToken).toBe(dailyToken);
+
+    act(() => { game.result.current.submit("SECOND"); });
+    expect(game.result.current.roundToken).toBe(dailyToken);
+
+    await act(async () => { await game.result.current.setMode("practice"); });
+    const practiceToken = game.result.current.roundToken;
+    expect(practiceToken).toBe(dailyToken + 1);
+    await act(async () => { game.result.current.nextRound(); });
+    await waitFor(() => expect(game.result.current.roundToken).toBe(practiceToken + 1));
+  });
+
   test("keeps a newer Practice round when a pending Daily request resolves later", async () => {
     let resolveDaily!: (source: { nextUint32(): number }) => void;
     vi.mocked(createDailyRandom).mockImplementationOnce(() => new Promise((resolve) => { resolveDaily = resolve; }));

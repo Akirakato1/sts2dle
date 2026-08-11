@@ -50,4 +50,33 @@ describe("SpriteArt", () => {
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(container.querySelector("img")).not.toBeInTheDocument();
   });
+
+  test.each(["toString", "constructor", "__proto__"])(
+    "renders fallback for absent prototype-named card ID %s",
+    (cardId) => {
+      render(<SpriteArt cardId={cardId} spriteMap={spriteMap} kind="candidate" label={`${cardId} fallback`} />);
+      expect(screen.getByText(`${cardId} fallback`)).toBeInTheDocument();
+      expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    },
+  );
+
+  test("ignores inherited sprite entries", () => {
+    const inheritedCards = Object.create({ apotheosis: spriteMap.cards.apotheosis }) as SpriteMap["cards"];
+    render(<SpriteArt cardId="apotheosis" spriteMap={{ ...spriteMap, cards: inheritedCards }} kind="candidate" label="Inherited fallback" />);
+    expect(screen.getByText("Inherited fallback")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  test.each([
+    ["missing atlas", { ...spriteMap, candidate: null }],
+    ["invalid atlas scale", { ...spriteMap, candidate: { ...spriteMap.candidate, displayScale: 0 } }],
+    ["empty atlas URL", { ...spriteMap, candidate: { ...spriteMap.candidate, url: "" } }],
+    ["missing rectangle", { ...spriteMap, cards: { apotheosis: { ...spriteMap.cards.apotheosis, candidate: null } } }],
+    ["non-finite rectangle", { ...spriteMap, cards: { apotheosis: { ...spriteMap.cards.apotheosis, candidate: { x: 0, y: 0, width: Number.NaN, height: 64 } } } }],
+    ["out-of-bounds rectangle", { ...spriteMap, cards: { apotheosis: { ...spriteMap.cards.apotheosis, candidate: { x: 500, y: 0, width: 64, height: 64 } } } }],
+  ])("renders fallback for %s data", (_caseName, malformed) => {
+    render(<SpriteArt cardId="apotheosis" spriteMap={malformed as unknown as SpriteMap} kind="candidate" label="Malformed fallback" />);
+    expect(screen.getByText("Malformed fallback")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
 });
