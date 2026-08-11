@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
 import "./styles/grid.css";
+import "./styles/reveal.css";
 import "./styles/search.css";
 import "./styles/shell.css";
 

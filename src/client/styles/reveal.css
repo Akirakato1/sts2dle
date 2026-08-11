@@ -1,0 +1,132 @@
+.answer-reveal {
+  margin: 2rem 0 1.25rem;
+}
+
+.share-panel {
+  margin: 1.5rem 0;
+}
+
+.share-panel p {
+  margin: .75rem 0 0;
+}
+
+.answer-reveal__cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.answer-reveal__card {
+  flex: 0 0 auto;
+  scroll-snap-align: center;
+}
+
+.answer-reveal__card h3 {
+  margin: 0 0 .65rem;
+  color: #f2d277;
+}
+
+.card-stack-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.card-stack {
+  position: relative;
+  display: block;
+  width: clamp(190px, 24vw, 280px);
+  aspect-ratio: 400 / 520;
+  margin: 0 18px 18px 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.card-stack--interactive {
+  cursor: pointer;
+}
+
+.card-stack--interactive:focus-visible {
+  outline: 3px solid #f5d77e;
+  outline-offset: 5px;
+}
+
+.card-stack__card {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  border-radius: 4% / 3%;
+  box-shadow: 0 .45rem 1rem rgb(0 0 0 / 45%);
+  transition: transform 260ms ease, filter 260ms ease;
+}
+
+.card-stack__front {
+  z-index: 2;
+  transform: translate(0, 0) scale(1);
+}
+
+.card-stack__back {
+  z-index: 1;
+  transform: translate(18px, 18px) scale(.97);
+}
+
+.card-stack__masked::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background: rgb(70 70 70 / 48%);
+}
+
+.card-stack__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.card-stack__image-error {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  gap: .8rem;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  border: 1px solid #a34f3d;
+  background: #251d19;
+}
+
+.card-stack__image-error button,
+.card-stack__retry,
+.share-panel button {
+  cursor: pointer;
+  border: 1px solid #77805b;
+  border-radius: .2rem;
+  padding: .55rem 1rem;
+  color: #e8dfbd;
+  background: #1b241c;
+}
+
+@media (max-width: 640px) {
+  .answer-reveal__cards {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-inline: contain;
+    padding: 0 calc(50% - 104px) 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-stack__card {
+    transition: none;
+  }
+}

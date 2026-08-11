@@ -5,12 +5,26 @@ import { createDailyRandom, createPracticeRandom } from "../../shared/random.js"
 import { selectAnswer, type SelectedAnswer } from "../../shared/selection.js";
 import { gameReducer, type PlayMode, type RoundState } from "./game-reducer.js";
 import { preloadAnswerImages } from "./preload-images.js";
+import {
+  DAILY_RULESET_VERSION,
+  loadDailyRound,
+  msUntilNextUtcDay,
+  recordDailyCompletion,
+  saveDailyRound,
+} from "./storage.js";
 
 function utcDate(now = new Date()): string { return now.toISOString().slice(0, 10); }
+
+function browserStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try { return window.localStorage; } catch { return null; }
+}
 
 export function useGame(snapshot: LoadedSnapshot) {
   const [round, setRound] = useState<RoundState | null>(null);
   const [roundToken, setRoundToken] = useState(0);
+  const [activeUtcDate, setActiveUtcDate] = useState(() => utcDate());
+  const [roundUtcDate, setRoundUtcDate] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
   const groups = useMemo(() => ({
@@ -19,31 +33,62 @@ export function useGame(snapshot: LoadedSnapshot) {
     baseGroupsByKey: new Map(snapshot.baseGroups.map((group) => [group.key, group])),
     pairGroupsByKey: snapshot.pairGroupsByKey,
   }), [snapshot]);
-  const choose = useCallback(async (mode: PlayMode): Promise<SelectedAnswer> => {
+  const choose = useCallback(async (mode: PlayMode, dailyDate: string): Promise<SelectedAnswer> => {
     const source = mode === "daily"
-      ? await createDailyRandom(utcDate(), snapshot.manifest.sourceRevision)
+      ? await createDailyRandom(dailyDate, snapshot.manifest.sourceRevision)
       : await Promise.resolve(createPracticeRandom());
     return selectAnswer(groups, snapshot.cardsById, source);
   }, [groups, snapshot]);
-  const start = useCallback(async (mode: PlayMode) => {
+  const start = useCallback(async (mode: PlayMode, dailyDate = activeUtcDate) => {
     const generation = ++requestGeneration.current;
     try {
       setError(null);
-      const answer = await choose(mode);
+      const answer = await choose(mode, dailyDate);
       if (generation !== requestGeneration.current) return;
-      setRound((current) => current
-        ? gameReducer(current, { type: "set-mode", mode, answer })
-        : { mode, answer, guesses: [], status: "playing", error: null });
+      const storage = mode === "daily" ? browserStorage() : null;
+      const restored = storage ? loadDailyRound(storage, {
+        sourceRevision: snapshot.manifest.sourceRevision,
+        utcDate: dailyDate,
+        ruleset: DAILY_RULESET_VERSION,
+      }, snapshot.cardsById, answer) : null;
+      setRound(restored ?? { mode, answer, guesses: [], status: "playing", error: null });
+      setRoundUtcDate(mode === "daily" ? dailyDate : null);
       setRoundToken((current) => current + 1);
       void preloadAnswerImages(answer, snapshot.cardsById);
     } catch (caught) {
       if (generation === requestGeneration.current) setError(caught instanceof Error ? caught.message : "Unable to start a round.");
     }
-  }, [choose, snapshot.cardsById]);
+  }, [activeUtcDate, choose, snapshot.cardsById, snapshot.manifest.sourceRevision]);
   useEffect(() => {
-    void start("daily");
+    void start("daily", activeUtcDate);
     return () => { requestGeneration.current += 1; };
-  }, [start]);
+  }, [activeUtcDate, start]);
+  useEffect(() => {
+    const checkUtcDate = () => {
+      const nextDate = utcDate();
+      setActiveUtcDate((current) => current === nextDate ? current : nextDate);
+    };
+    const timer = setTimeout(checkUtcDate, msUntilNextUtcDay());
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") checkUtcDate();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [activeUtcDate]);
+  useEffect(() => {
+    if (!round || round.mode !== "daily" || roundUtcDate === null) return;
+    const storage = browserStorage();
+    if (!storage) return;
+    saveDailyRound(storage, {
+      sourceRevision: snapshot.manifest.sourceRevision,
+      utcDate: roundUtcDate,
+      ruleset: DAILY_RULESET_VERSION,
+    }, round);
+    if (round.status === "won") recordDailyCompletion(storage, roundUtcDate);
+  }, [round, roundUtcDate, snapshot.manifest.sourceRevision]);
   const submit = useCallback((cardId: string) => setRound((current) => {
     if (!current) return current;
     const card = snapshot.cardsById.get(cardId);
@@ -51,6 +96,7 @@ export function useGame(snapshot: LoadedSnapshot) {
     if (!card || !answerCard) return { ...current, error: "That card is unavailable." };
     return gameReducer(current, { type: "submit", card, answerCard });
   }), [snapshot.cardsById]);
-  const nextRound = useCallback(() => { if (round?.mode === "practice") void start("practice"); }, [round?.mode, start]);
-  return { round, roundToken, error, submit, setMode: start, nextRound };
+  const setMode = useCallback((mode: PlayMode) => start(mode, activeUtcDate), [activeUtcDate, start]);
+  const nextRound = useCallback(() => { if (round?.mode === "practice") void start("practice", activeUtcDate); }, [activeUtcDate, round?.mode, start]);
+  return { round, roundToken, dailyUtcDate: roundUtcDate ?? activeUtcDate, error, submit, setMode, nextRound };
 }

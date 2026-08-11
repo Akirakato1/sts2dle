@@ -13,7 +13,7 @@ import { REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid
 import { FEATURE_ORDER } from "../../src/shared/domain.js";
 
 const card = (id: string, name: string) => ({
-  id, name, hasUpgrade: true, artUrl: `${id}.png`, baseCardUrl: null, upgradedCardUrl: null,
+  id, name, hasUpgrade: true, artUrl: `${id}.png`, baseCardUrl: `https://cards.example/${id}.png`, upgradedCardUrl: `https://cards.example/${id}-upgraded.png`,
   base: { cardClass: "Neutral", cardType: "Skill", mana: 1, rarity: "Common", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false, unplayable: false },
   upgraded: { cardClass: "Neutral", cardType: "Skill", mana: 1, rarity: "Common", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false, unplayable: false },
 });
@@ -204,6 +204,90 @@ describe("App snapshot cleanup", () => {
     act(() => vi.advanceTimersByTime(1));
     expect(screen.getByRole("combobox")).toBeEnabled();
     act(() => vi.advanceTimersByTime(10_000));
+    expect(screen.getByRole("combobox")).toBeEnabled();
+  });
+
+  test("reveals every accepted Daily answer and offers Daily sharing only after a win", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue({
+      round: {
+        mode: "daily",
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apparition", "apotheosis"] },
+        guesses: [submittedGuess],
+        status: "won",
+        error: null,
+      },
+      roundToken: 1,
+      dailyUtcDate: "2026-08-12",
+      error: null,
+      submit: vi.fn(),
+      setMode: vi.fn(),
+      nextRound: vi.fn(),
+    });
+
+    const view = render(<App />);
+    await screen.findByRole("heading", { name: "Accepted answers" });
+    expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      "Apotheosis",
+      "Apparition",
+    ]);
+    expect(Array.from(view.container.querySelectorAll(".answer-reveal img"), (image) => image.getAttribute("src"))).toEqual([
+      "https://cards.example/apotheosis.png",
+      "https://cards.example/apotheosis-upgraded.png",
+      "https://cards.example/apparition.png",
+      "https://cards.example/apparition-upgraded.png",
+    ]);
+    expect(screen.getByRole("button", { name: "Copy Daily result" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Next random card" })).not.toBeInTheDocument();
+  });
+
+  test("shows a next-random-card action without Practice sharing after a Practice win", async () => {
+    const nextRound = vi.fn();
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue({
+      round: {
+        mode: "practice",
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+        guesses: [submittedGuess],
+        status: "won",
+        error: null,
+      },
+      roundToken: 2,
+      dailyUtcDate: "2026-08-12",
+      error: null,
+      submit: vi.fn(),
+      setMode: vi.fn(),
+      nextRound,
+    });
+
+    render(<App />);
+    const next = await screen.findByRole("button", { name: "Next random card" });
+    expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
+    fireEvent.click(next);
+    expect(nextRound).toHaveBeenCalledOnce();
+  });
+
+  test("renders restored guesses settled instead of replaying their reveal", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue({
+      round: {
+        mode: "daily",
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+        guesses: [submittedGuess],
+        status: "playing",
+        error: null,
+      },
+      roundToken: 5,
+      dailyUtcDate: "2026-08-12",
+      error: null,
+      submit: vi.fn(),
+      setMode: vi.fn(),
+      nextRound: vi.fn(),
+    });
+
+    const view = render(<App />);
+    await screen.findByRole("combobox");
+    expect(view.container.querySelectorAll(".feature-tile--immediate")).toHaveLength(FEATURE_ORDER.length);
     expect(screen.getByRole("combobox")).toBeEnabled();
   });
 });

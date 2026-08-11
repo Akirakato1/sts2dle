@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import React, { StrictMode } from "react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../../src/shared/random.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../src/shared/random.js")>(),
@@ -12,8 +12,10 @@ vi.mock("../../src/client/game/preload-images.js", () => ({ preloadAnswerImages:
 
 import { createDailyRandom, createPracticeRandom } from "../../src/shared/random.js";
 import { pairKey } from "../../src/shared/feature-keys.js";
+import { compareGuess } from "../../src/shared/comparison.js";
 import { useGame } from "../../src/client/game/use-game.js";
 import { preloadAnswerImages } from "../../src/client/game/preload-images.js";
+import { DAILY_STATS_KEY, dailyStorageKey } from "../../src/client/game/storage.js";
 import type { LoadedSnapshot } from "../../src/client/api/load-snapshot.js";
 
 const base = { cardClass: "Silent" as const, cardType: "Skill" as const, mana: 1, rarity: "Rare" as const, eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false, unplayable: false };
@@ -23,14 +25,23 @@ const snapshot: LoadedSnapshot = {
   cards, baseGroups: [{ key: "base", cardIds: ["FIRST", "SECOND"] }], pairGroups: [{ key: pairKey(cards[0]!), cardIds: ["FIRST", "SECOND"] }], spriteMap: { candidate: { url: "/c.png", width: 1, height: 1, displayScale: 1 }, guess: { url: "/g.png", width: 1, height: 1, displayScale: 1 }, cards: {} },
   cardsById: new Map(cards.map((card) => [card.id, card])), pairGroupsByKey: new Map([[pairKey(cards[0]!), { key: pairKey(cards[0]!), cardIds: ["FIRST", "SECOND"] }]]),
 };
+const dailyAnswer = { baseGroupKey: "base", selectedCardId: "FIRST", pairKey: pairKey(cards[0]!), acceptedCardIds: ["FIRST", "SECOND"] };
 
 describe("useGame", () => {
   beforeEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
     vi.resetAllMocks();
     vi.mocked(createDailyRandom).mockResolvedValue({ nextUint32: () => 0 });
     vi.mocked(createPracticeRandom).mockReturnValue({ nextUint32: () => 0 });
     vi.mocked(preloadAnswerImages).mockResolvedValue();
     vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    localStorage.clear();
   });
 
   test("selects the same Daily answer for two mounts with the same revision", async () => {
@@ -129,5 +140,102 @@ describe("useGame", () => {
     vi.mocked(createDailyRandom).mockRejectedValueOnce(new Error("active failure"));
     await act(async () => { await game.result.current.setMode("daily"); });
     expect(game.result.current.error).toBe("active failure");
+  });
+
+  test("restores the current revision/date Daily and persists later guesses", async () => {
+    const key = dailyStorageKey({ sourceRevision: "revision", utcDate: "2026-08-12", ruleset: "v1" });
+    localStorage.setItem(key, JSON.stringify({
+      version: 1,
+      answer: dailyAnswer,
+      guesses: [{ cardId: "SECOND", results: compareGuess(cards[1]!, cards[0]!) }],
+      status: "won",
+    }));
+
+    const restored = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(restored.result.current.round?.status).toBe("won"));
+    expect(restored.result.current.round?.guesses).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem(DAILY_STATS_KEY)!)).toEqual({
+      lastCompletedUtcDate: "2026-08-12",
+      currentStreak: 1,
+      maxStreak: 1,
+    });
+
+    localStorage.clear();
+    const fresh = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(fresh.result.current.round?.status).toBe("playing"));
+    act(() => fresh.result.current.submit("SECOND"));
+    await waitFor(() => expect(fresh.result.current.round?.status).toBe("won"));
+    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({
+      answer: dailyAnswer,
+      status: "won",
+      guesses: [{ cardId: "SECOND" }],
+    });
+  });
+
+  test("a completed Practice round never reads or writes Daily streak stats", async () => {
+    localStorage.setItem(DAILY_STATS_KEY, JSON.stringify({
+      lastCompletedUtcDate: "2026-08-11",
+      currentStreak: 7,
+      maxStreak: 7,
+    }));
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round).not.toBeNull());
+    await act(async () => { await game.result.current.setMode("practice"); });
+    act(() => game.result.current.submit("FIRST"));
+    expect(game.result.current.round?.status).toBe("won");
+    expect(JSON.parse(localStorage.getItem(DAILY_STATS_KEY)!)).toEqual({
+      lastCompletedUtcDate: "2026-08-11",
+      currentStreak: 7,
+      maxStreak: 7,
+    });
+  });
+
+  test("starts the new Daily at UTC midnight with one rollover timer", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await Promise.resolve(); });
+    expect(game.result.current.round?.mode).toBe("daily");
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-12", "revision");
+    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 100)).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
+    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 86_400_000)).toHaveLength(1);
+  });
+
+  test("rechecks the UTC date when a suspended tab becomes visible", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T18:00:00Z"));
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await Promise.resolve(); });
+    expect(game.result.current.round?.mode).toBe("daily");
+
+    vi.setSystemTime(new Date("2026-08-13T08:00:00Z"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
+  });
+
+  test("cleans up the UTC rollover timer and visibility listener on unmount", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await Promise.resolve(); });
+    expect(createDailyRandom).toHaveBeenCalledTimes(1);
+
+    game.unmount();
+    vi.setSystemTime(new Date("2026-08-13T00:00:00Z"));
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(createDailyRandom).toHaveBeenCalledTimes(1);
   });
 });

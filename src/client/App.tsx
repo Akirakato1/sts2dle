@@ -3,6 +3,8 @@ import React, { useEffect, useState } from "react";
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { CardSearch } from "./components/CardSearch.js";
 import { GuessGrid } from "./components/GuessGrid.js";
+import { AnswerReveal } from "./components/AnswerReveal.js";
+import { SharePanel } from "./components/SharePanel.js";
 import { useGame } from "./game/use-game.js";
 import type { RoundState } from "./game/game-reducer.js";
 
@@ -10,11 +12,12 @@ interface RoundGameProps {
   round: RoundState;
   roundKey: number;
   snapshot: LoadedSnapshot;
+  utcDate: string;
   onSubmit(cardId: string): void;
   onNextRound(): void;
 }
 
-function RoundGame({ round, roundKey, snapshot, onSubmit, onNextRound }: RoundGameProps) {
+function RoundGame({ round, roundKey, snapshot, utcDate, onSubmit, onNextRound }: RoundGameProps) {
   const [animateFromIndex, setAnimateFromIndex] = useState(round.guesses.length);
   const isRevealing = animateFromIndex < round.guesses.length;
   return <main>
@@ -22,7 +25,7 @@ function RoundGame({ round, roundKey, snapshot, onSubmit, onNextRound }: RoundGa
       cards={snapshot.cards}
       spriteMap={snapshot.spriteMap}
       guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}
-      disabled={isRevealing}
+      disabled={isRevealing || round.status === "won"}
       onSelect={onSubmit}
     />
     <GuessGrid
@@ -33,7 +36,13 @@ function RoundGame({ round, roundKey, snapshot, onSubmit, onNextRound }: RoundGa
       animateFromIndex={animateFromIndex}
       onRevealComplete={() => setAnimateFromIndex(round.guesses.length)}
     />
-    {round.mode === "practice" && <button type="button" className="new-round" onClick={onNextRound}>New practice round</button>}
+    {round.status === "won" && <AnswerReveal answer={round.answer} cardsById={snapshot.cardsById} />}
+    <SharePanel
+      round={round}
+      utcDate={utcDate}
+      siteUrl={typeof window === "undefined" ? "https://stsdle.invalid/" : new URL("/", window.location.href).toString()}
+      onNextRound={onNextRound}
+    />
     {round.error && <p role="alert">{round.error}</p>}
   </main>;
 }
@@ -48,7 +57,7 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
       {(["daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={round.mode === mode ? "page" : undefined} className={round.mode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{mode === "daily" ? "Daily" : "Practice"}</button>)}
     </nav>
     <p className="round-note">Each guess compares its base card and upgrade together. Match every trait to find today&apos;s card.</p>
-    <RoundGame key={game.roundToken} round={round} roundKey={game.roundToken} snapshot={snapshot} onSubmit={game.submit} onNextRound={game.nextRound} />
+    <RoundGame key={game.roundToken} round={round} roundKey={game.roundToken} snapshot={snapshot} utcDate={game.dailyUtcDate} onSubmit={game.submit} onNextRound={game.nextRound} />
   </>;
 }
 
