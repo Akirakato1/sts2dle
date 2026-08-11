@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { useGame } from "./game/use-game.js";

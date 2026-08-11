@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
+import React, { StrictMode } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../../src/shared/random.js", async (importOriginal) => ({
@@ -85,5 +86,27 @@ describe("useGame", () => {
     await act(async () => { rejectDaily(new Error("stale failure")); });
     expect(game.result.current.round?.mode).toBe("practice");
     expect(game.result.current.error).toBeNull();
+  });
+
+  test("StrictMode replay and unmount invalidate pending Daily work while a remount succeeds", async () => {
+    let resolve!: (source: { nextUint32(): number }) => void;
+    vi.mocked(createDailyRandom).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const wrapper = ({ children }: { children: React.ReactNode }) => <StrictMode>{children}</StrictMode>;
+    const first = renderHook(() => useGame(snapshot), { wrapper });
+    first.unmount();
+    await act(async () => { resolve({ nextUint32: () => 1 }); });
+    expect(preloadAnswerImages).not.toHaveBeenCalled();
+    const remount = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(remount.result.current.round?.mode).toBe("daily"));
+    expect(preloadAnswerImages).toHaveBeenCalled();
+  });
+
+  test("the latest active Daily request commits both success and error", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round).not.toBeNull());
+    expect(preloadAnswerImages).toHaveBeenCalled();
+    vi.mocked(createDailyRandom).mockRejectedValueOnce(new Error("active failure"));
+    await act(async () => { await game.result.current.setMode("daily"); });
+    expect(game.result.current.error).toBe("active failure");
   });
 });
