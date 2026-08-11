@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import React, { StrictMode } from "react";
 import { describe, expect, test, vi } from "vitest";
 
@@ -15,13 +15,14 @@ describe("App snapshot cleanup", () => {
       calls.push(signal); signal.addEventListener("abort", () => reject(new DOMException("abort", "AbortError")), { once: true });
     }));
     const first = render(<StrictMode><App /></StrictMode>);
-    first.unmount();
     expect(calls.length).toBeGreaterThanOrEqual(2);
-    expect(calls.every((signal) => signal.aborted)).toBe(true);
+    await waitFor(() => expect(calls[0]?.aborted).toBe(true));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    first.unmount();
+    expect(calls.every((signal) => signal.aborted)).toBe(true);
     loads.mockResolvedValueOnce({});
     render(<App />);
-    expect(await screen.findByRole("status")).toHaveTextContent("Loading card data");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Preparing today"));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

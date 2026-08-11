@@ -70,12 +70,15 @@ describe("useGame", () => {
       .mockImplementationOnce(() => new Promise((resolve) => { second = resolve; }) as never);
     const game = renderHook(() => useGame(snapshot));
     await waitFor(() => expect(game.result.current.round).not.toBeNull());
+    vi.mocked(preloadAnswerImages).mockClear();
     await act(async () => { void game.result.current.setMode("practice"); void game.result.current.setMode("practice"); });
     await act(async () => { second({ nextUint32: () => 1 }); });
-    vi.mocked(preloadAnswerImages).mockClear();
+    expect(game.result.current.round?.answer.selectedCardId).toBe("SECOND");
+    expect(preloadAnswerImages).toHaveBeenCalledTimes(1);
+    expect(preloadAnswerImages).toHaveBeenCalledWith(expect.objectContaining({ selectedCardId: "SECOND" }), snapshot.cardsById);
     await act(async () => { first({ nextUint32: () => 0 }); });
     expect(game.result.current.round?.answer.selectedCardId).toBe("SECOND");
-    expect(preloadAnswerImages).not.toHaveBeenCalled();
+    expect(preloadAnswerImages).toHaveBeenCalledTimes(1);
   });
 
   test("does not surface a stale Daily rejection after Practice succeeds", async () => {
