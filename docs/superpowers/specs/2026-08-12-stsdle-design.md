@@ -1,6 +1,6 @@
 # STS-dle Design Specification
 
-**Status:** Approved design, awaiting written-spec review
+**Status:** Approved
 
 **Date:** 2026-08-12
 
@@ -44,7 +44,7 @@ The first release does not include:
 
 ### 3.1 Spire Codex
 
-Spire Codex is the canonical synchronization source. At server startup, STS-dle fetches the current stable version metadata and complete English card dataset from its hosted API.
+Spire Codex is the canonical synchronization source. At server startup, STS-dle fetches the complete stable English card dataset and its HTTP response metadata from the hosted API. The snapshot's authoritative source revision is the SHA-256 hash of the exact card-response body; `Last-Modified` and any future explicit game-version header are recorded as informational metadata. This remains deterministic when the current `/api/versions` response does not expose a stable game version.
 
 For each card, STS-dle retains:
 
@@ -85,8 +85,8 @@ After the client loads the active snapshot, ordinary gameplay is client-side. No
 
 Each server start runs these steps exactly once:
 
-1. Fetch stable Spire Codex version metadata and English card data.
-2. Validate the remote response and record source version, fetch time, and schema version.
+1. Fetch stable Spire Codex English card data and HTTP response metadata.
+2. Validate the remote response and record its SHA-256 source revision, `Last-Modified`, fetch time, and snapshot schema version.
 3. Normalize every card into a base feature vector and an effective upgraded feature vector.
 4. Build canonical base-feature groups and paired accepted-answer groups.
 5. Download raw artwork with bounded concurrency that respects the source's usage terms, then generate the candidate and guess-row sprite atlases.
@@ -147,7 +147,7 @@ Class values are:
 - Neutral
 - Event
 
-Status and Curse cards use Neutral class by default. Event-specific cards use Event when identified by the source data.
+Colorless, Token, Quest, Status, and Curse source colors use Neutral class. Event source color uses Event class.
 
 Type values are:
 
