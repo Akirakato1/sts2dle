@@ -131,8 +131,8 @@ describe("buildSprites", () => {
     expect(map.cards.CARD_C?.candidate).toEqual({ x: 0, y: 64, width: 64, height: 64 });
     expect(map.cards.CARD_A?.guess).toEqual({ x: 0, y: 0, width: 160, height: 160 });
     expect(map).toMatchObject({
-      candidate: { url: "candidate.webp", width: 128, height: 128, displayScale: 0.5 },
-      guess: { url: "guess.webp", width: 320, height: 320, displayScale: 0.5 },
+      candidate: { url: "/runtime/candidate.webp", width: 128, height: 128, displayScale: 0.5 },
+      guess: { url: "/runtime/guess.webp", width: 320, height: 320, displayScale: 0.5 },
     });
     await expect(sharp(await readFile(join(outputDir, "candidate.webp"))).metadata()).resolves.toMatchObject({
       width: 128,
@@ -156,6 +156,37 @@ describe("buildSprites", () => {
     for (const artworkUrl of artworkByUrl.keys()) {
       expect(fetchImpl.mock.calls.filter(([input]) => String(input) === artworkUrl)).toHaveLength(1);
     }
+  });
+
+  it("bounds cell transforms across both atlases by the configured concurrency", async () => {
+    const outputDir = await createOutputDirectory();
+    let activeTransforms = 0;
+    let maximumActiveTransforms = 0;
+    let transformCount = 0;
+
+    await buildSprites({
+      cards: [card("CARD_D"), card("CARD_C"), card("CARD_B"), card("CARD_A")],
+      outputDir,
+      fetchImpl: async () => imageResponse(artworkByUrl.get(card("CARD_A").artUrl)!),
+      concurrency: 2,
+      transformCellImpl: async (source: Buffer, cellSize: 64 | 160) => {
+        activeTransforms += 1;
+        transformCount += 1;
+        maximumActiveTransforms = Math.max(maximumActiveTransforms, activeTransforms);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return await sharp(source)
+            .resize(cellSize, cellSize, { fit: "cover", position: "centre" })
+            .webp({ quality: cellSize === 64 ? 76 : 82 })
+            .toBuffer();
+        } finally {
+          activeTransforms -= 1;
+        }
+      },
+    });
+
+    expect(transformCount).toBe(8);
+    expect(maximumActiveTransforms).toBe(2);
   });
 
   it("produces identical maps and atlases after input shuffling", async () => {
@@ -203,6 +234,26 @@ describe("buildSprites", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(map.cards.CARD_A?.candidate).toEqual({ x: 0, y: 0, width: 64, height: 64 });
     expect(map.cards.CARD_B?.candidate).toEqual({ x: 64, y: 0, width: 64, height: 64 });
+  });
+
+  it("preserves unsafe-looking card IDs as serialized sprite-map keys", async () => {
+    const outputDir = await createOutputDirectory();
+
+    const map = await buildSprites({
+      cards: [card("__proto__")],
+      outputDir,
+      fetchImpl: async () => imageResponse(artworkByUrl.get(card("CARD_A").artUrl)!),
+      concurrency: 1,
+    });
+    const serialized = JSON.parse(JSON.stringify(map)) as typeof map;
+
+    expect(Object.hasOwn(map.cards, "__proto__")).toBe(true);
+    expect(serialized.cards.__proto__?.candidate).toEqual({
+      x: 0,
+      y: 0,
+      width: 64,
+      height: 64,
+    });
   });
 
   it("rejects a missing artwork URL without publishing either atlas", async () => {

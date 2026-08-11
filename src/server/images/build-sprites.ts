@@ -8,7 +8,10 @@ export interface BuildSpritesOptions {
   outputDir: string;
   fetchImpl: typeof fetch;
   concurrency: number;
+  transformCellImpl?: TransformCell;
 }
+
+export type TransformCell = (source: Buffer, cellSize: 64 | 160) => Promise<Buffer>;
 
 interface AtlasDefinition {
   filename: "candidate.webp" | "guess.webp";
@@ -32,10 +35,22 @@ export async function buildSprites(options: BuildSpritesOptions): Promise<Sprite
   validateAtlasDimensions(columns, rows);
   const artwork = await downloadArtwork(cards, options.fetchImpl, options.concurrency);
   const spriteMap = createSpriteMap(cards, columns, rows);
-  const encodedAtlases = await Promise.all(ATLAS_DEFINITIONS.map(async (definition) => ({
-    definition,
-    bytes: await encodeAtlas(definition, cards, artwork, columns, rows),
-  })));
+  const transformCellImpl = options.transformCellImpl ?? transformCell;
+  const encodedAtlases: Array<{ definition: AtlasDefinition; bytes: Buffer }> = [];
+  for (const definition of ATLAS_DEFINITIONS) {
+    encodedAtlases.push({
+      definition,
+      bytes: await encodeAtlas(
+        definition,
+        cards,
+        artwork,
+        columns,
+        rows,
+        options.concurrency,
+        transformCellImpl,
+      ),
+    });
+  }
 
   const temporaryPaths = encodedAtlases.map(({ definition }) => join(
     options.outputDir,
@@ -164,7 +179,7 @@ function createSpriteMap(
   columns: number,
   rows: number,
 ): SpriteMap {
-  const cardMap: SpriteMap["cards"] = {};
+  const cardMap = Object.create(null) as SpriteMap["cards"];
   for (const [index, card] of cards.entries()) {
     const column = index % columns;
     const row = Math.floor(index / columns);
@@ -175,13 +190,13 @@ function createSpriteMap(
   }
   return {
     candidate: {
-      url: "candidate.webp",
+      url: "/runtime/candidate.webp",
       width: columns * 64,
       height: rows * 64,
       displayScale: 0.5,
     },
     guess: {
-      url: "guess.webp",
+      url: "/runtime/guess.webp",
       width: columns * 160,
       height: rows * 160,
       displayScale: 0.5,
@@ -196,15 +211,46 @@ async function encodeAtlas(
   artwork: ReadonlyMap<string, Buffer>,
   columns: number,
   rows: number,
+  concurrency: number,
+  transformCellImpl: TransformCell,
 ): Promise<Buffer> {
-  const cells = await Promise.all(cards.map(async (card, index) => ({
-    input: await sharp(artwork.get(card.artUrl))
-      .resize(definition.cellSize, definition.cellSize, { fit: "cover", position: "centre" })
-      .webp({ quality: definition.quality })
-      .toBuffer(),
-    left: (index % columns) * definition.cellSize,
-    top: Math.floor(index / columns) * definition.cellSize,
-  })));
+  const cells: Array<{ input: Buffer; left: number; top: number } | undefined> = new Array(
+    cards.length,
+  );
+  let nextIndex = 0;
+  let stopped = false;
+  let firstError: unknown;
+
+  async function worker(): Promise<void> {
+    while (!stopped && nextIndex < cards.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const card = cards[index];
+      if (!card) return;
+      try {
+        cells[index] = {
+          input: await transformCellImpl(artwork.get(card.artUrl)!, definition.cellSize),
+          left: (index % columns) * definition.cellSize,
+          top: Math.floor(index / columns) * definition.cellSize,
+        };
+      } catch (error: unknown) {
+        if (!stopped) {
+          stopped = true;
+          firstError = error;
+        }
+      }
+    }
+  }
+
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, cards.length) },
+    async () => worker(),
+  ));
+  if (stopped) throw firstError;
+  const completedCells = cells.map((cell) => {
+    if (!cell) throw new Error("Sprite cell transform did not complete");
+    return cell;
+  });
 
   return sharp({
     create: {
@@ -213,5 +259,12 @@ async function encodeAtlas(
       channels: 4,
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     },
-  }).composite(cells).webp({ quality: definition.quality }).toBuffer();
+  }).composite(completedCells).webp({ quality: definition.quality }).toBuffer();
+}
+
+async function transformCell(source: Buffer, cellSize: 64 | 160): Promise<Buffer> {
+  return sharp(source)
+    .resize(cellSize, cellSize, { fit: "cover", position: "centre" })
+    .webp({ quality: cellSize === 64 ? 76 : 82 })
+    .toBuffer();
 }
