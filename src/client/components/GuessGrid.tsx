@@ -67,6 +67,7 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
   useEffect(() => {
     if (!hasPendingReveal) {
       controllerRef.current = null;
+      completedRevealKeyRef.current = null;
       return;
     }
     const controller: RevealController = { key: activeRevealKey, completed: false, timeoutId: null };

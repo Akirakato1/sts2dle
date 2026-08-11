@@ -113,7 +113,7 @@ describe("GuessGrid", () => {
     expect(screen.getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
   });
 
-  test("completes each reduced-motion reveal once under StrictMode without scheduling timers", async () => {
+  test("completes a reused reduced-motion reveal key once per settled lifecycle under StrictMode", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({
       matches: true,
@@ -127,9 +127,31 @@ describe("GuessGrid", () => {
     await act(async () => Promise.resolve());
     expect(onRevealComplete).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-    rerender(<StrictMode><GuessGrid guesses={[guesses[1]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-2" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
+    rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} /></StrictMode>);
+    expect(onRevealComplete).toHaveBeenCalledOnce();
+    rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
     expect(onRevealComplete).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("completes a reused normal reveal key once per settled lifecycle", () => {
+    vi.useFakeTimers();
+    const onRevealComplete = vi.fn();
+    const view = render(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
+    const firstSurface = view.container.querySelectorAll(".feature-tile__surface")[10]!;
+    dispatchTransitionEnd(firstSurface, "transform");
+    dispatchTransitionEnd(firstSurface, "transform");
+    expect(onRevealComplete).toHaveBeenCalledOnce();
+
+    view.rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} /></StrictMode>);
+    expect(onRevealComplete).toHaveBeenCalledOnce();
+    view.rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
+    const secondSurface = view.container.querySelectorAll(".feature-tile__surface")[10]!;
+    dispatchTransitionEnd(secondSurface, "transform");
+    dispatchTransitionEnd(secondSurface, "transform");
+    expect(onRevealComplete).toHaveBeenCalledTimes(2);
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(onRevealComplete).toHaveBeenCalledTimes(2);
   });
 
   test("uses a fallback exactly once when the final transition event is missing", () => {
