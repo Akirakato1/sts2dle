@@ -31,6 +31,9 @@ const CARD_CLASSES = new Set(["Ironclad", "Silent", "Defect", "Necrobinder", "Re
 const CARD_TYPES = new Set(["Attack", "Skill", "Power", "Quest", "Status", "Curse"]);
 const CARD_RARITIES = new Set(["Common", "Uncommon", "Rare", "None"]);
 const KEYWORDS = ["eternal", "ethereal", "exhaust", "innate", "retain", "sly", "unplayable"] as const;
+const MAX_ATLAS_DIMENSION = 8192;
+const FALLBACK_WIDTH = 400;
+const FALLBACK_HEIGHT = 520;
 
 export interface SnapshotAcceptanceReport {
   cardCount: number;
@@ -55,6 +58,12 @@ export class SnapshotValidationError extends Error {
 export interface SnapshotValidationOptions {
   allowedArtworkOrigins: readonly string[];
   allowedFullCardOrigins: readonly string[];
+  imageDecodeObserver?: (request: SnapshotImageDecodeRequest) => void;
+}
+
+export interface SnapshotImageDecodeRequest {
+  label: string;
+  limitInputPixels: number;
 }
 
 export async function validateSnapshot(
@@ -108,11 +117,12 @@ export async function validateSnapshot(
   validateGroups("pair", pairGroupsValue, cardsById, issues);
   validateExactGroups(cardsById, baseGroupsValue, pairGroupsValue, issues);
   validateSpriteMap(spriteMapValue, cardsById, issues);
+  const atlasContracts = createAtlasContracts(cardsById.size);
 
   const [candidateSprite, guessSprite] = await Promise.all([
-    inspectSprite(snapshotPath, "candidate.webp", spriteMapValue.candidate, issues),
-    inspectSprite(snapshotPath, "guess.webp", spriteMapValue.guess, issues),
-    inspectFallbackImages(snapshotPath, cards, issues),
+    inspectSprite(snapshotPath, "candidate.webp", atlasContracts.candidate, options.imageDecodeObserver, issues),
+    inspectSprite(snapshotPath, "guess.webp", atlasContracts.guess, options.imageDecodeObserver, issues),
+    inspectFallbackImages(snapshotPath, cards, options.imageDecodeObserver, issues),
   ]);
   if (issues.length > 0) throw new SnapshotValidationError(uniqueIssues(issues));
 
@@ -347,6 +357,16 @@ function validateFeatureVector(
     issues.push(`Invalid ${variant} feature vector for ${cardId}`);
     return;
   }
+  const actualKeys = Object.keys(value);
+  const missingKeys = FEATURE_ORDER.filter((feature) => !Object.hasOwn(value, feature));
+  const extraKeys = actualKeys.filter((feature) => !(FEATURE_ORDER as readonly string[]).includes(feature));
+  if (missingKeys.length > 0 || extraKeys.length > 0 || actualKeys.length !== FEATURE_ORDER.length) {
+    const details = [
+      missingKeys.length > 0 ? `missing=${missingKeys.join(",")}` : "",
+      extraKeys.length > 0 ? `extra=${extraKeys.join(",")}` : "",
+    ].filter(Boolean).join("; ");
+    issues.push(`Invalid ${variant} feature keys for ${cardId}: ${details}`);
+  }
   if (!CARD_CLASSES.has(String(value.cardClass))) issues.push(`Unknown card class in ${variant} features for ${cardId}`);
   if (!CARD_TYPES.has(String(value.cardType))) issues.push(`Unknown card type in ${variant} features for ${cardId}`);
   if (!CARD_RARITIES.has(String(value.rarity))) issues.push(`Unknown card rarity in ${variant} features for ${cardId}`);
@@ -445,17 +465,16 @@ function validateSpriteMap(
   }
   const cardIds = [...cardsById.keys()].sort();
   const columns = Math.ceil(Math.sqrt(cardIds.length));
-  const rows = Math.ceil(cardIds.length / columns);
-  const atlasContracts = {
-    candidate: { cellSize: 64, width: columns * 64, height: rows * 64 },
-    guess: { cellSize: 160, width: columns * 160, height: rows * 160 },
-  } as const;
+  const atlasContracts = createAtlasContracts(cardIds.length);
   for (const name of ["candidate", "guess"] as const) {
     const meta = value[name];
     const contract = atlasContracts[name];
     if (isRecord(meta)) {
       if (meta.width !== contract.width || meta.height !== contract.height) {
         issues.push(`${name} atlas geometry must be ${contract.width}x${contract.height}`);
+      }
+      if (contract.width > MAX_ATLAS_DIMENSION || contract.height > MAX_ATLAS_DIMENSION) {
+        issues.push(`${name} atlas exceeds ${MAX_ATLAS_DIMENSION}px dimension limit`);
       }
       if (meta.displayScale !== 0.5) issues.push(`${name} display scale must be 0.5`);
     }
@@ -484,6 +503,15 @@ function validateSpriteMap(
       }
     }
   }
+}
+
+function createAtlasContracts(cardCount: number) {
+  const columns = Math.ceil(Math.sqrt(cardCount));
+  const rows = columns === 0 ? 0 : Math.ceil(cardCount / columns);
+  return {
+    candidate: { cellSize: 64, width: columns * 64, height: rows * 64 },
+    guess: { cellSize: 160, width: columns * 160, height: rows * 160 },
+  } as const;
 }
 
 function rectExactlyMatches(actual: unknown, expected: SpriteRect): boolean {
@@ -534,20 +562,24 @@ function validateRect(
 async function inspectSprite(
   snapshotPath: string,
   filename: "candidate.webp" | "guess.webp",
-  expectedValue: unknown,
+  expected: { width: number; height: number },
+  imageDecodeObserver: ((request: SnapshotImageDecodeRequest) => void) | undefined,
   issues: string[],
 ): Promise<{ width: number; height: number; bytes: number } | null> {
   try {
     const bytes = await readFile(join(snapshotPath, filename));
-    const metadata = await sharp(bytes).metadata();
+    const limitInputPixels = boundedPixelLimit(expected.width, expected.height);
+    const metadata = await sharp(bytes, { limitInputPixels }).metadata();
     if (!metadata.width || !metadata.height) throw new Error("image dimensions are missing");
-    if (metadata.format !== "webp") issues.push(`${filename} must be WebP`);
-    if (isRecord(expectedValue)) {
-      if (metadata.width !== expectedValue.width || metadata.height !== expectedValue.height) {
-        issues.push(`${filename} dimensions do not match sprite map`);
-      }
+    if (metadata.format !== "webp") {
+      issues.push(`${filename} must be WebP`);
+      return { width: metadata.width, height: metadata.height, bytes: bytes.length };
     }
-    await sharp(bytes).raw().toBuffer();
+    if (metadata.width !== expected.width || metadata.height !== expected.height) {
+      issues.push(`${filename} dimensions do not match sprite map`);
+      return { width: metadata.width, height: metadata.height, bytes: bytes.length };
+    }
+    await decodeImagePixels(bytes, { label: filename, limitInputPixels }, imageDecodeObserver);
     return { width: metadata.width, height: metadata.height, bytes: bytes.length };
   } catch (error: unknown) {
     if (isNotFound(error)) issues.push(`Missing snapshot file: ${filename}`);
@@ -559,6 +591,7 @@ async function inspectSprite(
 async function inspectFallbackImages(
   snapshotPath: string,
   cards: readonly unknown[],
+  imageDecodeObserver: ((request: SnapshotImageDecodeRequest) => void) | undefined,
   issues: string[],
 ): Promise<null> {
   const filenames = new Set<string>();
@@ -578,17 +611,36 @@ async function inspectFallbackImages(
   for (const filename of filenames) {
     try {
       const bytes = await readFile(join(snapshotPath, ...filename.split("/")));
-      const metadata = await sharp(bytes).metadata();
-      if (metadata.format !== "webp") issues.push(`Invalid fallback WebP: ${filename}`);
-      if (metadata.width !== 400 || metadata.height !== 520) {
-        issues.push(`Fallback ${filename} must be 400x520 WebP`);
+      const limitInputPixels = FALLBACK_WIDTH * FALLBACK_HEIGHT;
+      const metadata = await sharp(bytes, { limitInputPixels }).metadata();
+      if (metadata.format !== "webp") {
+        issues.push(`Invalid fallback WebP: ${filename}`);
+        continue;
       }
-      await sharp(bytes).raw().toBuffer();
+      if (metadata.width !== FALLBACK_WIDTH || metadata.height !== FALLBACK_HEIGHT) {
+        issues.push(`Fallback ${filename} must be ${FALLBACK_WIDTH}x${FALLBACK_HEIGHT} WebP`);
+        continue;
+      }
+      await decodeImagePixels(bytes, { label: filename, limitInputPixels }, imageDecodeObserver);
     } catch {
       issues.push(`Invalid fallback WebP: ${filename}`);
     }
   }
   return null;
+}
+
+function boundedPixelLimit(width: number, height: number): number {
+  const exactPixels = width * height;
+  return Math.max(1, Math.min(exactPixels, MAX_ATLAS_DIMENSION * MAX_ATLAS_DIMENSION));
+}
+
+async function decodeImagePixels(
+  bytes: Buffer,
+  request: SnapshotImageDecodeRequest,
+  observer: ((request: SnapshotImageDecodeRequest) => void) | undefined,
+): Promise<void> {
+  observer?.(request);
+  await sharp(bytes, { limitInputPixels: request.limitInputPixels }).raw().toBuffer();
 }
 
 async function readJson(root: string, filename: string, issues: string[]): Promise<unknown> {

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import fixture from "../fixtures/spire-cards.json";
 import { buildSnapshot } from "../../src/server/sync/build-snapshot.js";
 import { SnapshotStore } from "../../src/server/sync/snapshot-store.js";
@@ -212,6 +212,50 @@ describe("validateSnapshot", () => {
     },
   );
 
+  it("passes trusted exact pixel limits to the full-decode seam", async () => {
+    const path = await createValidSnapshot();
+    const imageDecodeObserver = vi.fn((
+      _request: { label: string; limitInputPixels: number },
+    ) => undefined);
+
+    await expect(validateSnapshot(path, {
+      ...VALIDATION_OPTIONS,
+      imageDecodeObserver,
+    })).resolves.toMatchObject({ cardCount: 6 });
+
+    const requests = imageDecodeObserver.mock.calls.map(([request]) => request);
+    expect(requests).toEqual(expect.arrayContaining([
+      { label: "candidate.webp", limitInputPixels: 192 * 128 },
+      { label: "guess.webp", limitInputPixels: 480 * 320 },
+    ]));
+    expect(requests.filter(({ label }) => label.startsWith("fallback/"))).toHaveLength(2);
+    expect(requests.filter(({ label }) => label.startsWith("fallback/")).every(
+      ({ limitInputPixels }) => limitInputPixels === 400 * 520,
+    )).toBe(true);
+  });
+
+  it.each([
+    ["wrong dimensions", async () => sharp({ create: { width: 191, height: 128, channels: 3, background: "red" } }).webp().toBuffer()],
+    ["wrong format", async () => sharp({ create: { width: 192, height: 128, channels: 3, background: "red" } }).png().toBuffer()],
+    ["oversized metadata", async () => sharp({ create: { width: 256, height: 128, channels: 3, background: "red" } }).webp().toBuffer()],
+  ] as const)("does not enter full decode for candidate atlas %s", async (_label, makeBytes) => {
+    const path = await createValidSnapshot();
+    const bytes = await makeBytes();
+    await expect(sharp(bytes, { limitInputPixels: false }).metadata()).resolves.toMatchObject({ width: expect.any(Number) });
+    await writeBytesAndRehash(path, "candidate.webp", bytes);
+    const imageDecodeObserver = vi.fn((
+      _request: { label: string; limitInputPixels: number },
+    ) => undefined);
+
+    await expect(validateSnapshot(path, {
+      ...VALIDATION_OPTIONS,
+      imageDecodeObserver,
+    })).rejects.toBeInstanceOf(SnapshotValidationError);
+    const labels = imageDecodeObserver.mock.calls.map(([request]) => request.label);
+    expect(labels).not.toContain("candidate.webp");
+    expect(labels).toContain("guess.webp");
+  });
+
   it("inspects and rejects an unreferenced emitted fallback image", async () => {
     const path = await createValidSnapshot();
     await writeBytesAndRehash(path, "fallback/unreferenced.webp", Buffer.from("not an image"));
@@ -279,6 +323,32 @@ describe("validateSnapshot", () => {
     await expectIssues(path, [/invalid fallback WebP/i]);
   });
 
+  it("does not enter full decode for an oversized metadata-readable fallback", async () => {
+    const path = await createValidSnapshot();
+    const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
+    const fallbackFile = Object.keys(manifest.files).find((filename) => filename.startsWith("fallback/"))!;
+    const bytes = await sharp({
+      create: { width: 401, height: 520, channels: 3, background: "red" },
+    }).webp().toBuffer();
+    await expect(sharp(bytes, { limitInputPixels: false }).metadata()).resolves.toMatchObject({
+      format: "webp",
+      width: 401,
+      height: 520,
+    });
+    await writeBytesAndRehash(path, fallbackFile, bytes);
+    const imageDecodeObserver = vi.fn((
+      _request: { label: string; limitInputPixels: number },
+    ) => undefined);
+
+    await expect(validateSnapshot(path, {
+      ...VALIDATION_OPTIONS,
+      imageDecodeObserver,
+    })).rejects.toBeInstanceOf(SnapshotValidationError);
+    const labels = imageDecodeObserver.mock.calls.map(([request]) => request.label);
+    expect(labels).not.toContain(fallbackFile);
+    expect(labels).toContain("candidate.webp");
+  });
+
   it("rejects a rehashed reveal URL outside the configured origin allowlist", async () => {
     const path = await createValidSnapshot();
     const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
@@ -319,6 +389,20 @@ describe("validateSnapshot", () => {
     await writeJsonAndRehash(path, "cards.json", cards);
 
     await expectIssues(path, [pattern]);
+  });
+
+  it.each([
+    ["upgradable base", "AFTERIMAGE", "base"],
+    ["upgradable upgraded", "AFTERIMAGE", "upgraded"],
+    ["non-upgradable base", "DAZED", "base"],
+    ["non-upgradable upgraded", "DAZED", "upgraded"],
+  ] as const)("rejects an extra feature key in %s features", async (_label, cardId, variant) => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    cards.find(({ id }) => id === cardId)![variant].futureKeyword = false;
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [new RegExp(`invalid ${variant} feature keys.*${cardId}.*futureKeyword`, "i")]);
   });
 
   it("accepts semantically equal non-upgradable features with different property order", async () => {
