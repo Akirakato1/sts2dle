@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import sharp from "sharp";
 import { baseKey, pairKey } from "../../shared/feature-keys.js";
+import { buildGroups } from "../../shared/groups.js";
 import type {
   BaseGroup,
   CardIdentity,
@@ -14,6 +15,8 @@ import type {
   SpriteRect,
 } from "../../shared/domain.js";
 import type { ActivatedSnapshot } from "./build-snapshot.js";
+import { assertAllowedImageUrl, parseAllowedImageOrigins } from "../images/url-policy.js";
+import { fallbackUrl } from "../images/fallback-path.js";
 
 const REQUIRED_HASHED_FILES = [
   "base-groups.json",
@@ -48,8 +51,18 @@ export class SnapshotValidationError extends Error {
   }
 }
 
-export async function validateSnapshot(snapshotPath: string): Promise<SnapshotAcceptanceReport> {
+export interface SnapshotValidationOptions {
+  allowedArtworkOrigins: readonly string[];
+  allowedFullCardOrigins: readonly string[];
+}
+
+export async function validateSnapshot(
+  snapshotPath: string,
+  options: SnapshotValidationOptions,
+): Promise<SnapshotAcceptanceReport> {
   const issues: string[] = [];
+  const allowedArtworkOrigins = parseAllowedImageOrigins(options.allowedArtworkOrigins, "Artwork");
+  const allowedFullCardOrigins = parseAllowedImageOrigins(options.allowedFullCardOrigins, "Full-card");
   const manifestValue = await readJson(snapshotPath, "manifest.json", issues);
   if (!isRecord(manifestValue)) {
     issues.push("Invalid manifest.json: expected an object");
@@ -83,14 +96,22 @@ export async function validateSnapshot(snapshotPath: string): Promise<SnapshotAc
   const pairGroups = pairGroupsValue as unknown as PairGroup[];
   const spriteMap = spriteMapValue as unknown as SpriteMap;
   validateCounts(manifest, cards, baseGroups, pairGroups, issues);
-  const cardsById = validateCards(cards, manifestValue, issues);
+  const cardsById = validateCards(
+    cards,
+    manifestValue,
+    allowedArtworkOrigins,
+    allowedFullCardOrigins,
+    issues,
+  );
   validateGroups("base", baseGroupsValue, cardsById, issues);
   validateGroups("pair", pairGroupsValue, cardsById, issues);
+  validateExactGroups(cardsById, baseGroupsValue, pairGroupsValue, issues);
   validateSpriteMap(spriteMapValue, cardsById, issues);
 
   const [candidateSprite, guessSprite] = await Promise.all([
     inspectSprite(snapshotPath, "candidate.webp", spriteMapValue.candidate, issues),
     inspectSprite(snapshotPath, "guess.webp", spriteMapValue.guess, issues),
+    inspectFallbackImages(snapshotPath, cards, issues),
   ]);
   if (issues.length > 0) throw new SnapshotValidationError(uniqueIssues(issues));
 
@@ -110,8 +131,11 @@ export async function validateSnapshot(snapshotPath: string): Promise<SnapshotAc
   };
 }
 
-export async function loadActivatedSnapshot(snapshotPath: string): Promise<ActivatedSnapshot> {
-  const report = await validateSnapshot(snapshotPath);
+export async function loadActivatedSnapshot(
+  snapshotPath: string,
+  options: SnapshotValidationOptions,
+): Promise<ActivatedSnapshot> {
+  const report = await validateSnapshot(snapshotPath, options);
   const manifestValue = await readJson(snapshotPath, "manifest.json", []);
   if (!isRecord(manifestValue)) throw new SnapshotValidationError(["Invalid manifest.json: expected an object"]);
   return {
@@ -201,9 +225,12 @@ function validateCounts(
 function validateCards(
   cards: unknown[],
   manifest: Record<string, unknown>,
+  allowedArtworkOrigins: readonly string[],
+  allowedFullCardOrigins: readonly string[],
   issues: string[],
 ): Map<string, CardIdentity> {
   const cardsById = new Map<string, CardIdentity>();
+  let previousId: string | undefined;
   for (const [index, value] of cards.entries()) {
     if (!isRecord(value)) {
       issues.push(`Invalid card at index ${index}: expected an object`);
@@ -213,14 +240,30 @@ function validateCards(
     if (id.startsWith("[index ")) issues.push(`Invalid card ID at index ${index}`);
     else if (cardsById.has(id)) issues.push(`Duplicate card ID: ${id}`);
     else cardsById.set(id, value as unknown as CardIdentity);
+    if (!id.startsWith("[index ") && previousId !== undefined && previousId >= id) {
+      issues.push(`Unstable card ordering at ${id}`);
+    }
+    if (!id.startsWith("[index ")) previousId = id;
     if (typeof value.name !== "string" || value.name.length === 0) issues.push(`Missing card name for ${id}`);
     if (value.duplicateName !== undefined && typeof value.duplicateName !== "boolean") {
       issues.push(`Invalid duplicate-name marker for ${id}`);
     }
     if (typeof value.hasUpgrade !== "boolean") issues.push(`Invalid upgrade flag for ${id}`);
-    if (typeof value.artUrl !== "string" || value.artUrl.trim() === "") issues.push(`Missing raw artwork URL for ${id}`);
-    validateRevealUrl(value.baseCardUrl, "base", id, manifest, issues);
-    if (value.hasUpgrade === true) validateRevealUrl(value.upgradedCardUrl, "upgraded", id, manifest, issues);
+    if (typeof value.artUrl !== "string" || value.artUrl.trim() === "") {
+      issues.push(`Missing raw artwork URL for ${id}`);
+    } else {
+      try {
+        assertAllowedImageUrl(value.artUrl, allowedArtworkOrigins, `Artwork for card ${id}`);
+      } catch (error: unknown) {
+        issues.push(safeErrorMessage(error));
+      }
+    }
+    validateRevealUrl(value.baseCardUrl, "base", id, manifest, allowedFullCardOrigins, issues);
+    if (value.hasUpgrade === true) {
+      validateRevealUrl(value.upgradedCardUrl, "upgraded", id, manifest, allowedFullCardOrigins, issues);
+    } else if (value.upgradedCardUrl !== null && value.upgradedCardUrl !== undefined) {
+      validateRevealUrl(value.upgradedCardUrl, "upgraded", id, manifest, allowedFullCardOrigins, issues);
+    }
     validateFeatureVector(value.base, "base", id, issues);
     validateFeatureVector(value.upgraded, "upgraded", id, issues);
     if (value.hasUpgrade === false && isRecord(value.base) && isRecord(value.upgraded)) {
@@ -229,6 +272,7 @@ function validateCards(
       }
     }
   }
+  validateDuplicateNameMarkers(cards, issues);
   return cardsById;
 }
 
@@ -237,6 +281,7 @@ function validateRevealUrl(
   variant: "base" | "upgraded",
   cardId: string,
   manifest: Record<string, unknown>,
+  allowedFullCardOrigins: readonly string[],
   issues: string[],
 ): void {
   if (typeof value !== "string" || value.trim() === "") {
@@ -245,17 +290,43 @@ function validateRevealUrl(
   }
   if (value.startsWith("/runtime/fallback/")) {
     const filename = value.slice("/runtime/".length);
+    const expectedUrl = fallbackUrl(cardId, variant === "upgraded");
+    if (value !== expectedUrl) {
+      issues.push(`Fallback URL mapping for ${cardId} ${variant} must be ${expectedUrl}`);
+    }
     if (!isSafeRelativeFilename(filename) || !isRecord(manifest.files) || !Object.hasOwn(manifest.files, filename)) {
       issues.push(`Missing fallback file for ${variant} card ${cardId}: ${value}`);
     }
     return;
   }
   try {
-    const url = new URL(value);
-    if (url.protocol !== "https:") throw new Error();
-  } catch {
-    issues.push(`Invalid ${variant} full-card URL for ${cardId}`);
+    assertAllowedImageUrl(value, allowedFullCardOrigins, `Full-card ${variant} for card ${cardId}`);
+  } catch (error: unknown) {
+    issues.push(safeErrorMessage(error));
   }
+}
+
+function validateDuplicateNameMarkers(cards: readonly unknown[], issues: string[]): void {
+  const counts = new Map<string, number>();
+  for (const value of cards) {
+    if (!isRecord(value) || typeof value.name !== "string") continue;
+    const key = normalizedDisplayName(value.name);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  for (const value of cards) {
+    if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string") continue;
+    const expected = (counts.get(normalizedDisplayName(value.name)) ?? 0) > 1;
+    if (expected && value.duplicateName !== true) {
+      issues.push(`Duplicate-name marker for ${value.id} expected true`);
+    }
+    if (!expected && value.duplicateName !== undefined) {
+      issues.push(`Duplicate-name marker for ${value.id} expected absent`);
+    }
+  }
+}
+
+function normalizedDisplayName(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
 }
 
 function validateFeatureVector(
@@ -320,6 +391,39 @@ function validateGroups(
   }
 }
 
+function validateExactGroups(
+  cardsById: ReadonlyMap<string, CardIdentity>,
+  baseGroups: unknown[],
+  pairGroups: unknown[],
+  issues: string[],
+): void {
+  const cards = [...cardsById.values()];
+  if (!cards.every((card) => isFeatureVector(card.base) && isFeatureVector(card.upgraded))) {
+    return;
+  }
+  const rebuilt = buildGroups(cards);
+  if (!groupsExactlyMatch(baseGroups, rebuilt.baseGroups)) {
+    issues.push("Base groups do not exactly match groups rebuilt from cards");
+  }
+  if (!groupsExactlyMatch(pairGroups, rebuilt.pairGroups)) {
+    issues.push("Pair groups do not exactly match groups rebuilt from cards");
+  }
+}
+
+function groupsExactlyMatch(
+  actual: readonly unknown[],
+  expected: readonly { key: string; cardIds: readonly string[] }[],
+): boolean {
+  return actual.length === expected.length && actual.every((value, index) => {
+    const expectedGroup = expected[index];
+    if (!isRecord(value) || !expectedGroup || value.key !== expectedGroup.key || !Array.isArray(value.cardIds)) {
+      return false;
+    }
+    return value.cardIds.length === expectedGroup.cardIds.length &&
+      value.cardIds.every((cardId, cardIndex) => cardId === expectedGroup.cardIds[cardIndex]);
+  });
+}
+
 function validateSpriteMap(
   value: Record<string, unknown>,
   cardsById: ReadonlyMap<string, CardIdentity>,
@@ -331,10 +435,27 @@ function validateSpriteMap(
     issues.push("Invalid sprite card map");
     return;
   }
+  const cardIds = [...cardsById.keys()].sort();
+  const columns = Math.ceil(Math.sqrt(cardIds.length));
+  const rows = Math.ceil(cardIds.length / columns);
+  const atlasContracts = {
+    candidate: { cellSize: 64, width: columns * 64, height: rows * 64 },
+    guess: { cellSize: 160, width: columns * 160, height: rows * 160 },
+  } as const;
+  for (const name of ["candidate", "guess"] as const) {
+    const meta = value[name];
+    const contract = atlasContracts[name];
+    if (isRecord(meta)) {
+      if (meta.width !== contract.width || meta.height !== contract.height) {
+        issues.push(`${name} atlas geometry must be ${contract.width}x${contract.height}`);
+      }
+      if (meta.displayScale !== 0.5) issues.push(`${name} display scale must be 0.5`);
+    }
+  }
   for (const cardId of Object.keys(value.cards)) {
     if (!cardsById.has(cardId)) issues.push(`Unknown card ID in sprite map: ${cardId}`);
   }
-  for (const cardId of cardsById.keys()) {
+  for (const [index, cardId] of cardIds.entries()) {
     const coordinates = value.cards[cardId];
     if (!isRecord(coordinates)) {
       issues.push(`Missing sprite coordinates for ${cardId}`);
@@ -342,7 +463,24 @@ function validateSpriteMap(
     }
     validateRect(coordinates.candidate, value.candidate, "candidate", cardId, issues);
     validateRect(coordinates.guess, value.guess, "guess", cardId, issues);
+    for (const name of ["candidate", "guess"] as const) {
+      const contract = atlasContracts[name];
+      const expected = {
+        x: (index % columns) * contract.cellSize,
+        y: Math.floor(index / columns) * contract.cellSize,
+        width: contract.cellSize,
+        height: contract.cellSize,
+      };
+      if (!rectExactlyMatches(coordinates[name], expected)) {
+        issues.push(`${name} sprite rectangle for ${cardId} does not match expected cell`);
+      }
+    }
   }
+}
+
+function rectExactlyMatches(actual: unknown, expected: SpriteRect): boolean {
+  return isRecord(actual) && actual.x === expected.x && actual.y === expected.y &&
+    actual.width === expected.width && actual.height === expected.height;
 }
 
 function validateAtlasMeta(value: unknown, name: "candidate" | "guess", issues: string[]): void {
@@ -395,6 +533,7 @@ async function inspectSprite(
     const bytes = await readFile(join(snapshotPath, filename));
     const metadata = await sharp(bytes).metadata();
     if (!metadata.width || !metadata.height) throw new Error("image dimensions are missing");
+    if (metadata.format !== "webp") issues.push(`${filename} must be WebP`);
     if (isRecord(expectedValue)) {
       if (metadata.width !== expectedValue.width || metadata.height !== expectedValue.height) {
         issues.push(`${filename} dimensions do not match sprite map`);
@@ -406,6 +545,39 @@ async function inspectSprite(
     else issues.push(`Invalid sprite file ${filename}: ${safeErrorMessage(error)}`);
     return null;
   }
+}
+
+async function inspectFallbackImages(
+  snapshotPath: string,
+  cards: readonly CardIdentity[],
+  issues: string[],
+): Promise<null> {
+  const filenames = new Set<string>();
+  for (const card of cards) {
+    if (isFallbackUrl(card.baseCardUrl)) filenames.add(card.baseCardUrl!.slice("/runtime/".length));
+    if (isFallbackUrl(card.upgradedCardUrl)) filenames.add(card.upgradedCardUrl!.slice("/runtime/".length));
+  }
+  try {
+    for (const filename of (await listFiles(snapshotPath)).filter((name) => name.startsWith("fallback/"))) {
+      if (!filenames.has(filename)) issues.push(`Unreferenced fallback file: ${filename}`);
+      filenames.add(filename);
+    }
+  } catch (error: unknown) {
+    issues.push(`Could not enumerate fallback files: ${safeErrorMessage(error)}`);
+  }
+  for (const filename of filenames) {
+    try {
+      const bytes = await readFile(join(snapshotPath, ...filename.split("/")));
+      const metadata = await sharp(bytes).metadata();
+      if (metadata.format !== "webp") issues.push(`Invalid fallback WebP: ${filename}`);
+      if (metadata.width !== 400 || metadata.height !== 520) {
+        issues.push(`Fallback ${filename} must be 400x520 WebP`);
+      }
+    } catch {
+      issues.push(`Invalid fallback WebP: ${filename}`);
+    }
+  }
+  return null;
 }
 
 async function readJson(root: string, filename: string, issues: string[]): Promise<unknown> {

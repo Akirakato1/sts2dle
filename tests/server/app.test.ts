@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/server/app.js";
 import { loadConfig } from "../../src/server/config.js";
-import { main } from "../../src/server/main.js";
+import { logStartupFailure, main } from "../../src/server/main.js";
 import type { ActivatedSnapshot } from "../../src/server/sync/build-snapshot.js";
 import type { SnapshotAcceptanceReport } from "../../src/server/sync/validate-snapshot.js";
 
@@ -105,9 +105,56 @@ describe("createApp", () => {
       await app.close();
     }
   });
+
+  it.each(["GET", "HEAD"] as const)(
+    "keeps canonical, encoded, and malformed runtime namespace forms out of the SPA for %s",
+    async (method) => {
+      const roots = await createStaticRoots();
+      const app = await createApp({ ...roots, logger: false });
+
+      try {
+        for (const url of [
+          "/runtime?x=1",
+          "/runtime%2Fmissing.json",
+          "/runtime%5Cmissing.json",
+          "/runtime%252Fmissing.json",
+          "/runtime%252525252Fmissing.json",
+          "/runtime%ZZ",
+        ]) {
+          const response = await app.inject({ method, url });
+          expect([400, 404], `${method} ${url}`).toContain(response.statusCode);
+          expect(response.headers["content-type"] ?? "", `${method} ${url}`).not.toContain("text/html");
+          expect(response.body, `${method} ${url}`).not.toContain("STS-dle");
+        }
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  it("keeps route matching case-sensitive when isolating the runtime namespace", async () => {
+    const roots = await createStaticRoots();
+    const app = await createApp({ ...roots, logger: false });
+    try {
+      const response = await app.inject({ url: "/Runtime?x=1" });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toContain("text/html");
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe("main", () => {
+  it("logs only a fixed startup failure category without feed-derived error text", () => {
+    const error = vi.fn();
+    logStartupFailure(new Error("SECRET_MARKER_CARD_ID_MAD_SCIENCE"), { error });
+
+    expect(error).toHaveBeenCalledWith("STS-dle server startup failed", { category: "startup_failure" });
+    expect(JSON.stringify(error.mock.calls)).not.toContain("SECRET_MARKER");
+    expect(JSON.stringify(error.mock.calls)).not.toContain("MAD_SCIENCE");
+  });
+
   it("performs exactly one successful synchronization before listening", async () => {
     const events: string[] = [];
     const roots = await createStaticRoots();
@@ -167,7 +214,10 @@ describe("main", () => {
       createApp: create,
     });
 
-    expect(loadPrior).toHaveBeenCalledWith(prior.path);
+    expect(loadPrior).toHaveBeenCalledWith(prior.path, {
+      allowedArtworkOrigins: ["https://spire-codex.com"],
+      allowedFullCardOrigins: ["https://spire-codex.com"],
+    });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ snapshotRoot: prior.path }));
     expect(listen).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
@@ -212,7 +262,32 @@ describe("main", () => {
 
 describe("loadConfig", () => {
   it("uses the documented Spire Codex environment variable", () => {
-    expect(loadConfig({ SPIRE_CODEX_BASE_URL: "https://cards.example" }).spireCodexBaseUrl)
-      .toBe("https://cards.example");
+    expect(loadConfig({ SPIRE_CODEX_BASE_URL: "https://cards.example" })).toMatchObject({
+      spireCodexBaseUrl: "https://cards.example",
+      artworkAllowedOrigins: ["https://cards.example"],
+      fullCardAllowedOrigins: ["https://cards.example"],
+    });
+  });
+
+  it("parses explicit artwork and full-card origin allowlists", () => {
+    expect(loadConfig({
+      SPIRE_CODEX_BASE_URL: "https://cards.example",
+      STSDLE_ARTWORK_ALLOWED_ORIGINS: "https://art.example, https://cards.example",
+      STSDLE_FULL_CARD_ALLOWED_ORIGINS: "https://cdn.example,https://cards.example",
+    })).toMatchObject({
+      artworkAllowedOrigins: ["https://art.example", "https://cards.example"],
+      fullCardAllowedOrigins: ["https://cards.example", "https://cdn.example"],
+    });
+  });
+
+  it.each([
+    "http://cdn.example",
+    "https://127.0.0.1",
+    "https://localhost",
+    "https://user:secret@cdn.example",
+    "https://cdn.example:8443",
+    "https://cdn.example/path",
+  ])("rejects unsafe configured image origin %s", (origin) => {
+    expect(() => loadConfig({ STSDLE_FULL_CARD_ALLOWED_ORIGINS: origin })).toThrow(/origin/i);
   });
 });

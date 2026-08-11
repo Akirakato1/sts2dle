@@ -11,6 +11,7 @@ import {
 } from "./sync/build-snapshot.js";
 import { SnapshotStore, type ActiveSnapshot } from "./sync/snapshot-store.js";
 import { loadActivatedSnapshot } from "./sync/validate-snapshot.js";
+import type { SnapshotValidationOptions } from "./sync/validate-snapshot.js";
 
 type Environment = Record<string, string | undefined>;
 
@@ -31,7 +32,10 @@ export interface MainDependencies {
   clientRoot?: string;
   store?: ActiveSnapshotStore;
   sync?: (config: ServerConfig, store: ActiveSnapshotStore) => Promise<ActivatedSnapshot>;
-  loadActivatedSnapshot?: (snapshotPath: string) => Promise<ActivatedSnapshot>;
+  loadActivatedSnapshot?: (
+    snapshotPath: string,
+    options: SnapshotValidationOptions,
+  ) => Promise<ActivatedSnapshot>;
   createApp?: (options: CreateAppOptions) => Promise<MainApp>;
 }
 
@@ -49,7 +53,7 @@ export async function main(dependencies: MainDependencies = {}): Promise<MainApp
   if (config.skipSync) {
     const prior = await store.loadActive();
     if (!prior) throw new Error("STSDLE_SKIP_SYNC requires a validated active snapshot");
-    active = await loadPrior(prior.path);
+    active = await loadPrior(prior.path, validationOptions(config));
   } else {
     try {
       active = await sync(config, store);
@@ -57,7 +61,7 @@ export async function main(dependencies: MainDependencies = {}): Promise<MainApp
       refreshErrorName = refreshError instanceof Error ? refreshError.name : "UnknownError";
       const prior = await store.loadActive();
       if (!prior) throw refreshError;
-      active = await loadPrior(prior.path);
+      active = await loadPrior(prior.path, validationOptions(config));
     }
   }
 
@@ -84,6 +88,13 @@ export async function main(dependencies: MainDependencies = {}): Promise<MainApp
   return app;
 }
 
+function validationOptions(config: ServerConfig): SnapshotValidationOptions {
+  return {
+    allowedArtworkOrigins: config.artworkAllowedOrigins,
+    allowedFullCardOrigins: config.fullCardAllowedOrigins,
+  };
+}
+
 export function createProductionDependencies(
   config: ServerConfig,
   store: SnapshotStore,
@@ -97,8 +108,13 @@ export function createProductionDependencies(
     store,
     baseUrl: config.spireCodexBaseUrl,
     fetchImpl: globalThis.fetch,
-    fallbackRenderer: new FallbackRenderer({ portraitBaseUrl: config.spireCodexBaseUrl }),
+    fallbackRenderer: new FallbackRenderer({
+      portraitBaseUrl: config.spireCodexBaseUrl,
+      allowedPortraitOrigins: config.artworkAllowedOrigins,
+    }),
     artworkConcurrency: config.artworkConcurrency,
+    allowedArtworkOrigins: config.artworkAllowedOrigins,
+    allowedFullCardOrigins: config.fullCardAllowedOrigins,
   };
 }
 
@@ -108,10 +124,16 @@ function isDirectExecution(): boolean {
   return resolve(entry).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
 }
 
+export function logStartupFailure(
+  _error: unknown,
+  logger: { error(message: string, details: Record<string, string>): void } = console,
+): void {
+  logger.error("STS-dle server startup failed", { category: "startup_failure" });
+}
+
 if (isDirectExecution()) {
   main().catch((error: unknown) => {
-    const details = error instanceof Error ? { name: error.name, message: error.message } : { message: "Unknown startup error" };
-    console.error("STS-dle server startup failed", details);
+    logStartupFailure(error);
     process.exitCode = 1;
   });
 }

@@ -3,11 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { buildSprites } from "../../src/server/images/build-sprites.js";
+import { buildSprites, type BuildSpritesOptions } from "../../src/server/images/build-sprites.js";
 import type { CardIdentity } from "../../src/shared/domain.js";
 
 const temporaryDirectories: string[] = [];
 const artworkByUrl = new Map<string, Buffer>();
+
+function buildTestSprites(options: Omit<BuildSpritesOptions, "allowedArtworkOrigins"> & {
+  allowedArtworkOrigins?: readonly string[];
+}) {
+  return buildSprites({ allowedArtworkOrigins: ["https://art.example"], ...options });
+}
 
 function card(id: string): CardIdentity {
   const features = {
@@ -94,7 +100,7 @@ describe("buildSprites", () => {
   it("rejects an empty card list without publishing either atlas", async () => {
     const outputDir = await createOutputDirectory();
 
-    await expect(buildSprites({
+    await expect(buildTestSprites({
       cards: [],
       outputDir,
       fetchImpl: async () => {
@@ -119,7 +125,7 @@ describe("buildSprites", () => {
       return imageResponse(bytes);
     });
 
-    const map = await buildSprites({
+    const map = await buildTestSprites({
       cards: [card("CARD_C"), card("CARD_A"), card("CARD_B")],
       outputDir,
       fetchImpl,
@@ -164,7 +170,7 @@ describe("buildSprites", () => {
     let maximumActiveTransforms = 0;
     let transformCount = 0;
 
-    await buildSprites({
+    await buildTestSprites({
       cards: [card("CARD_D"), card("CARD_C"), card("CARD_B"), card("CARD_A")],
       outputDir,
       fetchImpl: async () => imageResponse(artworkByUrl.get(card("CARD_A").artUrl)!),
@@ -197,13 +203,13 @@ describe("buildSprites", () => {
       return bytes ? imageResponse(bytes) : new Response(null, { status: 404 });
     };
 
-    const first = await buildSprites({
+    const first = await buildTestSprites({
       cards: [card("CARD_A"), card("CARD_B"), card("CARD_C")],
       outputDir: firstOutputDir,
       fetchImpl,
       concurrency: 2,
     });
-    const second = await buildSprites({
+    const second = await buildTestSprites({
       cards: [card("CARD_B"), card("CARD_C"), card("CARD_A")],
       outputDir: secondOutputDir,
       fetchImpl,
@@ -224,7 +230,7 @@ describe("buildSprites", () => {
     const sharedArtworkUrl = card("CARD_A").artUrl;
     const fetchImpl = vi.fn(async () => imageResponse(artworkByUrl.get(sharedArtworkUrl)!));
 
-    const map = await buildSprites({
+    const map = await buildTestSprites({
       cards: [card("CARD_A"), { ...card("CARD_B"), artUrl: sharedArtworkUrl }],
       outputDir,
       fetchImpl,
@@ -239,7 +245,7 @@ describe("buildSprites", () => {
   it("preserves unsafe-looking card IDs as serialized sprite-map keys", async () => {
     const outputDir = await createOutputDirectory();
 
-    const map = await buildSprites({
+    const map = await buildTestSprites({
       cards: [card("__proto__")],
       outputDir,
       fetchImpl: async () => imageResponse(artworkByUrl.get(card("CARD_A").artUrl)!),
@@ -260,7 +266,7 @@ describe("buildSprites", () => {
     const outputDir = await createOutputDirectory();
     const missingArtwork = { ...card("CARD_A"), artUrl: "" };
 
-    await expect(buildSprites({
+    await expect(buildTestSprites({
       cards: [missingArtwork],
       outputDir,
       fetchImpl: async () => imageResponse(artworkByUrl.get(card("CARD_A").artUrl)!),
@@ -272,7 +278,7 @@ describe("buildSprites", () => {
   it("rejects an unsuccessful artwork response without publishing either atlas", async () => {
     const outputDir = await createOutputDirectory();
 
-    await expect(buildSprites({
+    await expect(buildTestSprites({
       cards: [card("CARD_A")],
       outputDir,
       fetchImpl: async () => new Response(
@@ -301,7 +307,7 @@ describe("buildSprites", () => {
       return imageResponse(artworkByUrl.get(url)!);
     };
 
-    const buildPromise = buildSprites({
+    const buildPromise = buildTestSprites({
       cards: [card("CARD_A"), card("CARD_B"), card("CARD_C")],
       outputDir,
       fetchImpl,
@@ -331,7 +337,7 @@ describe("buildSprites", () => {
   it("rejects empty artwork bytes without publishing either atlas", async () => {
     const outputDir = await createOutputDirectory();
 
-    await expect(buildSprites({
+    await expect(buildTestSprites({
       cards: [card("CARD_A")],
       outputDir,
       fetchImpl: async () => new Response(null, { status: 200 }),
@@ -343,7 +349,7 @@ describe("buildSprites", () => {
   it("rejects invalid artwork bytes without publishing either atlas", async () => {
     const outputDir = await createOutputDirectory();
 
-    await expect(buildSprites({
+    await expect(buildTestSprites({
       cards: [card("CARD_A")],
       outputDir,
       fetchImpl: async () => imageResponse(Buffer.from("not an image")),
@@ -355,7 +361,7 @@ describe("buildSprites", () => {
   it("rejects duplicate card IDs without publishing either atlas", async () => {
     const outputDir = await createOutputDirectory();
 
-    await expect(buildSprites({
+    await expect(buildTestSprites({
       cards: [card("CARD_A"), { ...card("CARD_A"), artUrl: card("CARD_B").artUrl }],
       outputDir,
       fetchImpl: async (input) => imageResponse(artworkByUrl.get(String(input))!),
@@ -369,7 +375,7 @@ describe("buildSprites", () => {
     async (concurrency) => {
       const outputDir = await createOutputDirectory();
 
-      await expect(buildSprites({
+      await expect(buildTestSprites({
         cards: [card("CARD_A")],
         outputDir,
         fetchImpl: async () => imageResponse(artworkByUrl.get(card("CARD_A").artUrl)!),
@@ -385,7 +391,7 @@ describe("buildSprites", () => {
       card(`CARD_${index.toString().padStart(4, "0")}`)
     ));
 
-    await expect(buildSprites({
+    await expect(buildTestSprites({
       cards,
       outputDir,
       fetchImpl: async () => {
@@ -394,5 +400,44 @@ describe("buildSprites", () => {
       concurrency: 4,
     })).rejects.toThrow(/atlas dimension.*8192/i);
     await expectNoFinalAtlases(outputDir);
+  });
+
+  it.each([
+    "https://127.0.0.1/card.webp",
+    "https://localhost/card.webp",
+    "https://user:secret@art.example/card.webp",
+    "https://art.example:8443/card.webp",
+    "http://art.example/card.webp",
+    "https://unapproved.example/card.webp",
+  ])("rejects unsafe or unapproved artwork URL %s before I/O", async (artUrl) => {
+    const outputDir = await createOutputDirectory();
+    const fetchImpl = vi.fn();
+
+    await expect(buildTestSprites({
+      cards: [{ ...card("CARD_A"), artUrl }],
+      outputDir,
+      fetchImpl,
+      concurrency: 1,
+    })).rejects.toThrow(/artwork.*CARD_A.*URL is not allowed/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("disables redirects and rejects redirect responses without following them", async () => {
+    const outputDir = await createOutputDirectory();
+    let redirectMode: RequestRedirect | undefined;
+
+    await expect(buildTestSprites({
+      cards: [card("CARD_A")],
+      outputDir,
+      fetchImpl: async (_input, init) => {
+        redirectMode = init?.redirect;
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://unapproved.example/private.webp" },
+        });
+      },
+      concurrency: 1,
+    })).rejects.toThrow(/artwork redirect.*CARD_A/i);
+    expect(redirectMode).toBe("manual");
   });
 });

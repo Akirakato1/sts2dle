@@ -16,10 +16,18 @@ import type { RawSpireCard } from "../../src/server/spire-codex/schema.js";
 
 const temporaryDirectories: string[] = [];
 let artwork: Buffer;
+let fallbackImage: Buffer;
+const VALIDATION_OPTIONS = {
+  allowedArtworkOrigins: ["https://spire-codex.test"],
+  allowedFullCardOrigins: ["https://cdn.test"],
+} as const;
 
 beforeAll(async () => {
   artwork = await sharp({
     create: { width: 10, height: 10, channels: 3, background: "orange" },
+  }).webp().toBuffer();
+  fallbackImage = await sharp({
+    create: { width: 400, height: 520, channels: 3, background: "orange" },
   }).webp().toBuffer();
 });
 
@@ -50,10 +58,12 @@ async function createValidSnapshot(): Promise<string> {
     fetchImpl: async () => new Response(new Uint8Array(artwork)),
     fallbackRenderer: {
       async render(_raw, _upgraded, destination) {
-        await writeFile(destination, artwork);
+        await writeFile(destination, fallbackImage);
       },
     },
     artworkConcurrency: 2,
+    allowedArtworkOrigins: ["https://spire-codex.test"],
+    allowedFullCardOrigins: ["https://cdn.test"],
     now: () => new Date("2026-08-12T00:00:01.000Z"),
   });
   return activated.path;
@@ -71,8 +81,15 @@ async function writeJsonAndRehash(path: string, filename: string, value: unknown
   await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
 }
 
+async function writeBytesAndRehash(path: string, filename: string, bytes: Buffer): Promise<void> {
+  await writeFile(join(path, ...filename.split("/")), bytes);
+  const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
+  manifest.files[filename] = createHash("sha256").update(bytes).digest("hex");
+  await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
+}
+
 async function expectIssues(path: string, patterns: readonly RegExp[]): Promise<void> {
-  await expect(validateSnapshot(path)).rejects.toSatisfy((error: unknown) => {
+  await expect(validateSnapshot(path, VALIDATION_OPTIONS)).rejects.toSatisfy((error: unknown) => {
     expect(error).toBeInstanceOf(SnapshotValidationError);
     const issues = (error as SnapshotValidationError).issues;
     for (const pattern of patterns) expect(issues.some((issue) => pattern.test(issue))).toBe(true);
@@ -84,7 +101,7 @@ describe("validateSnapshot", () => {
   it("returns the complete acceptance report for a valid snapshot", async () => {
     const path = await createValidSnapshot();
 
-    await expect(validateSnapshot(path)).resolves.toMatchObject({
+    await expect(validateSnapshot(path, VALIDATION_OPTIONS)).resolves.toMatchObject({
       cardCount: 6,
       upgradeCount: 5,
       baseGroupCount: 6,
@@ -94,7 +111,7 @@ describe("validateSnapshot", () => {
       candidateSprite: { width: 192, height: 128 },
       guessSprite: { width: 480, height: 320 },
     });
-    const report = await validateSnapshot(path);
+    const report = await validateSnapshot(path, VALIDATION_OPTIONS);
     expect(Object.values(report.baseGroupHistogram).reduce((sum, value) => sum + value, 0)).toBe(6);
     expect(report.candidateSprite.bytes).toBeGreaterThan(0);
     expect(report.guessSprite.bytes).toBeGreaterThan(0);
@@ -149,6 +166,41 @@ describe("validateSnapshot", () => {
   });
 
   it.each([
+    ["cell width", (map: Record<string, any>) => { map.cards.AFTERIMAGE.candidate.width = 63; }, /candidate sprite rectangle.*AFTERIMAGE.*expected/i],
+    ["display scale", (map: Record<string, any>) => { map.candidate.displayScale = 1; }, /candidate display scale.*0\.5/i],
+    ["overlap", (map: Record<string, any>) => { map.cards.ALCHEMIZE.candidate = { ...map.cards.AFTERIMAGE.candidate }; }, /candidate sprite rectangle.*ALCHEMIZE.*expected/i],
+    ["atlas geometry", (map: Record<string, any>) => { map.candidate.width += 64; }, /candidate atlas geometry/i],
+    ["guess cell width", (map: Record<string, any>) => { map.cards.AFTERIMAGE.guess.width = 159; }, /guess sprite rectangle.*AFTERIMAGE.*expected/i],
+    ["guess display scale", (map: Record<string, any>) => { map.guess.displayScale = 1; }, /guess display scale.*0\.5/i],
+    ["guess overlap", (map: Record<string, any>) => { map.cards.ALCHEMIZE.guess = { ...map.cards.AFTERIMAGE.guess }; }, /guess sprite rectangle.*ALCHEMIZE.*expected/i],
+    ["guess atlas geometry", (map: Record<string, any>) => { map.guess.height += 160; }, /guess atlas geometry/i],
+  ] as const)("rejects wrong sprite %s", async (_label, mutate, pattern) => {
+    const path = await createValidSnapshot();
+    const spriteMap = await readJson<Record<string, any>>(path, "sprite-map.json");
+    mutate(spriteMap);
+    await writeJsonAndRehash(path, "sprite-map.json", spriteMap);
+
+    await expectIssues(path, [pattern]);
+  });
+
+  it.each([
+    ["one-pixel WebP", async () => sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } }).webp().toBuffer(), /candidate\.webp dimensions/i],
+    ["PNG atlas", async () => sharp({ create: { width: 192, height: 128, channels: 3, background: "red" } }).png().toBuffer(), /candidate\.webp.*WebP/i],
+  ] as const)("rejects a rehashed %s", async (_label, makeBytes, pattern) => {
+    const path = await createValidSnapshot();
+    await writeBytesAndRehash(path, "candidate.webp", await makeBytes());
+
+    await expectIssues(path, [pattern]);
+  });
+
+  it("inspects and rejects an unreferenced emitted fallback image", async () => {
+    const path = await createValidSnapshot();
+    await writeBytesAndRehash(path, "fallback/unreferenced.webp", Buffer.from("not an image"));
+
+    await expectIssues(path, [/unreferenced fallback file/i, /invalid fallback WebP.*unreferenced/i]);
+  });
+
+  it.each([
     ["candidate.webp", /missing snapshot file.*candidate\.webp/i],
     ["cards.json", /missing snapshot file.*cards\.json/i],
   ] as const)("rejects a missing %s", async (filename, pattern) => {
@@ -165,6 +217,58 @@ describe("validateSnapshot", () => {
     await writeJsonAndRehash(path, "cards.json", cards);
 
     await expectIssues(path, [/missing base full-card URL.*AFTERIMAGE/i]);
+  });
+
+  it("binds each fallback URL to the exact card and variant mapping", async () => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    const madScience = cards.find(({ id }) => id === "MAD_SCIENCE")!;
+    [madScience.baseCardUrl, madScience.upgradedCardUrl] = [
+      madScience.upgradedCardUrl,
+      madScience.baseCardUrl,
+    ];
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [/fallback URL mapping.*MAD_SCIENCE.*base/i, /fallback URL mapping.*MAD_SCIENCE.*upgraded/i]);
+  });
+
+  it.each([
+    ["one-pixel fallback", async () => sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } }).webp().toBuffer(), /fallback.*400x520/i],
+    ["invalid fallback", async () => Buffer.from("not an image"), /invalid fallback WebP/i],
+  ] as const)("rejects a rehashed %s", async (_label, makeBytes, pattern) => {
+    const path = await createValidSnapshot();
+    const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
+    const fallbackFile = Object.keys(manifest.files).find((filename) => filename.startsWith("fallback/"))!;
+    await writeBytesAndRehash(path, fallbackFile, await makeBytes());
+
+    await expectIssues(path, [pattern]);
+  });
+
+  it("rejects a rehashed reveal URL outside the configured origin allowlist", async () => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    cards.find(({ id }) => id === "AFTERIMAGE")!.baseCardUrl = "https://unapproved.example/card.webp";
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [/full-card base.*AFTERIMAGE.*not allowed/i]);
+  });
+
+  it("rejects rehashed artwork outside the configured origin allowlist", async () => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    cards.find(({ id }) => id === "AFTERIMAGE")!.artUrl = "https://unapproved.example/art.webp";
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [/artwork.*AFTERIMAGE.*not allowed/i]);
+  });
+
+  it("rejects an unsafe supplied upgraded reveal URL on a non-upgradable card", async () => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    cards.find(({ id }) => id === "DAZED")!.upgradedCardUrl = "https://127.0.0.1/unused.webp";
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [/full-card upgraded.*DAZED.*not allowed/i]);
   });
 
   it.each([
@@ -192,6 +296,73 @@ describe("validateSnapshot", () => {
     await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
 
     await expectIssues(path, [/duplicate card ID/i]);
+  });
+
+  it.each(["base", "pair"] as const)("rejects an extra empty %s group", async (kind) => {
+    const path = await createValidSnapshot();
+    const filename = `${kind}-groups.json`;
+    const groups = await readJson<Array<{ key: string; cardIds: string[] }>>(path, filename);
+    groups.push({ key: "arbitrary", cardIds: [] });
+    groups.sort((left, right) => left.key.localeCompare(right.key));
+    await writeJsonAndRehash(path, filename, groups);
+    const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
+    manifest[kind === "base" ? "baseGroupCount" : "pairGroupCount"] = groups.length;
+    await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
+
+    await expectIssues(path, [new RegExp(`${kind} groups do not exactly match`, "i")]);
+  });
+
+  it.each(["base", "pair"] as const)("rejects a renamed %s group key", async (kind) => {
+    const path = await createValidSnapshot();
+    const filename = `${kind}-groups.json`;
+    const groups = await readJson<Array<{ key: string; cardIds: string[] }>>(path, filename);
+    groups[0]!.key = `wrong-${kind}-key`;
+    groups.sort((left, right) => left.key.localeCompare(right.key));
+    await writeJsonAndRehash(path, filename, groups);
+
+    await expectIssues(path, [new RegExp(`${kind} groups do not exactly match`, "i")]);
+  });
+
+  it.each(["base", "pair"] as const)("rejects a missing complete %s group", async (kind) => {
+    const path = await createValidSnapshot();
+    const filename = `${kind}-groups.json`;
+    const groups = await readJson<Array<{ key: string; cardIds: string[] }>>(path, filename);
+    groups.shift();
+    await writeJsonAndRehash(path, filename, groups);
+    const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
+    manifest[kind === "base" ? "baseGroupCount" : "pairGroupCount"] = groups.length;
+    await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
+
+    await expectIssues(path, [new RegExp(`${kind} groups do not exactly match`, "i")]);
+  });
+
+  it.each(["base", "pair"] as const)("rejects wrong card membership in %s groups", async (kind) => {
+    const path = await createValidSnapshot();
+    const filename = `${kind}-groups.json`;
+    const groups = await readJson<Array<{ key: string; cardIds: string[] }>>(path, filename);
+    const source = groups.find((group) => group.cardIds.length > 0)!;
+    const target = groups.find((group) => group !== source && group.cardIds.length > 0)!;
+    const movedCard = source.cardIds.shift()!;
+    target.cardIds.push(movedCard);
+    target.cardIds.sort();
+    await writeJsonAndRehash(path, filename, groups);
+
+    await expectIssues(path, [new RegExp(`${kind} groups do not exactly match`, "i")]);
+  });
+
+  it("rejects missing and spurious normalized duplicate-name markers", async () => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    cards[0]!.name = "  Shared Name  ";
+    cards[1]!.name = "shared name";
+    cards[2]!.duplicateName = true;
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [
+      /duplicate-name marker.*AFTERIMAGE.*expected true/i,
+      /duplicate-name marker.*ALCHEMIZE.*expected true/i,
+      /duplicate-name marker.*APPARITION.*expected absent/i,
+    ]);
   });
 
   it("rejects a file hash mismatch", async () => {

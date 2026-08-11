@@ -35,7 +35,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   app.get("/health", async () => health);
   app.setNotFoundHandler(async (request, reply) => {
-    if (request.url === "/runtime" || request.url.startsWith("/runtime/")) {
+    if (isRuntimeNamespace(request.url)) {
       return reply.code(404).type("application/json").send({ error: "Not Found" });
     }
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -47,6 +47,28 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   await app.ready();
   return app;
+}
+
+function isRuntimeNamespace(rawUrl: string): boolean {
+  let pathname: string;
+  try {
+    pathname = new URL(rawUrl, "http://stsdle.invalid").pathname;
+  } catch {
+    return rawUrl === "/runtime" || rawUrl.startsWith("/runtime/") || rawUrl.startsWith("/runtime%");
+  }
+  const maxDecodePasses = pathname.length;
+  for (let pass = 0; pass < maxDecodePasses; pass += 1) {
+    const normalized = pathname.replaceAll("\\", "/");
+    if (normalized === "/runtime" || normalized.startsWith("/runtime/")) return true;
+    try {
+      const decoded = decodeURIComponent(pathname);
+      if (decoded === pathname) return false;
+      pathname = decoded;
+    } catch {
+      return pathname.startsWith("/runtime%");
+    }
+  }
+  return pathname === "/runtime" || pathname.startsWith("/runtime/") || pathname.startsWith("/runtime%");
 }
 
 async function readHealthManifest(path: string): Promise<HealthManifest> {

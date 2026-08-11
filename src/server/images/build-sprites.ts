@@ -2,12 +2,14 @@ import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
 import type { CardIdentity, SpriteMap } from "../../shared/domain.js";
+import { assertAllowedImageUrl, parseAllowedImageOrigins } from "./url-policy.js";
 
 export interface BuildSpritesOptions {
   cards: readonly CardIdentity[];
   outputDir: string;
   fetchImpl: typeof fetch;
   concurrency: number;
+  allowedArtworkOrigins: readonly string[];
   transformCellImpl?: TransformCell;
 }
 
@@ -28,12 +30,21 @@ const MAX_DOWNLOAD_CONCURRENCY = 4;
 
 export async function buildSprites(options: BuildSpritesOptions): Promise<SpriteMap> {
   validateConcurrency(options.concurrency);
+  const allowedArtworkOrigins = parseAllowedImageOrigins(
+    options.allowedArtworkOrigins,
+    "Artwork",
+  );
   const cards = [...options.cards].sort(compareCardIds);
-  validateCards(cards);
+  validateCards(cards, allowedArtworkOrigins);
   const columns = Math.ceil(Math.sqrt(cards.length));
   const rows = Math.ceil(cards.length / columns);
   validateAtlasDimensions(columns, rows);
-  const artwork = await downloadArtwork(cards, options.fetchImpl, options.concurrency);
+  const artwork = await downloadArtwork(
+    cards,
+    options.fetchImpl,
+    options.concurrency,
+    allowedArtworkOrigins,
+  );
   const spriteMap = createSpriteMap(cards, columns, rows);
   const transformCellImpl = options.transformCellImpl ?? transformCell;
   const encodedAtlases: Array<{ definition: AtlasDefinition; bytes: Buffer }> = [];
@@ -86,6 +97,7 @@ async function downloadArtwork(
   cards: readonly CardIdentity[],
   fetchImpl: typeof fetch,
   concurrency: number,
+  allowedArtworkOrigins: readonly string[],
 ): Promise<Map<string, Buffer>> {
   const requests = new Map<string, CardIdentity>();
   for (const card of cards) {
@@ -103,7 +115,17 @@ async function downloadArtwork(
       nextIndex += 1;
       if (!card) return;
       try {
-        const response = await fetchImpl(card.artUrl);
+        const response = await fetchImpl(card.artUrl, { redirect: "manual" });
+        if (
+          response.redirected ||
+          (response.status >= 300 && response.status < 400) ||
+          (response.url !== "" && response.url !== card.artUrl)
+        ) {
+          throw new Error(`Artwork redirect is not allowed for card ${card.id}`);
+        }
+        if (response.url !== "") {
+          assertAllowedImageUrl(response.url, allowedArtworkOrigins, `Artwork for card ${card.id}`);
+        }
         if (!response.ok) {
           throw new Error(`Failed to download artwork for card ${card.id}: HTTP ${response.status}`);
         }
@@ -150,7 +172,7 @@ function validateConcurrency(concurrency: number): void {
   }
 }
 
-function validateCards(cards: readonly CardIdentity[]): void {
+function validateCards(cards: readonly CardIdentity[], allowedArtworkOrigins: readonly string[]): void {
   if (cards.length === 0) throw new Error("At least one card is required to build sprites");
   const cardIds = new Set<string>();
   for (const card of cards) {
@@ -159,6 +181,7 @@ function validateCards(cards: readonly CardIdentity[]): void {
     if (card.artUrl.trim().length === 0) {
       throw new Error(`Missing artwork URL for card ${card.id}`);
     }
+    assertAllowedImageUrl(card.artUrl, allowedArtworkOrigins, `Artwork for card ${card.id}`);
   }
 }
 
