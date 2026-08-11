@@ -1,4 +1,5 @@
 import { mkdir, readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page, type Route } from "playwright";
@@ -19,36 +20,61 @@ export interface FallbackRendererOptions {
   fetchImpl?: typeof fetch;
   launchImpl?: () => Promise<Browser>;
   portraitBaseUrl?: string;
+  allowedPortraitOrigins?: readonly string[];
 }
 
 export class FallbackRenderer {
   readonly #fetchImpl: typeof fetch;
   readonly #launchImpl: () => Promise<Browser>;
-  readonly #portraitBaseUrl: string;
+  readonly #portraitBaseUrl: URL;
+  readonly #allowedPortraitOrigins: ReadonlySet<string>;
 
   constructor(options: FallbackRendererOptions = {}) {
     this.#fetchImpl = options.fetchImpl ?? fetch;
     this.#launchImpl = options.launchImpl ?? (() => chromium.launch({ headless: true }));
-    this.#portraitBaseUrl = options.portraitBaseUrl ?? DEFAULT_PORTRAIT_BASE_URL;
+    this.#portraitBaseUrl = parsePortraitBaseUrl(
+      options.portraitBaseUrl ?? DEFAULT_PORTRAIT_BASE_URL,
+    );
+    this.#allowedPortraitOrigins = new Set([
+      this.#portraitBaseUrl.origin,
+      ...(options.allowedPortraitOrigins ?? []).map(parseAllowedPortraitOrigin),
+    ]);
   }
 
   async render(raw: RawSpireCard, upgraded: boolean, destination: string): Promise<void> {
     const config = buildRendererConfig(raw, upgraded);
-    const browser = await this.#launchImpl();
+    const portraitUrl = validatePortraitUrl(
+      config.portrait_url,
+      raw.id,
+      this.#portraitBaseUrl,
+      this.#allowedPortraitOrigins,
+    );
+    let portraitResponse: Response;
+    try {
+      portraitResponse = await this.#fetchImpl(portraitUrl, { redirect: "error" });
+    } catch {
+      throw new Error(`Failed to fetch portrait for card ${raw.id}`);
+    }
+    if (
+      portraitResponse.redirected ||
+      (portraitResponse.status >= 300 && portraitResponse.status < 400)
+    ) {
+      throw new Error(`Portrait redirects are not allowed for card ${raw.id}`);
+    }
+    if (!portraitResponse.ok) {
+      throw new Error(
+        `Failed to fetch portrait for card ${raw.id}: HTTP ${portraitResponse.status}`,
+      );
+    }
+    const portraitBytes = Buffer.from(await portraitResponse.arrayBuffer());
+    if (portraitBytes.length === 0) throw new Error(`Empty portrait for card ${raw.id}`);
+    const portraitContentType = portraitResponse.headers.get("content-type") ?? "image/webp";
+    const rendererScript = await readFile(RENDERER_PATH, "utf8");
+
+    let browser: Browser | undefined;
     let page: Page | undefined;
     try {
-      const portraitUrl = new URL(config.portrait_url, this.#portraitBaseUrl).toString();
-      const portraitResponse = await this.#fetchImpl(portraitUrl);
-      if (!portraitResponse.ok) {
-        throw new Error(
-          `Failed to fetch portrait for card ${raw.id}: HTTP ${portraitResponse.status}`,
-        );
-      }
-      const portraitBytes = Buffer.from(await portraitResponse.arrayBuffer());
-      if (portraitBytes.length === 0) throw new Error(`Empty portrait for card ${raw.id}`);
-      const portraitContentType = portraitResponse.headers.get("content-type") ?? "image/webp";
-      const rendererScript = await readFile(RENDERER_PATH, "utf8");
-
+      browser = await this.#launchImpl();
       page = await browser.newPage();
       await page.route(`${ASSET_BASE_URL}**`, async (route) => fulfillVendorFile(
         route,
@@ -113,9 +139,77 @@ export class FallbackRenderer {
         .toFile(destination);
     } finally {
       await page?.close().catch(() => undefined);
-      await browser.close();
+      await browser?.close();
     }
   }
+}
+
+function parsePortraitBaseUrl(value: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Portrait source configuration is invalid");
+  }
+  if (!isSafePortraitUrl(url) || url.hash) {
+    throw new Error("Portrait source configuration is invalid");
+  }
+  return url;
+}
+
+function parseAllowedPortraitOrigin(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Allowed portrait origin configuration is invalid");
+  }
+  if (
+    !isSafePortraitUrl(url) ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("Allowed portrait origin configuration is invalid");
+  }
+  return url.origin;
+}
+
+function validatePortraitUrl(
+  value: string,
+  cardId: string,
+  baseUrl: URL,
+  allowedOrigins: ReadonlySet<string>,
+): string {
+  let url: URL;
+  try {
+    url = new URL(value, baseUrl);
+  } catch {
+    throw new Error(`Portrait source is not allowed for card ${cardId}`);
+  }
+  if (!isSafePortraitUrl(url) || url.hash || !allowedOrigins.has(url.origin)) {
+    throw new Error(`Portrait source is not allowed for card ${cardId}`);
+  }
+  return url.toString();
+}
+
+function isSafePortraitUrl(url: URL): boolean {
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.port !== ""
+  ) {
+    return false;
+  }
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    isIP(hostname) === 0 &&
+    hostname.includes(".") &&
+    hostname !== "localhost" &&
+    !hostname.endsWith(".localhost") &&
+    !hostname.endsWith(".local")
+  );
 }
 
 async function fulfillVendorFile(
