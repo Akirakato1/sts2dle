@@ -4,13 +4,25 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { SnapshotStore } from "../../../src/server/sync/snapshot-store.js";
 
-const [dataDir, releaseSignal, createStaging] = process.argv.slice(2);
+const [dataDir, releaseSignal, mode, leasedBuildId, leasedSnapshotPath] = process.argv.slice(2);
 
 async function main(): Promise<void> {
   if (!dataDir || !releaseSignal) throw new Error("missing worker input");
   const store = new SnapshotStore(dataDir);
+  if (mode === "lease") {
+    if (!leasedBuildId || !leasedSnapshotPath) throw new Error("missing lease worker input");
+    const lease = await store.acquireSnapshotLease({
+      buildId: leasedBuildId,
+      path: leasedSnapshotPath,
+    });
+    process.stdout.write("LEASE_ACQUIRED\n");
+    while (!await signalExists(releaseSignal)) await delay(5);
+    await lease.release();
+    process.stdout.write("LEASE_RELEASED\n");
+    return;
+  }
   await store.withSyncLock(async () => {
-    if (createStaging === "staging") {
+    if (mode === "staging") {
       await mkdir(join(dataDir, "snapshots", "abcdef123456-1234567890123.staging"), {
         recursive: true,
       });

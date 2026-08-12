@@ -76,7 +76,7 @@ export class FallbackRenderer {
         url: portraitUrl,
         fetchImpl: this.#fetchImpl,
         requestTimeoutMs: this.#requestTimeoutMs,
-        redirect: "error",
+        redirect: "manual",
         validateResponse(response) {
           if (
             response.redirected ||

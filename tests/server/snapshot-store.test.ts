@@ -1,9 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SnapshotStore } from "../../src/server/sync/snapshot-store.js";
+import {
+  SnapshotStore,
+  type ActiveSnapshot,
+} from "../../src/server/sync/snapshot-store.js";
 
 const temporaryDirectories: string[] = [];
 const childProcesses: ChildProcess[] = [];
@@ -12,6 +15,15 @@ async function createTemporaryDataDir(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "stsdle-snapshot-store-"));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+async function activateEmptySnapshot(
+  store: SnapshotStore,
+  revision: string,
+): Promise<ActiveSnapshot> {
+  const staging = await store.createStaging(revision);
+  const path = await staging.activate();
+  return { buildId: staging.buildId, path };
 }
 
 afterEach(async () => {
@@ -113,6 +125,78 @@ async function waitForChildClose(child: ChildProcess): Promise<void> {
 }
 
 describe("SnapshotStore", () => {
+  it("releases a slow successful acquisition without entering after its monotonic deadline", async () => {
+    const dataDir = await createTemporaryDataDir();
+    let monotonicTime = 0;
+    let entered = false;
+    const store = new SnapshotStore(dataDir, {
+      lockTimeoutMs: 30,
+      lockOperations: {
+        monotonicNow: () => monotonicTime,
+        acquireDirectory: async (path) => {
+          await mkdir(path);
+          monotonicTime = 31;
+        },
+      },
+    });
+
+    await expect(store.withSyncLock(async () => { entered = true; })).rejects.toThrow(
+      "Timed out after 30ms waiting for snapshot sync lock",
+    );
+    expect(entered).toBe(false);
+    await expect(readdir(dataDir)).resolves.not.toContain(".stsdle-sync.lock");
+  });
+
+  it("does not attempt acquisition after its monotonic deadline", async () => {
+    const dataDir = await createTemporaryDataDir();
+    let clockReads = 0;
+    let acquisitionAttempts = 0;
+    let entered = false;
+    const store = new SnapshotStore(dataDir, {
+      lockTimeoutMs: 30,
+      lockOperations: {
+        monotonicNow: () => clockReads++ === 0 ? 0 : 31,
+        acquireDirectory: async () => { acquisitionAttempts += 1; },
+      },
+    });
+
+    await expect(store.withSyncLock(async () => { entered = true; })).rejects.toThrow(
+      "Timed out after 30ms waiting for snapshot sync lock",
+    );
+    expect(acquisitionAttempts).toBe(0);
+    expect(entered).toBe(false);
+    await expect(readdir(dataDir)).resolves.not.toContain(".stsdle-sync.lock");
+  });
+
+  it("does not attempt acquisition when quarantine inspection crosses the monotonic deadline", async () => {
+    const dataDir = await createTemporaryDataDir();
+    let monotonicTime = 0;
+    let acquisitionAttempts = 0;
+    let entered = false;
+    const lockOperations = {
+      monotonicNow: () => monotonicTime,
+      inspectQuarantine: async () => {
+        monotonicTime = 31;
+        return false;
+      },
+      acquireDirectory: async (path: string) => {
+        acquisitionAttempts += 1;
+        await mkdir(path);
+      },
+    };
+    const store = new SnapshotStore(dataDir, {
+      lockTimeoutMs: 30,
+      lockOperations,
+    });
+
+    await expect(store.withSyncLock(async () => { entered = true; })).rejects.toThrow(
+      "Timed out after 30ms waiting for snapshot sync lock",
+    );
+    expect(acquisitionAttempts).toBe(0);
+    expect(entered).toBe(false);
+    await expect(readdir(dataDir)).resolves.not.toContain(".stsdle-sync.lock");
+  });
+
   it("serializes the same data directory with a real child-process lock holder", async () => {
     const dataDir = await createTemporaryDataDir();
     const releaseSignal = join(dataDir, "release.signal");
@@ -198,6 +282,114 @@ describe("SnapshotStore", () => {
     } finally {
       clock.mockRestore();
     }
+  });
+
+  it("reclaims a confirmed-dead snapshot lease before pruning its old snapshot", async () => {
+    const dataDir = await createTemporaryDataDir();
+    const store = new SnapshotStore(dataDir);
+    const first = await activateEmptySnapshot(store, "first");
+    const lease = await store.acquireSnapshotLease(first);
+    const leaseDirectory = join(dataDir, ".stsdle-snapshot-leases");
+    const [leaseFilename] = await readdir(leaseDirectory);
+    const leasePath = join(leaseDirectory, leaseFilename!);
+    const owner = JSON.parse(await readFile(leasePath, "utf8")) as { processId: number };
+    const deadOwner = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    childProcesses.push(deadOwner);
+    await waitForChildClose(deadOwner);
+    owner.processId = deadOwner.pid!;
+    await writeFile(leasePath, `${JSON.stringify(owner)}\n`);
+    await activateEmptySnapshot(store, "second");
+    const third = await activateEmptySnapshot(store, "third");
+
+    await store.retainValidatedSnapshots(third, async () => true);
+
+    await expect(readdir(join(dataDir, "snapshots"))).resolves.not.toContain(first.buildId);
+    await expect(readdir(leaseDirectory)).resolves.toEqual([]);
+    await lease.release();
+  });
+
+  it("preserves a snapshot leased by a real child process until that process releases it", async () => {
+    const dataDir = await createTemporaryDataDir();
+    const store = new SnapshotStore(dataDir);
+    const first = await activateEmptySnapshot(store, "first");
+    const releaseSignal = join(dataDir, "release-lease.signal");
+    const workerPath = resolve("tests/server/fixtures/snapshot-lock-worker.ts");
+    const child = spawn(process.execPath, [
+      "--import", "tsx", workerPath, dataDir, releaseSignal, "lease", first.buildId, first.path,
+    ], {
+      cwd: resolve("."),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    childProcesses.push(child);
+    const waitForMarker = observeOutput(child);
+    await waitForMarker("LEASE_ACQUIRED");
+    await activateEmptySnapshot(store, "second");
+    const third = await activateEmptySnapshot(store, "third");
+
+    await store.retainValidatedSnapshots(third, async () => true);
+    await expect(readdir(join(dataDir, "snapshots"))).resolves.toContain(first.buildId);
+
+    await writeFile(releaseSignal, "release");
+    await waitForMarker("LEASE_RELEASED");
+    await waitForChildClose(child);
+    expect(child.exitCode).toBe(0);
+    const fourth = await activateEmptySnapshot(store, "fourth");
+    await store.retainValidatedSnapshots(fourth, async () => true);
+    await expect(readdir(join(dataDir, "snapshots"))).resolves.not.toContain(first.buildId);
+  });
+
+  it("fails closed without writing through an escaped snapshot-lease junction", async () => {
+    const dataDir = await createTemporaryDataDir();
+    const outsideDir = await mkdtemp(join(tmpdir(), "stsdle-lease-root-outside-"));
+    temporaryDirectories.push(outsideDir);
+    const store = new SnapshotStore(dataDir);
+    const snapshot = await activateEmptySnapshot(store, "leased");
+    await symlink(outsideDir, join(dataDir, ".stsdle-snapshot-leases"), "junction");
+
+    await expect(store.acquireSnapshotLease(snapshot)).rejects.toThrow(
+      "Snapshot lease directory escapes the configured data directory",
+    );
+    await expect(readdir(outsideDir)).resolves.toEqual([]);
+  });
+
+  it("fails closed without releasing through a replaced snapshot-lease junction", async () => {
+    const dataDir = await createTemporaryDataDir();
+    const outsideDir = await mkdtemp(join(tmpdir(), "stsdle-lease-release-outside-"));
+    temporaryDirectories.push(outsideDir);
+    const store = new SnapshotStore(dataDir);
+    const snapshot = await activateEmptySnapshot(store, "leased");
+    const lease = await store.acquireSnapshotLease(snapshot);
+    const leaseRoot = join(dataDir, ".stsdle-snapshot-leases");
+    const heldLeaseRoot = join(dataDir, ".stsdle-snapshot-leases-held");
+    await rename(leaseRoot, heldLeaseRoot);
+    await symlink(outsideDir, leaseRoot, "junction");
+
+    await expect(lease.release()).rejects.toThrow(
+      "Snapshot lease directory escapes the configured data directory",
+    );
+    await expect(readdir(outsideDir)).resolves.toEqual([]);
+    expect((await readdir(heldLeaseRoot)).some((entry) => entry.endsWith(".json"))).toBe(true);
+  });
+
+  it("preserves a snapshot named by an ambiguous malformed lease entry", async () => {
+    const dataDir = await createTemporaryDataDir();
+    const store = new SnapshotStore(dataDir);
+    const first = await activateEmptySnapshot(store, "first");
+    await activateEmptySnapshot(store, "second");
+    const third = await activateEmptySnapshot(store, "third");
+    const leaseRoot = join(dataDir, ".stsdle-snapshot-leases");
+    await mkdir(leaseRoot, { recursive: true });
+    const ambiguousLease = `${first.buildId}.corrupt-owner.json`;
+    await writeFile(join(leaseRoot, ambiguousLease), "not-json");
+
+    await store.retainValidatedSnapshots(third, async () => true);
+
+    await expect(readdir(join(dataDir, "snapshots"))).resolves.toContain(first.buildId);
+    await expect(readdir(leaseRoot)).resolves.toContain(ambiguousLease);
   });
 
   it("keeps an existing active build when a later staging build is aborted", async () => {

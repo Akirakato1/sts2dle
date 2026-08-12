@@ -1,11 +1,14 @@
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile, mkdir } from "node:fs/promises";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/server/app.js";
 import { loadConfig } from "../../src/server/config.js";
 import { logStartupFailure, main } from "../../src/server/main.js";
 import type { ActivatedSnapshot } from "../../src/server/sync/build-snapshot.js";
+import { SnapshotStore } from "../../src/server/sync/snapshot-store.js";
 import type { SnapshotAcceptanceReport } from "../../src/server/sync/validate-snapshot.js";
 
 const temporaryDirectories: string[] = [];
@@ -65,6 +68,20 @@ function active(path: string): ActivatedSnapshot {
     },
     report,
   };
+}
+
+async function unusedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const port = (server.address() as AddressInfo).port;
+  await new Promise<void>((resolveClose, rejectClose) => server.close((error) => {
+    if (error) rejectClose(error);
+    else resolveClose();
+  }));
+  return port;
 }
 
 describe("createApp", () => {
@@ -146,6 +163,62 @@ describe("createApp", () => {
 });
 
 describe("main", () => {
+  it("keeps a running server snapshot through two later EADDRINUSE startups", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stsdle-live-snapshot-"));
+    temporaryDirectories.push(root);
+    const dataDir = join(root, "data");
+    const clientRoot = join(root, "client");
+    await mkdir(clientRoot, { recursive: true });
+    await writeFile(join(clientRoot, "index.html"), "<!doctype html><title>STS-dle</title>");
+    const port = await unusedPort();
+    const buildIds: string[] = [];
+
+    const start = async (label: string) => {
+      const store = new SnapshotStore(dataDir);
+      return main({
+        env: {
+          STSDLE_DATA_DIR: dataDir,
+          STSDLE_HOST: "127.0.0.1",
+          STSDLE_PORT: String(port),
+        },
+        clientRoot,
+        store,
+        sync: async () => store.withSyncLock(async () => {
+          const staging = await store.createStaging(label.repeat(64));
+          await Promise.all([
+            writeFile(join(staging.path, "manifest.json"), JSON.stringify({
+              sourceRevision: label.repeat(64),
+              generatedAt: "2026-08-12T00:00:00.000Z",
+            })),
+            writeFile(join(staging.path, "probe.txt"), label),
+          ]);
+          const path = await staging.activate();
+          const activated = { ...active(path), buildId: staging.buildId };
+          buildIds.push(staging.buildId);
+          await store.retainValidatedSnapshots(activated, async () => true);
+          return activated;
+        }),
+        createApp: async (options) => createApp({ ...options, logger: false }),
+      });
+    };
+
+    const running = await start("a") as FastifyInstance;
+    try {
+      await expect(start("b")).rejects.toMatchObject({ code: "EADDRINUSE" });
+      await expect(start("c")).rejects.toMatchObject({ code: "EADDRINUSE" });
+
+      const leases = await readdir(join(dataDir, ".stsdle-snapshot-leases"));
+      expect(leases.filter((entry) => entry.endsWith(".json"))).toHaveLength(1);
+      const response = await fetch(`http://127.0.0.1:${port}/runtime/probe.txt`);
+      expect(response.status).toBe(200);
+      await expect(response.text()).resolves.toBe("a");
+      await expect(readdir(join(dataDir, "snapshots"))).resolves.toContain(buildIds[0]);
+    } finally {
+      await running.close();
+    }
+    await expect(readdir(join(dataDir, ".stsdle-snapshot-leases"))).resolves.toEqual([]);
+  });
+
   it("logs only a fixed startup failure category without feed-derived error text", () => {
     const error = vi.fn();
     logStartupFailure(new Error("SECRET_MARKER_CARD_ID_MAD_SCIENCE"), { error });

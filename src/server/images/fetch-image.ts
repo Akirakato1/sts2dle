@@ -30,6 +30,8 @@ export async function fetchImageWithRetry(options: FetchImageOptions): Promise<F
   validateTimeout(options.requestTimeoutMs);
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
+    let response: Response | undefined;
+    let completed = false;
     let retry = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
@@ -39,7 +41,7 @@ export async function fetchImageWithRetry(options: FetchImageOptions): Promise<F
       }, options.requestTimeoutMs);
     });
     try {
-      const response = await Promise.race([
+      response = await Promise.race([
         options.fetchImpl(options.url, {
           redirect: options.redirect,
           signal: controller.signal,
@@ -57,6 +59,7 @@ export async function fetchImageWithRetry(options: FetchImageOptions): Promise<F
         if (bytes.length === 0) {
           throw new ImageFetchRejectedError(options.emptyError());
         }
+        completed = true;
         return { bytes, contentType: response.headers.get("content-type") };
       }
     } catch (error: unknown) {
@@ -65,7 +68,16 @@ export async function fetchImageWithRetry(options: FetchImageOptions): Promise<F
       retry = true;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
-      if (retry && !controller.signal.aborted) controller.abort();
+      if (!completed) {
+        if (!controller.signal.aborted) controller.abort();
+        // Aborting closes a real fetch immediately; cancellation is advisory and
+        // must not let a hostile/stuck stream keep startup alive forever.
+        try {
+          void response?.body?.cancel().catch(() => undefined);
+        } catch {
+          // The request already failed and its controller is aborted.
+        }
+      }
     }
     await delay(RETRY_DELAY_MS * attempt);
   }

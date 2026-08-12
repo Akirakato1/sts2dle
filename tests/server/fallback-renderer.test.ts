@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser } from "playwright";
@@ -239,7 +241,7 @@ describe("FallbackRenderer", () => {
     const renderer = new FallbackRenderer({
       fetchImpl: async (_input, init) => {
         requests += 1;
-        expect(init?.redirect).toBe("error");
+        expect(init?.redirect).toBe("manual");
         return new Response(null, {
           status: 302,
           headers: { location: "https://127.0.0.1/latest/meta-data" },
@@ -256,6 +258,39 @@ describe("FallbackRenderer", () => {
       join(tmpdir(), "unused-redirect.webp"),
     )).rejects.toThrow(/portrait redirects are not allowed.*MAD_SCIENCE/i);
     expect(requests).toBe(1);
+  });
+
+  it("classifies a real fetch redirect response once without following or retrying it", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(302, { location: "/private.webp" });
+      response.end();
+    });
+    await new Promise<void>((resolveListen, rejectListen) => {
+      server.once("error", rejectListen);
+      server.listen(0, "127.0.0.1", resolveListen);
+    });
+    const address = server.address() as AddressInfo;
+    const redirectUrl = `http://127.0.0.1:${address.port}/portrait.webp`;
+    const renderer = new FallbackRenderer({
+      fetchImpl: async (_input, init) => fetch(redirectUrl, init),
+      launchImpl: async () => { throw new Error("Unexpected browser launch"); },
+    });
+
+    try {
+      await expect(renderer.render(
+        madScienceWithPortrait("https://spire-codex.com/static/card.webp"),
+        false,
+        join(tmpdir(), "unused-real-redirect.webp"),
+      )).rejects.toThrow(/portrait redirects are not allowed.*MAD_SCIENCE/i);
+      expect(requests).toBe(1);
+    } finally {
+      await new Promise<void>((resolveClose, rejectClose) => server.close((error) => {
+        if (error) rejectClose(error);
+        else resolveClose();
+      }));
+    }
   });
 
   it("does not retry a response whose effective portrait URL changed", async () => {

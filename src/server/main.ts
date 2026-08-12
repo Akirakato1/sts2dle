@@ -9,7 +9,11 @@ import {
   type ActivatedSnapshot,
   type BuildSnapshotDependencies,
 } from "./sync/build-snapshot.js";
-import { SnapshotStore, type ActiveSnapshot } from "./sync/snapshot-store.js";
+import {
+  SnapshotStore,
+  type ActiveSnapshot,
+  type SnapshotLease,
+} from "./sync/snapshot-store.js";
 import { loadActivatedSnapshot } from "./sync/validate-snapshot.js";
 import type { SnapshotValidationOptions } from "./sync/validate-snapshot.js";
 
@@ -17,10 +21,13 @@ type Environment = Record<string, string | undefined>;
 
 export interface ActiveSnapshotStore {
   loadActive(): Promise<ActiveSnapshot | null>;
+  acquireSnapshotLease?(snapshot: ActiveSnapshot): Promise<SnapshotLease>;
 }
 
 export interface MainApp {
   listen(options: { host: string; port: number }): Promise<unknown>;
+  addHook?(name: "onClose", hook: () => Promise<void>): unknown;
+  close?(): Promise<unknown>;
   log?: {
     info(bindings: Record<string, unknown>, message: string): void;
     warn(bindings: Record<string, unknown>, message: string): void;
@@ -65,30 +72,42 @@ export async function main(dependencies: MainDependencies = {}): Promise<MainApp
     }
   }
 
-  const appOptions: CreateAppOptions = { config, snapshotRoot: active.path };
-  if (dependencies.clientRoot !== undefined) appOptions.clientRoot = dependencies.clientRoot;
-  const app = await makeApp(appOptions);
-  if (refreshErrorName !== undefined) {
-    app.log?.warn(
-      { errorName: refreshErrorName },
-      "Snapshot refresh failed; serving validated prior snapshot",
-    );
+  const lease = await store.acquireSnapshotLease?.({ buildId: active.buildId, path: active.path });
+  let app: MainApp | undefined;
+  try {
+    const appOptions: CreateAppOptions = { config, snapshotRoot: active.path };
+    if (dependencies.clientRoot !== undefined) appOptions.clientRoot = dependencies.clientRoot;
+    app = await makeApp(appOptions);
+    if (lease) {
+      if (!app.addHook) throw new Error("Application lifecycle hooks are unavailable");
+      app.addHook("onClose", async () => lease.release());
+    }
+    if (refreshErrorName !== undefined) {
+      app.log?.warn(
+        { errorName: refreshErrorName },
+        "Snapshot refresh failed; serving validated prior snapshot",
+      );
+    }
+    app.log?.info({
+      sourceRevision: active.manifest.sourceRevision,
+      sourceLastModified: active.manifest.sourceLastModified,
+      cardCount: active.report.cardCount,
+      upgradeCount: active.report.upgradeCount,
+      baseGroupCount: active.report.baseGroupCount,
+      pairGroupCount: active.report.pairGroupCount,
+      baseGroupHistogram: active.report.baseGroupHistogram,
+      pairGroupHistogram: active.report.pairGroupHistogram,
+      candidateSpriteBytes: active.report.candidateSprite.bytes,
+      guessSpriteBytes: active.report.guessSprite.bytes,
+      fallbackCardCount: active.report.fallbackCardIds.length,
+    }, "Snapshot startup acceptance passed");
+    await app.listen({ host: config.host, port: config.port });
+    return app;
+  } catch (error: unknown) {
+    await lease?.release();
+    await app?.close?.().catch(() => undefined);
+    throw error;
   }
-  app.log?.info({
-    sourceRevision: active.manifest.sourceRevision,
-    sourceLastModified: active.manifest.sourceLastModified,
-    cardCount: active.report.cardCount,
-    upgradeCount: active.report.upgradeCount,
-    baseGroupCount: active.report.baseGroupCount,
-    pairGroupCount: active.report.pairGroupCount,
-    baseGroupHistogram: active.report.baseGroupHistogram,
-    pairGroupHistogram: active.report.pairGroupHistogram,
-    candidateSpriteBytes: active.report.candidateSprite.bytes,
-    guessSpriteBytes: active.report.guessSprite.bytes,
-    fallbackCardCount: active.report.fallbackCardIds.length,
-  }, "Snapshot startup acceptance passed");
-  await app.listen({ host: config.host, port: config.port });
-  return app;
 }
 
 function validationOptions(config: ServerConfig): SnapshotValidationOptions {

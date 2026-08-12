@@ -549,4 +549,60 @@ describe("buildSprites", () => {
     })).rejects.toThrow(/download artwork.*CARD_A.*404/i);
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { label: "terminal HTTP", status: 404 },
+    { label: "redirect policy", status: 302 },
+  ])("aborts and cancels an unread streaming $label response", async ({ status }) => {
+    const outputDir = await createOutputDirectory();
+    const signals: AbortSignal[] = [];
+    let canceledBodies = 0;
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array([1])); },
+        cancel() { canceledBodies += 1; },
+      }), {
+        status,
+        headers: status === 302 ? { location: "https://unapproved.example/private.webp" } : {},
+      });
+    });
+
+    await expect(buildTestSprites({
+      cards: [card("CARD_A")],
+      outputDir,
+      fetchImpl,
+      concurrency: 1,
+    })).rejects.toThrow();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(canceledBodies).toBe(1);
+  });
+
+  it("does not wait forever for terminal response cancellation", async () => {
+    const outputDir = await createOutputDirectory();
+    let cancellationStarted = false;
+    const fetchImpl = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([1])); },
+      cancel() {
+        cancellationStarted = true;
+        return new Promise<void>(() => undefined);
+      },
+    }), { status: 404 }));
+
+    const outcome = await Promise.race([
+      buildTestSprites({
+        cards: [card("CARD_A")],
+        outputDir,
+        fetchImpl,
+        concurrency: 1,
+      }).then(() => "resolved", () => "rejected"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("timed-out"), 100)),
+    ]);
+
+    expect(outcome).toBe("rejected");
+    expect(cancellationStarted).toBe(true);
+  });
 });
