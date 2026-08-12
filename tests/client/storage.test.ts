@@ -1,18 +1,26 @@
 import { describe, expect, test } from "vitest";
 
+import { createDefaultAssistance } from "../../src/client/game/assistance.js";
+import { createRoundState, type RoundState } from "../../src/client/game/game-reducer.js";
 import {
+  CURRENT_ROUND_KEYS,
+  CURRENT_ROUND_VERSION,
   DAILY_RULESET_VERSION,
   DAILY_STATS_KEY,
-  dailyStorageKey,
-  loadDailyRound,
+  HARDCORE_DAILY_RULESET_VERSION,
+  HARDCORE_DAILY_STATS_KEY,
+  PRACTICE_RULESET_VERSION,
+  loadCurrentRound,
   loadDailyStats,
   msUntilNextUtcDay,
   recordDailyCompletion,
-  saveDailyRound,
+  removeLegacyCurrentRoundKeys,
+  saveCurrentRound,
+  type RoundStorageIdentity,
 } from "../../src/client/game/storage.js";
 import { compareGuess } from "../../src/shared/comparison.js";
-import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
-import type { RoundState } from "../../src/client/game/game-reducer.js";
+import type { CardIdentity, FeatureVector, PairGroup } from "../../src/shared/domain.js";
+import { pairKey } from "../../src/shared/feature-keys.js";
 
 class MemoryStorage implements Storage {
   readonly values = new Map<string, string>();
@@ -24,228 +32,205 @@ class MemoryStorage implements Storage {
   setItem(key: string, value: string) { this.values.set(key, value); }
 }
 
-const base = {
-  cardClass: "Silent" as const,
-  cardType: "Skill" as const,
-  mana: 1,
-  rarity: "Rare" as const,
-  eternal: false,
-  ethereal: false,
-  exhaust: false,
-  innate: false,
-  retain: false,
-  sly: false,
+const base: FeatureVector = {
+  cardClass: "Silent", cardType: "Skill", mana: 1, rarity: "Rare",
+  eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false,
 };
 
 function card(id: string, vector: FeatureVector = base): CardIdentity {
   return {
-    id,
-    name: `Name ${id}`,
-    hasUpgrade: false,
-    artUrl: `https://art.example/${id}.png`,
-    baseCardUrl: `https://cards.example/${id}.png`,
-    upgradedCardUrl: null,
-    base: vector,
-    upgraded: vector,
+    id, name: `Name ${id}`, hasUpgrade: false, artUrl: `https://art.example/${id}.png`,
+    baseCardUrl: null, upgradedCardUrl: null, base: vector, upgraded: vector,
   };
 }
 
 const answerCard = card("ANSWER");
-const guessCard = card("GUESS", {
-  ...base,
-  cardClass: "Ironclad",
-  cardType: "Attack",
-  mana: 2,
-  rarity: "Common",
-  eternal: true,
-});
-const results = compareGuess(guessCard, answerCard);
-const laterGuessCard = card("LATER_GUESS", {
-  ...base,
-  cardClass: "Defect",
-  cardType: "Power",
-  mana: 3,
-  rarity: "Uncommon",
-  ethereal: true,
-});
-const laterResults = compareGuess(laterGuessCard, answerCard);
-const cardsById = new Map([
-  [answerCard.id, answerCard],
-  [guessCard.id, guessCard],
-  [laterGuessCard.id, laterGuessCard],
-]);
-const identity = { sourceRevision: "abc", utcDate: "2026-08-12", ruleset: "v3" };
-const round: RoundState = {
-  mode: "daily",
-  answer: {
-    baseGroupKey: "base-key",
-    selectedCardId: answerCard.id,
-    pairKey: "pair-key",
-    acceptedCardIds: [answerCard.id],
-  },
-  guesses: [{ cardId: guessCard.id, results }],
-  status: "playing",
-  error: "transient UI error",
+const equivalentCard = card("EQUIVALENT");
+const guessCard = card("GUESS", { ...base, cardClass: "Ironclad", cardType: "Attack", mana: 2, rarity: "Common", eternal: true });
+const laterGuessCard = card("LATER", { ...base, cardClass: "Defect", cardType: "Power", mana: 3, rarity: "Uncommon", ethereal: true });
+const cardsById = new Map([answerCard, equivalentCard, guessCard, laterGuessCard].map((value) => [value.id, value]));
+const answer = {
+  baseGroupKey: "base-key",
+  selectedCardId: answerCard.id,
+  pairKey: pairKey(answerCard),
+  acceptedCardIds: [answerCard.id, equivalentCard.id],
+};
+const pairGroupsByKey = new Map<string, PairGroup>([[answer.pairKey, { key: answer.pairKey, cardIds: answer.acceptedCardIds }]]);
+const identities: Record<RoundState["mode"], RoundStorageIdentity> = {
+  daily: { mode: "daily", sourceRevision: "abc", ruleset: DAILY_RULESET_VERSION, utcDate: "2026-08-12" },
+  "hardcore-daily": { mode: "hardcore-daily", sourceRevision: "abc", ruleset: HARDCORE_DAILY_RULESET_VERSION, utcDate: "2026-08-12" },
+  practice: { mode: "practice", sourceRevision: "abc", ruleset: PRACTICE_RULESET_VERSION, utcDate: null },
 };
 
-describe("Daily round storage", () => {
-  test("uses ruleset, source revision, and UTC date in the Daily key", () => {
-    expect(dailyStorageKey(identity)).toBe("stsdle:daily:v3:abc:2026-08-12");
+function round(mode: RoundState["mode"], status: RoundState["status"] = "playing"): RoundState {
+  const hardcore = mode === "hardcore-daily";
+  const wrongGuess = { cardId: guessCard.id, results: compareGuess(guessCard, answerCard) };
+  const guesses = status === "won"
+    ? [wrongGuess, { cardId: equivalentCard.id, results: compareGuess(equivalentCard, answerCard) }]
+    : [wrongGuess];
+  const identity = identities[mode];
+  const roundId = mode === "practice"
+    ? "practice:123e4567-e89b-42d3-a456-426614174000"
+    : `${mode}:${identity.utcDate}:${identity.sourceRevision}`;
+  const assistance = hardcore ? null : {
+    ...createDefaultAssistance(),
+    reveal: { feature: "mana" as const },
+    filter: { guessIndex: 0, cardId: guessCard.id, feature: "retain" as const },
+    negation: { guessIndex: 0, cardId: guessCard.id, feature: "mana" as const },
+    visibility: { neutral: true, green: false, red: true },
+  };
+  return createRoundState({
+    mode,
+    hardcore,
+    roundId,
+    hintSeed: mode === "practice" ? "123e4567-e89b-42d3-a456-426614174000" : roundId,
+    answer,
+    guesses,
+    status,
+    terminalGuessCount: status === "playing" ? null : guesses.length,
+    assistance,
+  });
+}
+
+function stored(storage: MemoryStorage, mode: RoundState["mode"]): Record<string, any> {
+  return JSON.parse(storage.getItem(CURRENT_ROUND_KEYS[mode])!);
+}
+
+function assertRejected(mode: RoundState["mode"], mutate: (value: Record<string, any>) => void, source = round(mode)): void {
+  const storage = new MemoryStorage();
+  const key = CURRENT_ROUND_KEYS[mode];
+  storage.setItem("unrelated:key", "keep");
+  storage.setItem(DAILY_STATS_KEY, "normal stats");
+  storage.setItem(HARDCORE_DAILY_STATS_KEY, "hardcore stats");
+  saveCurrentRound(storage, identities[mode], source);
+  const value = stored(storage, mode);
+  mutate(value);
+  storage.setItem(key, JSON.stringify(value));
+  expect(loadCurrentRound(storage, identities[mode], cardsById, pairGroupsByKey, answer)).toBeNull();
+  expect(storage.getItem(key)).toBeNull();
+  expect(storage.getItem("unrelated:key")).toBe("keep");
+  expect(storage.getItem(DAILY_STATS_KEY)).toBe("normal stats");
+  expect(storage.getItem(HARDCORE_DAILY_STATS_KEY)).toBe("hardcore stats");
+}
+
+describe("current round storage", () => {
+  test("uses three fixed owned keys and schema version 4", () => {
+    expect(CURRENT_ROUND_KEYS).toEqual({
+      daily: "stsdle:round:daily:v1",
+      "hardcore-daily": "stsdle:round:hardcore-daily:v1",
+      practice: "stsdle:round:practice:v1",
+    });
+    expect(CURRENT_ROUND_VERSION).toBe(4);
   });
 
-  test("round-trips only serializable Daily answer IDs, guesses/results, and status", () => {
+  test.each(["daily", "hardcore-daily", "practice"] as const)("round-trips complete %s state", (mode) => {
     const storage = new MemoryStorage();
-    saveDailyRound(storage, identity, round);
+    const source = round(mode, mode === "practice" ? "forfeited" : "won");
+    saveCurrentRound(storage, identities[mode], source);
+    expect(loadCurrentRound(storage, identities[mode], cardsById, pairGroupsByKey, answer)).toEqual(source);
+    expect(storage.getItem(CURRENT_ROUND_KEYS[mode])).not.toContain("error");
+  });
 
-    const raw = storage.getItem(dailyStorageKey(identity));
-    expect(DAILY_RULESET_VERSION).toBe("v3");
-    expect(JSON.parse(raw!).version).toBe(3);
-    expect(raw).not.toContain("transient UI error");
-    expect(raw).not.toContain("https://cards.example");
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toEqual({
-      ...round,
-      error: null,
+  test("round-trips a won assisted Practice round", () => {
+    const storage = new MemoryStorage();
+    const source = round("practice", "won");
+    saveCurrentRound(storage, identities.practice, source);
+    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer)).toEqual(source);
+  });
+
+  test("rejects strict envelope identity and mode inconsistencies", () => {
+    assertRejected("daily", (value) => { value.version = 3; });
+    assertRejected("daily", (value) => { value.sourceRevision = "other"; });
+    assertRejected("daily", (value) => { value.ruleset = "other"; });
+    assertRejected("daily", (value) => { value.utcDate = "2026-08-13"; });
+    assertRejected("daily", (value) => { value.extra = true; });
+    assertRejected("daily", (value) => { value.round.mode = "practice"; });
+    assertRejected("daily", (value) => { value.round.hardcore = true; });
+    assertRejected("hardcore-daily", (value) => { value.round.hardcore = false; });
+    assertRejected("practice", (value) => { value.round.roundId = "practice:not-a-uuid"; });
+    assertRejected("practice", (value) => { value.round.hintSeed = "different"; });
+  });
+
+  test("rejects tampered answer identity and pair membership", () => {
+    assertRejected("daily", (value) => { value.round.answer.selectedCardId = guessCard.id; });
+    assertRejected("daily", (value) => { value.round.answer.pairKey = "wrong"; });
+    assertRejected("daily", (value) => { value.round.answer.acceptedCardIds = [answerCard.id]; });
+    assertRejected("daily", (value) => { value.round.answer.extra = true; });
+  });
+
+  test("rejects tampered canonical results, duplicate guesses, and post-win guesses", () => {
+    assertRejected("daily", (value) => { value.round.guesses[0].results[0].displayValue = "tampered"; });
+    assertRejected("daily", (value) => { value.round.guesses[0].results[0].color = "green"; });
+    assertRejected("daily", (value) => { value.round.guesses[0].results.reverse(); });
+    assertRejected("daily", (value) => { value.round.guesses[0].results[0].extra = true; });
+    assertRejected("daily", (value) => { value.round.guesses.push(value.round.guesses[0]); });
+    assertRejected("daily", (value) => {
+      value.round.guesses.push({ cardId: answerCard.id, results: compareGuess(answerCard, answerCard) });
+      value.round.guesses.push({ cardId: laterGuessCard.id, results: compareGuess(laterGuessCard, answerCard) });
+      value.round.status = "won";
+      value.round.terminalGuessCount = 3;
     });
   });
 
-  test("serializes and restores guesses in chronological order", () => {
-    const storage = new MemoryStorage();
-    const chronologicalRound = {
-      ...round,
-      guesses: [
-        { cardId: guessCard.id, results },
-        { cardId: laterGuessCard.id, results: laterResults },
-      ],
-    };
-    saveDailyRound(storage, identity, chronologicalRound);
-
-    expect(JSON.parse(storage.getItem(dailyStorageKey(identity))!).guesses.map((guess: { cardId: string }) => guess.cardId)).toEqual([
-      "GUESS",
-      "LATER_GUESS",
-    ]);
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)?.guesses.map((guess) => guess.cardId)).toEqual([
-      "GUESS",
-      "LATER_GUESS",
-    ]);
+  test("rejects status and terminal marker disagreement, including post-forfeit guesses", () => {
+    assertRejected("daily", (value) => { value.round.status = "won"; value.round.terminalGuessCount = 1; });
+    assertRejected("daily", (value) => { value.round.terminalGuessCount = 1; });
+    assertRejected("practice", (value) => { value.round.status = "forfeited"; value.round.terminalGuessCount = 0; });
+    assertRejected("practice", (value) => {
+      value.round.guesses.push({ cardId: laterGuessCard.id, results: compareGuess(laterGuessCard, answerCard) });
+    }, round("practice", "forfeited"));
+    assertRejected("daily", (value) => { value.round.status = "forfeited"; value.round.terminalGuessCount = 1; });
   });
 
-  test("rejects rounds with an old version or a non-canonical result shape", () => {
-    const storage = new MemoryStorage();
-    const key = dailyStorageKey(identity);
-    saveDailyRound(storage, identity, round);
-    const validRound = JSON.parse(storage.getItem(key)!);
-
-    for (const invalidRound of [
-      { ...validRound, version: 2 },
-      { ...validRound, guesses: [{ ...validRound.guesses[0], results: [...validRound.guesses[0].results, validRound.guesses[0].results[0]] }] },
-      { ...validRound, guesses: [{ ...validRound.guesses[0], results: validRound.guesses[0].results.map((result: Record<string, unknown>) => ({ ...result, hint: "none" })) }] },
-    ]) {
-      storage.setItem(key, JSON.stringify(invalidRound));
-      expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
-      expect(storage.getItem(key)).toBeNull();
-    }
-
-    storage.setItem(dailyStorageKey({ ...identity, ruleset: "v2" }), JSON.stringify(validRound));
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
+  test("rejects invalid orb targets, visibility shapes, and any Hardcore assistance", () => {
+    assertRejected("daily", (value) => { value.round.assistance.filter.cardId = laterGuessCard.id; });
+    assertRejected("daily", (value) => { value.round.assistance.filter.feature = "mana"; });
+    assertRejected("daily", (value) => { value.round.assistance.negation.feature = "retain"; });
+    assertRejected("daily", (value) => { value.round.assistance.reveal.extra = "display"; });
+    assertRejected("daily", (value) => { value.round.assistance.visibility.extra = true; });
+    assertRejected("daily", (value) => { delete value.round.assistance.visibility.green; });
+    assertRejected("hardcore-daily", (value) => { value.round.assistance = createDefaultAssistance(); });
   });
 
-  test("separates dates and source revisions without deleting valid sibling keys", () => {
+  test("removes only exact legacy application round keys", () => {
     const storage = new MemoryStorage();
-    saveDailyRound(storage, identity, round);
-    const otherDate = { ...identity, utcDate: "2026-08-13" };
-    const otherRevision = { ...identity, sourceRevision: "def" };
+    storage.setItem("stsdle:daily:v2:abc:2026-08-12", "old");
+    storage.setItem("stsdle:daily:v3:def:2026-08-13", "old");
+    storage.setItem("stsdle:daily:v4:keep", "keep");
+    storage.setItem("prefix:stsdle:daily:v2:keep", "keep");
+    storage.setItem(DAILY_STATS_KEY, "keep");
+    storage.setItem(HARDCORE_DAILY_STATS_KEY, "keep");
+    storage.setItem("unrelated:key", "keep");
+    removeLegacyCurrentRoundKeys(storage);
+    expect([...storage.values.keys()].sort()).toEqual([
+      DAILY_STATS_KEY,
+      HARDCORE_DAILY_STATS_KEY,
+      "prefix:stsdle:daily:v2:keep",
+      "stsdle:daily:v4:keep",
+      "unrelated:key",
+    ].sort());
+  });
+});
 
-    expect(loadDailyRound(storage, otherDate, cardsById, round.answer)).toBeNull();
-    expect(loadDailyRound(storage, otherRevision, cardsById, round.answer)).toBeNull();
-    expect(storage.getItem(dailyStorageKey(identity))).not.toBeNull();
+describe("Daily streak storage", () => {
+  test("keeps normal and Hardcore streak domains independent", () => {
+    const storage = new MemoryStorage();
+    expect(recordDailyCompletion(storage, "2026-08-12")).toMatchObject({ currentStreak: 1 });
+    expect(recordDailyCompletion(storage, "2026-08-12", HARDCORE_DAILY_STATS_KEY)).toMatchObject({ currentStreak: 1 });
+    expect(recordDailyCompletion(storage, "2026-08-13", HARDCORE_DAILY_STATS_KEY)).toMatchObject({ currentStreak: 2 });
+    expect(loadDailyStats(storage)).toMatchObject({ currentStreak: 1 });
+    expect(loadDailyStats(storage, HARDCORE_DAILY_STATS_KEY)).toMatchObject({ currentStreak: 2 });
+    expect(storage.getItem(DAILY_STATS_KEY)).not.toBeNull();
+    expect(storage.getItem(HARDCORE_DAILY_STATS_KEY)).not.toBeNull();
   });
 
-  test("deletes only corrupt or snapshot-invalid Daily state", () => {
+  test("fails closed on corrupt stats without touching another key", () => {
     const storage = new MemoryStorage();
-    const corruptKey = dailyStorageKey(identity);
-    const validIdentity = { ...identity, utcDate: "2026-08-11" };
-    saveDailyRound(storage, validIdentity, round);
-    storage.setItem("unrelated", "keep me");
-    storage.setItem(corruptKey, "{ definitely not json");
-
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
-    expect(storage.getItem(corruptKey)).toBeNull();
-    expect(storage.getItem(dailyStorageKey(validIdentity))).not.toBeNull();
-    expect(storage.getItem("unrelated")).toBe("keep me");
-
-    saveDailyRound(storage, identity, round);
-    expect(loadDailyRound(storage, identity, new Map([[answerCard.id, answerCard]]), round.answer)).toBeNull();
-    expect(storage.getItem(corruptKey)).toBeNull();
-  });
-
-  test("restores settled results without persisting animation state", () => {
-    const storage = new MemoryStorage();
-    saveDailyRound(storage, identity, round);
-    const raw = storage.getItem(dailyStorageKey(identity));
-    expect(raw).not.toMatch(/animat|reveal/i);
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)?.guesses).toEqual(round.guesses);
-  });
-
-  test("rejects tampered results instead of trusting structurally valid values", () => {
-    const storage = new MemoryStorage();
-    saveDailyRound(storage, identity, round);
-    const key = dailyStorageKey(identity);
-    const stored = JSON.parse(storage.getItem(key)!);
-    stored.guesses[0].results[0].color = "green";
-    storage.setItem(key, JSON.stringify(stored));
-
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
-    expect(storage.getItem(key)).toBeNull();
-  });
-
-  test("rejects status that disagrees with whether an accepted answer was guessed", () => {
-    const storage = new MemoryStorage();
-    const winningGuess = { cardId: answerCard.id, results: compareGuess(answerCard, answerCard) };
-
-    saveDailyRound(storage, identity, { ...round, guesses: [winningGuess], status: "playing" });
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
-
-    saveDailyRound(storage, identity, { ...round, status: "won" });
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
-  });
-
-  test("rejects duplicate guesses and guesses submitted after the winning answer", () => {
-    const storage = new MemoryStorage();
-    const winningGuess = { cardId: answerCard.id, results: compareGuess(answerCard, answerCard) };
-
-    saveDailyRound(storage, identity, { ...round, guesses: [round.guesses[0]!, round.guesses[0]!] });
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
-
-    saveDailyRound(storage, identity, { ...round, guesses: [winningGuess, round.guesses[0]!], status: "won" });
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
-
-    const alternateAnswerCard = card("ANSWER_ALT");
-    const multiAnswer = { ...round.answer, acceptedCardIds: [answerCard.id, alternateAnswerCard.id] };
-    const multiCardsById = new Map([...cardsById, [alternateAnswerCard.id, alternateAnswerCard] as const]);
-    saveDailyRound(storage, identity, {
-      ...round,
-      answer: multiAnswer,
-      guesses: [winningGuess, { cardId: alternateAnswerCard.id, results: compareGuess(alternateAnswerCard, answerCard) }],
-      status: "won",
-    });
-    expect(loadDailyRound(storage, identity, multiCardsById, multiAnswer)).toBeNull();
-  });
-
-  test("returns canonical recomputed results for a valid winning round", () => {
-    const storage = new MemoryStorage();
-    const winningGuess = { cardId: answerCard.id, results: compareGuess(answerCard, answerCard) };
-    saveDailyRound(storage, identity, { ...round, guesses: [round.guesses[0]!, winningGuess], status: "won" });
-
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toMatchObject({
-      status: "won",
-      guesses: [round.guesses[0]!, winningGuess],
-    });
-  });
-
-  test("does not write Daily state for Practice", () => {
-    const storage = new MemoryStorage();
-    saveDailyRound(storage, identity, { ...round, mode: "practice" });
-    expect(storage.length).toBe(0);
+    storage.setItem(DAILY_STATS_KEY, "bad json");
+    storage.setItem(HARDCORE_DAILY_STATS_KEY, JSON.stringify({ lastCompletedUtcDate: "2026-08-12", currentStreak: 2, maxStreak: 2 }));
+    expect(loadDailyStats(storage)).toEqual({ lastCompletedUtcDate: null, currentStreak: 0, maxStreak: 0 });
+    expect(storage.getItem(DAILY_STATS_KEY)).toBeNull();
+    expect(loadDailyStats(storage, HARDCORE_DAILY_STATS_KEY)).toMatchObject({ currentStreak: 2 });
   });
 });
 
@@ -257,114 +242,5 @@ describe("UTC rollover", () => {
     ["2027-01-01T00:00:00.000Z", 86_400_000],
   ])("calculates the next UTC day from %s", (timestamp, expected) => {
     expect(msUntilNextUtcDay(new Date(timestamp))).toBe(expected);
-  });
-});
-
-describe("global Daily streak storage", () => {
-  test("removes the matching legacy v2 round while restoring v3 and preserving v1 stats", () => {
-    const storage = new MemoryStorage();
-    const currentKey = dailyStorageKey(identity);
-    const legacyKey = dailyStorageKey({ ...identity, ruleset: "v2" });
-    const siblingKey = dailyStorageKey({ ...identity, utcDate: "2026-08-11", ruleset: "v2" });
-    saveDailyRound(storage, identity, round);
-    storage.setItem(legacyKey, JSON.stringify({ version: 2, answer: round.answer, guesses: round.guesses, status: round.status }));
-    storage.setItem(siblingKey, "keep sibling");
-    storage.setItem("unrelated", "keep unrelated");
-    storage.setItem(DAILY_STATS_KEY, JSON.stringify({
-      lastCompletedUtcDate: "2026-08-11",
-      currentStreak: 2,
-      maxStreak: 4,
-    }));
-
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toEqual({ ...round, error: null });
-    expect(storage.getItem(currentKey)).not.toBeNull();
-    expect(storage.getItem(legacyKey)).toBeNull();
-    expect(storage.getItem(siblingKey)).toBe("keep sibling");
-    expect(storage.getItem("unrelated")).toBe("keep unrelated");
-    expect(loadDailyStats(storage)).toEqual({
-      lastCompletedUtcDate: "2026-08-11",
-      currentStreak: 2,
-      maxStreak: 4,
-    });
-    expect(recordDailyCompletion(storage, "2026-08-12")).toEqual({
-      lastCompletedUtcDate: "2026-08-12",
-      currentStreak: 3,
-      maxStreak: 4,
-    });
-  });
-  test("starts at one, increments on the next day, and preserves its maximum after a gap", () => {
-    const storage = new MemoryStorage();
-    expect(recordDailyCompletion(storage, "2026-08-10")).toEqual({
-      lastCompletedUtcDate: "2026-08-10",
-      currentStreak: 1,
-      maxStreak: 1,
-    });
-    expect(recordDailyCompletion(storage, "2026-08-11")).toEqual({
-      lastCompletedUtcDate: "2026-08-11",
-      currentStreak: 2,
-      maxStreak: 2,
-    });
-    expect(recordDailyCompletion(storage, "2026-08-13")).toEqual({
-      lastCompletedUtcDate: "2026-08-13",
-      currentStreak: 1,
-      maxStreak: 2,
-    });
-  });
-
-  test("increments at most once per UTC date across source revisions", () => {
-    const storage = new MemoryStorage();
-    recordDailyCompletion(storage, "2026-08-12");
-    expect(recordDailyCompletion(storage, "2026-08-12")).toEqual({
-      lastCompletedUtcDate: "2026-08-12",
-      currentStreak: 1,
-      maxStreak: 1,
-    });
-    expect(storage.values.has(DAILY_STATS_KEY)).toBe(true);
-  });
-
-  test("isolates corrupt stats and ignores attempts to move the streak backward", () => {
-    const storage = new MemoryStorage();
-    storage.setItem(DAILY_STATS_KEY, "bad json");
-    storage.setItem("unrelated", "keep me");
-    expect(loadDailyStats(storage)).toEqual({ lastCompletedUtcDate: null, currentStreak: 0, maxStreak: 0 });
-    expect(storage.getItem(DAILY_STATS_KEY)).toBeNull();
-    expect(storage.getItem("unrelated")).toBe("keep me");
-
-    recordDailyCompletion(storage, "2026-08-12");
-    expect(recordDailyCompletion(storage, "2026-08-11")).toEqual({
-      lastCompletedUtcDate: "2026-08-12",
-      currentStreak: 1,
-      maxStreak: 1,
-    });
-  });
-
-  test.each([
-    { lastCompletedUtcDate: "2026-08-12", currentStreak: Number.MAX_SAFE_INTEGER + 1, maxStreak: Number.MAX_SAFE_INTEGER + 1 },
-    { lastCompletedUtcDate: "2026-08-12", currentStreak: 1, maxStreak: Number.MAX_SAFE_INTEGER + 1 },
-    { lastCompletedUtcDate: "2026-08-12", currentStreak: -1, maxStreak: 1 },
-    { lastCompletedUtcDate: "2026-08-12", currentStreak: 2, maxStreak: 1 },
-    { lastCompletedUtcDate: null, currentStreak: 0, maxStreak: 1 },
-    { lastCompletedUtcDate: "2026-08-12", currentStreak: 0, maxStreak: 0 },
-  ])("rejects invalid safe-integer and cross-field stats invariants: $currentStreak/$maxStreak/$lastCompletedUtcDate", (stats) => {
-    const storage = new MemoryStorage();
-    storage.setItem(DAILY_STATS_KEY, JSON.stringify(stats));
-    storage.setItem("unrelated", "keep me");
-    expect(loadDailyStats(storage)).toEqual({ lastCompletedUtcDate: null, currentStreak: 0, maxStreak: 0 });
-    expect(storage.getItem(DAILY_STATS_KEY)).toBeNull();
-    expect(storage.getItem("unrelated")).toBe("keep me");
-  });
-
-  test("keeps streak arithmetic within safe integers", () => {
-    const storage = new MemoryStorage();
-    storage.setItem(DAILY_STATS_KEY, JSON.stringify({
-      lastCompletedUtcDate: "2026-08-11",
-      currentStreak: Number.MAX_SAFE_INTEGER,
-      maxStreak: Number.MAX_SAFE_INTEGER,
-    }));
-    expect(recordDailyCompletion(storage, "2026-08-12")).toEqual({
-      lastCompletedUtcDate: "2026-08-12",
-      currentStreak: Number.MAX_SAFE_INTEGER,
-      maxStreak: Number.MAX_SAFE_INTEGER,
-    });
   });
 });

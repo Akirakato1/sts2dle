@@ -1,15 +1,29 @@
-import { compareGuess, type FeatureResult, type TileColor } from "../../shared/comparison.js";
-import { FEATURE_ORDER, type CardIdentity, type FeatureName } from "../../shared/domain.js";
+import { z } from "zod";
+
+import { compareGuess, type FeatureResult } from "../../shared/comparison.js";
+import { FEATURE_ORDER, type CardIdentity, type PairGroup } from "../../shared/domain.js";
+import { pairKey } from "../../shared/feature-keys.js";
 import type { SelectedAnswer } from "../../shared/selection.js";
-import type { RoundState, RoundStatus, SubmittedGuess } from "./game-reducer.js";
+import type { AssistanceState, ConstraintOrbTarget } from "./assistance.js";
+import type { PlayMode, RoundState, SubmittedGuess } from "./game-reducer.js";
 
-export const DAILY_RULESET_VERSION = "v3";
+export const CURRENT_ROUND_VERSION = 4;
+export const CURRENT_ROUND_KEYS: Readonly<Record<PlayMode, string>> = Object.freeze({
+  daily: "stsdle:round:daily:v1",
+  "hardcore-daily": "stsdle:round:hardcore-daily:v1",
+  practice: "stsdle:round:practice:v1",
+});
+export const DAILY_RULESET_VERSION = "v4";
+export const HARDCORE_DAILY_RULESET_VERSION = "hardcore-v1";
+export const PRACTICE_RULESET_VERSION = "practice-v1";
 export const DAILY_STATS_KEY = "stsdle:stats:v1";
+export const HARDCORE_DAILY_STATS_KEY = "stsdle:stats:hardcore:v1";
 
-export interface DailyStorageIdentity {
+export interface RoundStorageIdentity {
+  mode: PlayMode;
   sourceRevision: string;
-  utcDate: string;
   ruleset: string;
+  utcDate: string | null;
 }
 
 export interface DailyStats {
@@ -18,203 +32,254 @@ export interface DailyStats {
   maxStreak: number;
 }
 
-interface StoredDailyRound {
-  version: 3;
-  answer: SelectedAnswer;
-  guesses: SubmittedGuess[];
-  status: RoundStatus;
+const featureSchema = z.enum(FEATURE_ORDER);
+const resultSchema = z.object({
+  feature: featureSchema,
+  color: z.enum(["green", "yellow", "red"]),
+  displayValue: z.string(),
+}).strict();
+const guessSchema = z.object({ cardId: z.string(), results: z.array(resultSchema) }).strict();
+const answerSchema = z.object({
+  baseGroupKey: z.string(),
+  selectedCardId: z.string(),
+  pairKey: z.string(),
+  acceptedCardIds: z.array(z.string()).min(1),
+}).strict();
+const revealTargetSchema = z.object({ feature: featureSchema }).strict();
+const constraintTargetSchema = z.object({
+  guessIndex: z.number().int().nonnegative(),
+  cardId: z.string(),
+  feature: featureSchema,
+}).strict();
+const visibilitySchema = z.object({ neutral: z.boolean(), green: z.boolean(), red: z.boolean() }).strict();
+const assistanceSchema = z.object({
+  reveal: revealTargetSchema.nullable(),
+  filter: constraintTargetSchema.nullable(),
+  negation: constraintTargetSchema.nullable(),
+  visibility: visibilitySchema,
+}).strict();
+const roundSchema = z.object({
+  mode: z.enum(["daily", "hardcore-daily", "practice"]),
+  hardcore: z.boolean(),
+  roundId: z.string(),
+  hintSeed: z.string(),
+  answer: answerSchema,
+  guesses: z.array(guessSchema),
+  status: z.enum(["playing", "won", "forfeited"]),
+  terminalGuessCount: z.number().int().nonnegative().nullable(),
+  assistance: assistanceSchema.nullable(),
+}).strict();
+const envelopeSchema = z.object({
+  version: z.literal(CURRENT_ROUND_VERSION),
+  mode: z.enum(["daily", "hardcore-daily", "practice"]),
+  sourceRevision: z.string(),
+  ruleset: z.string(),
+  utcDate: z.string().nullable(),
+  round: roundSchema,
+}).strict();
+
+const EMPTY_STATS: DailyStats = { lastCompletedUtcDate: null, currentStreak: 0, maxStreak: 0 };
+
+function removeItem(storage: Storage, key: string): void {
+  try { storage.removeItem(key); } catch { /* Storage may be unavailable. */ }
 }
 
-const EMPTY_STATS: DailyStats = {
-  lastCompletedUtcDate: null,
-  currentStreak: 0,
-  maxStreak: 0,
-};
-
-const COLORS: readonly TileColor[] = ["green", "yellow", "red"];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function isUtcDate(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const [year, month, day] = value.split("-").map(Number);
-  const parsed = new Date(Date.UTC(year!, month! - 1, day!));
-  return parsed.toISOString().slice(0, 10) === value;
-}
-
-function isSelectedAnswer(value: unknown): value is SelectedAnswer {
-  return isRecord(value)
-    && typeof value.baseGroupKey === "string"
-    && typeof value.selectedCardId === "string"
-    && typeof value.pairKey === "string"
-    && isStringArray(value.acceptedCardIds)
-    && value.acceptedCardIds.length > 0;
-}
-
-function isFeatureResult(value: unknown, expectedFeature: FeatureName): value is FeatureResult {
-  if (!isRecord(value)) return false;
-  const keys = Object.keys(value).sort();
-  return keys.length === 3
-    && keys[0] === "color"
-    && keys[1] === "displayValue"
-    && keys[2] === "feature"
-    && value.feature === expectedFeature
-    && COLORS.includes(value.color as TileColor)
-    && typeof value.displayValue === "string";
-}
-
-function isSubmittedGuess(value: unknown): value is SubmittedGuess {
-  return isRecord(value)
-    && typeof value.cardId === "string"
-    && Array.isArray(value.results)
-    && value.results.length === FEATURE_ORDER.length
-    && value.results.every((result, index) => isFeatureResult(result, FEATURE_ORDER[index]!));
-}
-
-function isStoredDailyRound(value: unknown): value is StoredDailyRound {
-  return isRecord(value)
-    && value.version === 3
-    && isSelectedAnswer(value.answer)
-    && Array.isArray(value.guesses)
-    && value.guesses.every(isSubmittedGuess)
-    && (value.status === "playing" || value.status === "won");
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function sameAnswer(left: SelectedAnswer, right: SelectedAnswer): boolean {
   return left.baseGroupKey === right.baseGroupKey
     && left.selectedCardId === right.selectedCardId
     && left.pairKey === right.pairKey
-    && left.acceptedCardIds.length === right.acceptedCardIds.length
-    && left.acceptedCardIds.every((id, index) => id === right.acceptedCardIds[index]);
+    && sameStrings(left.acceptedCardIds, right.acceptedCardIds);
 }
 
-function sameResults(stored: readonly FeatureResult[], canonical: readonly FeatureResult[]): boolean {
-  return stored.length === canonical.length && stored.every((result, index) => {
-    const expected = canonical[index];
-    return expected !== undefined
-      && result.feature === expected.feature
-      && result.color === expected.color
-      && result.displayValue === expected.displayValue;
-  });
+function sameResults(left: readonly FeatureResult[], right: readonly FeatureResult[]): boolean {
+  return left.length === FEATURE_ORDER.length
+    && right.length === FEATURE_ORDER.length
+    && left.every((result, index) => {
+      const expected = right[index];
+      return expected !== undefined
+        && result.feature === FEATURE_ORDER[index]
+        && result.feature === expected.feature
+        && result.color === expected.color
+        && result.displayValue === expected.displayValue;
+    });
 }
 
-function canonicalStoredGuesses(
-  stored: StoredDailyRound,
+function validUtcDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day!)).toISOString().slice(0, 10) === value;
+}
+
+function validIdentity(identity: RoundStorageIdentity): boolean {
+  if (identity.sourceRevision.length === 0 || identity.ruleset.length === 0) return false;
+  if (identity.mode === "practice") return identity.utcDate === null && identity.ruleset === PRACTICE_RULESET_VERSION;
+  if (identity.utcDate === null || !validUtcDate(identity.utcDate)) return false;
+  return identity.ruleset === (identity.mode === "daily" ? DAILY_RULESET_VERSION : HARDCORE_DAILY_RULESET_VERSION);
+}
+
+function validRoundIdentity(round: RoundState, identity: RoundStorageIdentity): boolean {
+  if (round.mode !== identity.mode) return false;
+  if (round.mode === "daily" && round.hardcore !== false) return false;
+  if (round.mode === "hardcore-daily" && round.hardcore !== true) return false;
+  if (round.mode === "practice" && round.hardcore !== true && round.hardcore !== false) return false;
+  if (round.mode !== "practice") {
+    const expectedId = `${round.mode}:${identity.utcDate}:${identity.sourceRevision}`;
+    return round.roundId === expectedId && round.hintSeed === expectedId;
+  }
+  if (round.roundId === undefined) return false;
+  const match = /^practice:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.exec(round.roundId);
+  return match !== null && round.hintSeed === match[1];
+}
+
+function canonicalAnswer(
+  answer: SelectedAnswer,
+  cardsById: ReadonlyMap<string, CardIdentity>,
+  pairGroupsByKey: ReadonlyMap<string, PairGroup>,
+): boolean {
+  const selected = cardsById.get(answer.selectedCardId);
+  const group = pairGroupsByKey.get(answer.pairKey);
+  return selected !== undefined
+    && pairKey(selected) === answer.pairKey
+    && group !== undefined
+    && group.key === answer.pairKey
+    && sameStrings(group.cardIds, answer.acceptedCardIds)
+    && answer.acceptedCardIds.includes(answer.selectedCardId)
+    && answer.acceptedCardIds.every((id) => cardsById.has(id));
+}
+
+function canonicalGuesses(
+  stored: readonly SubmittedGuess[],
+  answer: SelectedAnswer,
   cardsById: ReadonlyMap<string, CardIdentity>,
 ): SubmittedGuess[] | null {
-  const answerCard = cardsById.get(stored.answer.selectedCardId);
-  if (!answerCard || !stored.answer.acceptedCardIds.every((id) => cardsById.has(id))) return null;
-  const acceptedIds = new Set(stored.answer.acceptedCardIds);
-  const seenIds = new Set<string>();
+  const answerCard = cardsById.get(answer.selectedCardId);
+  if (!answerCard) return null;
+  const seen = new Set<string>();
   const guesses: SubmittedGuess[] = [];
-  let winningIndex = -1;
-
-  for (const [index, guess] of stored.guesses.entries()) {
-    if (winningIndex !== -1) return null;
-    if (seenIds.has(guess.cardId)) return null;
-    seenIds.add(guess.cardId);
+  let won = false;
+  for (const guess of stored) {
+    if (won || seen.has(guess.cardId)) return null;
     const card = cardsById.get(guess.cardId);
     if (!card) return null;
     const results = compareGuess(card, answerCard);
     if (!sameResults(guess.results, results)) return null;
-    if (acceptedIds.has(guess.cardId)) winningIndex = index;
+    seen.add(guess.cardId);
     guesses.push({ cardId: card.id, results });
+    won = answer.acceptedCardIds.includes(card.id);
   }
-
-  const derivedStatus: RoundStatus = winningIndex === -1 ? "playing" : "won";
-  if (derivedStatus !== stored.status || (winningIndex !== -1 && winningIndex !== guesses.length - 1)) return null;
   return guesses;
 }
 
-function removeItem(storage: Storage, key: string): void {
-  try { storage.removeItem(key); } catch { /* Storage may be unavailable. */ }
+function targetHasColor(target: ConstraintOrbTarget, guesses: readonly SubmittedGuess[], color: "green" | "red"): boolean {
+  const guess = guesses[target.guessIndex];
+  if (!guess || guess.cardId !== target.cardId) return false;
+  return guess.results.find((result) => result.feature === target.feature)?.color === color;
 }
 
-export function dailyStorageKey({ sourceRevision, utcDate, ruleset }: DailyStorageIdentity): string {
-  return `stsdle:daily:${ruleset}:${sourceRevision}:${utcDate}`;
+function validAssistance(assistance: AssistanceState | null, hardcore: boolean, guesses: readonly SubmittedGuess[]): boolean {
+  if (hardcore) return assistance === null;
+  if (assistance === null) return false;
+  return (assistance.filter === null || targetHasColor(assistance.filter, guesses, "green"))
+    && (assistance.negation === null || targetHasColor(assistance.negation, guesses, "red"));
 }
 
-export function saveDailyRound(
-  storage: Storage,
-  identity: DailyStorageIdentity,
-  round: RoundState,
-): void {
-  if (round.mode !== "daily") return;
-  const stored: StoredDailyRound = {
-    version: 3,
-    answer: round.answer,
-    guesses: round.guesses,
-    status: round.status,
+function validStatus(round: RoundState): boolean {
+  const winningIndex = round.guesses.findIndex((guess) => round.answer.acceptedCardIds.includes(guess.cardId));
+  if (round.status === "playing") return winningIndex === -1 && round.terminalGuessCount === null;
+  if (round.terminalGuessCount !== round.guesses.length) return false;
+  if (round.status === "won") return winningIndex === round.guesses.length - 1;
+  return round.mode === "practice" && winningIndex === -1;
+}
+
+export function saveCurrentRound(storage: Storage, identity: RoundStorageIdentity, round: RoundState): void {
+  if (identity.mode !== round.mode) return;
+  const value = {
+    version: CURRENT_ROUND_VERSION,
+    mode: identity.mode,
+    sourceRevision: identity.sourceRevision,
+    ruleset: identity.ruleset,
+    utcDate: identity.utcDate,
+    round: {
+      mode: round.mode,
+      hardcore: round.hardcore,
+      roundId: round.roundId,
+      hintSeed: round.hintSeed,
+      answer: round.answer,
+      guesses: round.guesses,
+      status: round.status,
+      terminalGuessCount: round.terminalGuessCount,
+      assistance: round.assistance,
+    },
   };
-  try { storage.setItem(dailyStorageKey(identity), JSON.stringify(stored)); } catch { /* Persistence is best-effort. */ }
+  try { storage.setItem(CURRENT_ROUND_KEYS[identity.mode], JSON.stringify(value)); } catch { /* Best effort. */ }
 }
 
-export function loadDailyRound(
+export function loadCurrentRound(
   storage: Storage,
-  identity: DailyStorageIdentity,
+  identity: RoundStorageIdentity,
   cardsById: ReadonlyMap<string, CardIdentity>,
+  pairGroupsByKey: ReadonlyMap<string, PairGroup>,
   expectedAnswer?: SelectedAnswer,
 ): RoundState | null {
-  if (identity.ruleset === DAILY_RULESET_VERSION) {
-    removeItem(storage, dailyStorageKey({ ...identity, ruleset: "v2" }));
-  }
-  const key = dailyStorageKey(identity);
+  const key = CURRENT_ROUND_KEYS[identity.mode];
   let raw: string | null;
   try { raw = storage.getItem(key); } catch { return null; }
   if (raw === null) return null;
-
   try {
-    const value: unknown = JSON.parse(raw);
-    if (!isStoredDailyRound(value)
-      || (expectedAnswer !== undefined && !sameAnswer(value.answer, expectedAnswer))) {
-      removeItem(storage, key);
-      return null;
-    }
-    const guesses = canonicalStoredGuesses(value, cardsById);
-    if (guesses === null) {
-      removeItem(storage, key);
-      return null;
-    }
-    return {
-      mode: "daily",
-      answer: value.answer,
-      guesses,
-      status: value.status,
-      error: null,
-    };
+    const envelope = envelopeSchema.parse(JSON.parse(raw));
+    const parsedRound = envelope.round as RoundState;
+    if (!validIdentity(identity)
+      || envelope.mode !== identity.mode
+      || envelope.sourceRevision !== identity.sourceRevision
+      || envelope.ruleset !== identity.ruleset
+      || envelope.utcDate !== identity.utcDate
+      || !validRoundIdentity(parsedRound, identity)
+      || (expectedAnswer !== undefined && !sameAnswer(parsedRound.answer, expectedAnswer))
+      || !canonicalAnswer(parsedRound.answer, cardsById, pairGroupsByKey)) throw new Error("Invalid stored round identity");
+    const guesses = canonicalGuesses(parsedRound.guesses, parsedRound.answer, cardsById);
+    if (guesses === null) throw new Error("Invalid stored guesses");
+    const round = { ...parsedRound, guesses, error: null };
+    if (!validStatus(round) || !validAssistance(round.assistance ?? null, round.hardcore === true, guesses)) throw new Error("Invalid stored round state");
+    return round;
   } catch {
     removeItem(storage, key);
     return null;
   }
 }
 
-function isDailyStats(value: unknown): value is DailyStats {
-  return isRecord(value)
-    && (value.lastCompletedUtcDate === null || isUtcDate(value.lastCompletedUtcDate))
-    && Number.isSafeInteger(value.currentStreak)
-    && (value.currentStreak as number) >= 0
-    && Number.isSafeInteger(value.maxStreak)
-    && (value.maxStreak as number) >= (value.currentStreak as number)
-    && ((value.lastCompletedUtcDate === null && value.currentStreak === 0 && value.maxStreak === 0)
-      || (value.lastCompletedUtcDate !== null && (value.currentStreak as number) > 0));
+export function removeLegacyCurrentRoundKeys(storage: Storage): void {
+  try {
+    const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
+      .filter((key): key is string => key !== null && /^stsdle:daily:v[23]:/.test(key));
+    for (const key of keys) removeItem(storage, key);
+  } catch { /* Storage may be unavailable. */ }
 }
 
-export function loadDailyStats(storage: Storage): DailyStats {
+function isDailyStats(value: unknown): value is DailyStats {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const stats = value as Record<string, unknown>;
+  return Object.keys(stats).length === 3
+    && (stats.lastCompletedUtcDate === null || (typeof stats.lastCompletedUtcDate === "string" && validUtcDate(stats.lastCompletedUtcDate)))
+    && Number.isSafeInteger(stats.currentStreak) && (stats.currentStreak as number) >= 0
+    && Number.isSafeInteger(stats.maxStreak) && (stats.maxStreak as number) >= (stats.currentStreak as number)
+    && ((stats.lastCompletedUtcDate === null && stats.currentStreak === 0 && stats.maxStreak === 0)
+      || (stats.lastCompletedUtcDate !== null && (stats.currentStreak as number) > 0));
+}
+
+export function loadDailyStats(storage: Storage, statsKey = DAILY_STATS_KEY): DailyStats {
   let raw: string | null;
-  try { raw = storage.getItem(DAILY_STATS_KEY); } catch { return { ...EMPTY_STATS }; }
+  try { raw = storage.getItem(statsKey); } catch { return { ...EMPTY_STATS }; }
   if (raw === null) return { ...EMPTY_STATS };
   try {
     const value: unknown = JSON.parse(raw);
     if (!isDailyStats(value)) throw new Error("Invalid Daily stats");
     return value;
   } catch {
-    removeItem(storage, DAILY_STATS_KEY);
+    removeItem(storage, statsKey);
     return { ...EMPTY_STATS };
   }
 }
@@ -224,21 +289,16 @@ function utcDayNumber(value: string): number {
   return Math.floor(Date.UTC(year!, month! - 1, day!) / 86_400_000);
 }
 
-export function recordDailyCompletion(storage: Storage, utcDate: string): DailyStats {
-  if (!isUtcDate(utcDate)) return loadDailyStats(storage);
-  const previous = loadDailyStats(storage);
+export function recordDailyCompletion(storage: Storage, utcDate: string, statsKey = DAILY_STATS_KEY): DailyStats {
+  if (!validUtcDate(utcDate)) return loadDailyStats(storage, statsKey);
+  const previous = loadDailyStats(storage, statsKey);
   if (previous.lastCompletedUtcDate !== null && utcDate <= previous.lastCompletedUtcDate) return previous;
-
   const currentStreak = previous.lastCompletedUtcDate !== null
     && utcDayNumber(utcDate) - utcDayNumber(previous.lastCompletedUtcDate) === 1
     ? Math.min(Number.MAX_SAFE_INTEGER, previous.currentStreak + 1)
     : 1;
-  const next: DailyStats = {
-    lastCompletedUtcDate: utcDate,
-    currentStreak,
-    maxStreak: Math.max(previous.maxStreak, currentStreak),
-  };
-  try { storage.setItem(DAILY_STATS_KEY, JSON.stringify(next)); } catch { /* Persistence is best-effort. */ }
+  const next = { lastCompletedUtcDate: utcDate, currentStreak, maxStreak: Math.max(previous.maxStreak, currentStreak) };
+  try { storage.setItem(statsKey, JSON.stringify(next)); } catch { /* Best effort. */ }
   return next;
 }
 

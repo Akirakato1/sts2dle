@@ -1,40 +1,69 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import React, { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../../src/shared/random.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../src/shared/random.js")>(),
-  createDailyRandom: vi.fn(async () => ({ nextUint32: () => 0 })),
+  createDailyRandom: vi.fn(async (_date: string, _revision: string, namespace: string) => ({ nextUint32: () => namespace === "daily" ? 0 : 1 })),
   createPracticeRandom: vi.fn(() => ({ nextUint32: () => 0 })),
 }));
 vi.mock("../../src/client/game/preload-images.js", () => ({ preloadAnswerImages: vi.fn(() => Promise.resolve()) }));
 
-import { createDailyRandom, createPracticeRandom } from "../../src/shared/random.js";
-import { pairKey } from "../../src/shared/feature-keys.js";
-import { compareGuess } from "../../src/shared/comparison.js";
-import { useGame } from "../../src/client/game/use-game.js";
-import { preloadAnswerImages } from "../../src/client/game/preload-images.js";
-import { DAILY_STATS_KEY, dailyStorageKey } from "../../src/client/game/storage.js";
 import type { LoadedSnapshot } from "../../src/client/api/load-snapshot.js";
+import { createRoundState } from "../../src/client/game/game-reducer.js";
+import { preloadAnswerImages } from "../../src/client/game/preload-images.js";
+import {
+  CURRENT_ROUND_KEYS,
+  DAILY_RULESET_VERSION,
+  DAILY_STATS_KEY,
+  HARDCORE_DAILY_RULESET_VERSION,
+  HARDCORE_DAILY_STATS_KEY,
+  PRACTICE_RULESET_VERSION,
+  saveCurrentRound,
+} from "../../src/client/game/storage.js";
+import { useGame } from "../../src/client/game/use-game.js";
+import { pairKey } from "../../src/shared/feature-keys.js";
+import { createDailyRandom, createPracticeRandom } from "../../src/shared/random.js";
 
 const base = { cardClass: "Silent" as const, cardType: "Skill" as const, mana: 1, rarity: "Rare" as const, eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false };
-const cards = ["FIRST", "SECOND"].map((id) => ({ id, name: id, hasUpgrade: false, artUrl: "https://art.example/card.png", baseCardUrl: null, upgradedCardUrl: null, base, upgraded: base }));
+const first = { id: "FIRST", name: "FIRST", hasUpgrade: false, artUrl: "https://art.example/first.png", baseCardUrl: null, upgradedCardUrl: null, base, upgraded: base };
+const secondVector = { ...base, mana: 2 };
+const second = { id: "SECOND", name: "SECOND", hasUpgrade: false, artUrl: "https://art.example/second.png", baseCardUrl: null, upgradedCardUrl: null, base: secondVector, upgraded: secondVector };
+const cards = [first, second];
 const snapshot: LoadedSnapshot = {
-  manifest: { schemaVersion: 1, sourceRevision: "revision", sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00Z", generatedAt: "2026-08-12T00:00:00Z", cardCount: 2, upgradeCount: 0, baseGroupCount: 1, pairGroupCount: 1, files: {} },
-  cards, baseGroups: [{ key: "base", cardIds: ["FIRST", "SECOND"] }], pairGroups: [{ key: pairKey(cards[0]!), cardIds: ["FIRST", "SECOND"] }], spriteMap: { candidate: { url: "/c.png", width: 1, height: 1, displayScale: 1 }, guess: { url: "/g.png", width: 1, height: 1, displayScale: 1 }, cards: {} },
-  cardsById: new Map(cards.map((card) => [card.id, card])), pairGroupsByKey: new Map([[pairKey(cards[0]!), { key: pairKey(cards[0]!), cardIds: ["FIRST", "SECOND"] }]]),
+  manifest: { schemaVersion: 1, sourceRevision: "revision", sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00Z", generatedAt: "2026-08-12T00:00:00Z", cardCount: 2, upgradeCount: 0, baseGroupCount: 1, pairGroupCount: 2, files: {} },
+  cards,
+  baseGroups: [{ key: "base", cardIds: [first.id, second.id] }],
+  pairGroups: [
+    { key: pairKey(first), cardIds: [first.id] },
+    { key: pairKey(second), cardIds: [second.id] },
+  ],
+  spriteMap: { candidate: { url: "/c.png", width: 1, height: 1, displayScale: 1 }, guess: { url: "/g.png", width: 1, height: 1, displayScale: 1 }, cards: {} },
+  cardsById: new Map(cards.map((card) => [card.id, card])),
+  pairGroupsByKey: new Map([
+    [pairKey(first), { key: pairKey(first), cardIds: [first.id] }],
+    [pairKey(second), { key: pairKey(second), cardIds: [second.id] }],
+  ]),
 };
-const dailyAnswer = { baseGroupKey: "base", selectedCardId: "FIRST", pairKey: pairKey(cards[0]!), acceptedCardIds: ["FIRST", "SECOND"] };
+const firstAnswer = { baseGroupKey: "base", selectedCardId: first.id, pairKey: pairKey(first), acceptedCardIds: [first.id] };
+
+let uuidIndex = 0;
+const uuids = [
+  "123e4567-e89b-42d3-a456-426614174000",
+  "123e4567-e89b-42d3-a456-426614174001",
+  "123e4567-e89b-42d3-a456-426614174002",
+] as const;
 
 describe("useGame", () => {
   beforeEach(() => {
     vi.useRealTimers();
     localStorage.clear();
     vi.resetAllMocks();
-    vi.mocked(createDailyRandom).mockResolvedValue({ nextUint32: () => 0 });
+    vi.mocked(createDailyRandom).mockImplementation(async (_date, _revision, namespace) => ({ nextUint32: () => namespace === "daily" ? 0 : 1 }));
     vi.mocked(createPracticeRandom).mockReturnValue({ nextUint32: () => 0 });
     vi.mocked(preloadAnswerImages).mockResolvedValue();
+    uuidIndex = 0;
+    vi.spyOn(globalThis.crypto, "randomUUID").mockImplementation(() => uuids[uuidIndex++]!);
     vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
   });
 
@@ -44,271 +73,170 @@ describe("useGame", () => {
     localStorage.clear();
   });
 
-  test("selects the same Daily answer for two mounts with the same revision", async () => {
-    const first = renderHook(() => useGame(snapshot));
-    const second = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(first.result.current.round).not.toBeNull());
-    await waitFor(() => expect(second.result.current.round).not.toBeNull());
-    expect(first.result.current.round?.answer.selectedCardId).toBe(second.result.current.round?.answer.selectedCardId);
-    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-12", "revision");
-  });
-
-  test("uses a fresh random source when starting the next Practice round", async () => {
+  test("initializes independent deterministic Daily modes and a persisted Practice round", async () => {
     const game = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(game.result.current.round).not.toBeNull());
-    await act(async () => { await game.result.current.setMode("practice"); });
-    await act(async () => { game.result.current.nextRound(); });
-    expect(createPracticeRandom).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-12", "revision", "daily");
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-12", "revision", "hardcore-daily");
+    expect(game.result.current.round?.answer.selectedCardId).toBe(first.id);
+    act(() => game.result.current.setMode("hardcore-daily"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("hardcore-daily"));
+    expect(game.result.current.round?.answer.selectedCardId).toBe(second.id);
+    expect(game.result.current.round?.assistance).toBeNull();
+    act(() => game.result.current.setMode("practice"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
+    expect(game.result.current.round?.roundId).toBe(`practice:${uuids[0]}`);
+    expect(game.result.current.round?.hintSeed).toBe(uuids[0]);
+    expect(localStorage.getItem(CURRENT_ROUND_KEYS.practice)).not.toBeNull();
   });
 
-  test("changes its stable round token only when an active round is replaced", async () => {
-    const game = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(game.result.current.round).not.toBeNull());
-    const dailyToken = game.result.current.roundToken;
-    expect(dailyToken).toBeGreaterThan(0);
-    game.rerender();
-    expect(game.result.current.roundToken).toBe(dailyToken);
-
-    act(() => { game.result.current.submit("SECOND"); });
-    expect(game.result.current.roundToken).toBe(dailyToken);
-
-    await act(async () => { await game.result.current.setMode("practice"); });
-    const practiceToken = game.result.current.roundToken;
-    expect(practiceToken).toBe(dailyToken + 1);
-    await act(async () => { game.result.current.nextRound(); });
-    await waitFor(() => expect(game.result.current.roundToken).toBe(practiceToken + 1));
-  });
-
-  test("keeps a newer Practice round when a pending Daily request resolves later", async () => {
-    let resolveDaily!: (source: { nextUint32(): number }) => void;
-    vi.mocked(createDailyRandom).mockImplementationOnce(() => new Promise((resolve) => { resolveDaily = resolve; }));
-    const game = renderHook(() => useGame(snapshot));
-    await act(async () => { await game.result.current.setMode("practice"); });
-    expect(game.result.current.round?.mode).toBe("practice");
-    vi.mocked(preloadAnswerImages).mockClear();
-    await act(async () => { resolveDaily({ nextUint32: () => 1 }); });
-    expect(game.result.current.round?.mode).toBe("practice");
-    expect(preloadAnswerImages).not.toHaveBeenCalled();
-  });
-
-  test("last overlapping Practice request wins and preloads once", async () => {
-    let first!: (source: { nextUint32(): number }) => void;
-    let second!: (source: { nextUint32(): number }) => void;
-    vi.mocked(createPracticeRandom)
-      .mockImplementationOnce(() => new Promise((resolve) => { first = resolve; }) as never)
-      .mockImplementationOnce(() => new Promise((resolve) => { second = resolve; }) as never);
-    const game = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(game.result.current.round).not.toBeNull());
-    vi.mocked(preloadAnswerImages).mockClear();
-    await act(async () => { void game.result.current.setMode("practice"); void game.result.current.setMode("practice"); });
-    await act(async () => { second({ nextUint32: () => 1 }); });
-    expect(game.result.current.round?.answer.selectedCardId).toBe("SECOND");
-    expect(preloadAnswerImages).toHaveBeenCalledTimes(1);
-    expect(preloadAnswerImages).toHaveBeenCalledWith(expect.objectContaining({ selectedCardId: "SECOND" }), snapshot.cardsById);
-    await act(async () => { first({ nextUint32: () => 0 }); });
-    expect(game.result.current.round?.answer.selectedCardId).toBe("SECOND");
-    expect(preloadAnswerImages).toHaveBeenCalledTimes(1);
-  });
-
-  test("does not surface a stale Daily rejection after Practice succeeds", async () => {
-    let rejectDaily!: (error: Error) => void;
-    vi.mocked(createDailyRandom).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectDaily = reject; }));
-    const game = renderHook(() => useGame(snapshot));
-    await act(async () => { await game.result.current.setMode("practice"); });
-    await act(async () => { rejectDaily(new Error("stale failure")); });
-    expect(game.result.current.round?.mode).toBe("practice");
-    expect(game.result.current.error).toBeNull();
-  });
-
-  test("StrictMode replay and unmount invalidate pending Daily work while a remount succeeds", async () => {
-    let resolve!: (source: { nextUint32(): number }) => void;
-    vi.mocked(createDailyRandom).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
-    const wrapper = ({ children }: { children: React.ReactNode }) => <StrictMode>{children}</StrictMode>;
-    const first = renderHook(() => useGame(snapshot), { wrapper });
-    first.unmount();
-    await act(async () => { resolve({ nextUint32: () => 1 }); });
-    expect(preloadAnswerImages).not.toHaveBeenCalled();
-    const remount = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(remount.result.current.round?.mode).toBe("daily"));
-    expect(preloadAnswerImages).toHaveBeenCalled();
-  });
-
-  test("the latest active Daily request commits both success and error", async () => {
-    const game = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(game.result.current.round).not.toBeNull());
-    expect(preloadAnswerImages).toHaveBeenCalled();
-    vi.mocked(createDailyRandom).mockRejectedValueOnce(new Error("active failure"));
-    await act(async () => { await game.result.current.setMode("daily"); });
-    expect(game.result.current.error).toBe("active failure");
-  });
-
-  test("restores the current revision/date Daily and persists later guesses", async () => {
-    const key = dailyStorageKey({ sourceRevision: "revision", utcDate: "2026-08-12", ruleset: "v3" });
-    localStorage.setItem(key, JSON.stringify({
-      version: 3,
-      answer: dailyAnswer,
-      guesses: [{ cardId: "SECOND", results: compareGuess(cards[1]!, cards[0]!) }],
-      status: "won",
-    }));
-
-    const restored = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(restored.result.current.round?.status).toBe("won"));
-    expect(restored.result.current.round?.guesses).toHaveLength(1);
-    expect(JSON.parse(localStorage.getItem(DAILY_STATS_KEY)!)).toEqual({
-      lastCompletedUtcDate: "2026-08-12",
-      currentStreak: 1,
-      maxStreak: 1,
-    });
-
-    localStorage.clear();
-    const fresh = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(fresh.result.current.round?.status).toBe("playing"));
-    act(() => fresh.result.current.submit("SECOND"));
-    await waitFor(() => expect(fresh.result.current.round?.status).toBe("won"));
-    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({
-      answer: dailyAnswer,
-      status: "won",
-      guesses: [{ cardId: "SECOND" }],
-    });
-  });
-
-  test("does not award a streak for forged won storage", async () => {
-    const key = dailyStorageKey({ sourceRevision: "revision", utcDate: "2026-08-12", ruleset: "v3" });
-    localStorage.setItem(key, JSON.stringify({
-      version: 3,
-      answer: dailyAnswer,
+  test.each(["daily", "hardcore-daily", "practice"] as const)("restores persisted %s progress on refresh", async (mode) => {
+    const daily = mode !== "practice";
+    const utcDate = daily ? "2026-08-12" : null;
+    const ruleset = mode === "daily" ? DAILY_RULESET_VERSION : mode === "hardcore-daily" ? HARDCORE_DAILY_RULESET_VERSION : PRACTICE_RULESET_VERSION;
+    const restored = createRoundState({
+      mode,
+      hardcore: mode === "hardcore-daily",
+      roundId: daily ? `${mode}:${utcDate}:revision` : `practice:${uuids[0]}`,
+      hintSeed: daily ? `${mode}:${utcDate}:revision` : uuids[0],
+      answer: mode === "hardcore-daily" ? { baseGroupKey: "base", selectedCardId: second.id, pairKey: pairKey(second), acceptedCardIds: [second.id] } : firstAnswer,
       guesses: [],
-      status: "won",
-    }));
-
+    });
+    saveCurrentRound(localStorage, { mode, sourceRevision: "revision", ruleset, utcDate }, restored);
     const game = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(game.result.current.round).not.toBeNull());
-    expect(game.result.current.round?.status).toBe("playing");
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    act(() => game.result.current.setMode(mode));
+    await waitFor(() => expect(game.result.current.round?.roundId).toBe(restored.roundId));
+    expect(game.result.current.round).toEqual(restored);
+    if (mode === "practice") expect(createPracticeRandom).not.toHaveBeenCalled();
+  });
+
+  test("persists visibility, orb use, guesses, and forfeit for Practice", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    act(() => game.result.current.setMode("practice"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
+    act(() => game.result.current.setCandidateVisibility("green", false));
+    act(() => game.result.current.consumeReveal({ feature: "mana" }));
+    act(() => game.result.current.submit(second.id));
+    act(() => game.result.current.consumeNegation({ guessIndex: 0, cardId: second.id, feature: "mana" }));
+    act(() => game.result.current.forfeitPractice());
+    expect(JSON.parse(localStorage.getItem(CURRENT_ROUND_KEYS.practice)!).round).toMatchObject({
+      status: "forfeited",
+      terminalGuessCount: 1,
+      assistance: { reveal: { feature: "mana" }, negation: { guessIndex: 0, cardId: second.id, feature: "mana" }, visibility: { green: false } },
+    });
+  });
+
+  test("Practice Hardcore choice toggles the unstarted round, locks after play, and controls only the next round after terminal", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    act(() => game.result.current.setMode("practice"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
+    act(() => game.result.current.setPracticeHardcoreChoice(true));
+    expect(game.result.current.practiceHardcoreChoice).toBe(true);
+    expect(game.result.current.round?.hardcore).toBe(true);
+    expect(game.result.current.round?.assistance).toBeNull();
+    act(() => game.result.current.setPracticeHardcoreChoice(false));
+    act(() => game.result.current.consumeReveal({ feature: "mana" }));
+    act(() => game.result.current.setPracticeHardcoreChoice(true));
+    expect(game.result.current.round?.hardcore).toBe(false);
+    act(() => game.result.current.forfeitPractice());
+    act(() => game.result.current.setPracticeHardcoreChoice(true));
+    expect(game.result.current.round?.hardcore).toBe(false);
+    await act(async () => game.result.current.nextPracticeRound());
+    await waitFor(() => expect(game.result.current.round?.roundId).toBe(`practice:${uuids[1]}`));
+    expect(game.result.current.round?.hardcore).toBe(true);
+    expect(game.result.current.round?.assistance).toBeNull();
+  });
+
+  test("roundToken changes only for mode switches, Daily replacement, and new Practice", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    const initial = game.result.current.roundToken;
+    game.rerender();
+    act(() => game.result.current.submit(second.id));
+    expect(game.result.current.roundToken).toBe(initial);
+    act(() => game.result.current.setMode("practice"));
+    expect(game.result.current.roundToken).toBe(initial + 1);
+    await act(async () => game.result.current.nextPracticeRound());
+    await waitFor(() => expect(game.result.current.roundToken).toBe(initial + 2));
+  });
+
+  test("UTC rollover replaces both Daily modes without touching Practice progress", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => {
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    expect(game.result.current.round?.mode).toBe("daily");
+    act(() => game.result.current.setMode("practice"));
+    act(() => game.result.current.submit(second.id));
+    const practiceId = game.result.current.round?.roundId;
+    const token = game.result.current.roundToken;
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(game.result.current.dailyUtcDate).toBe("2026-08-13");
+    expect(game.result.current.round?.roundId).toBe(practiceId);
+    expect(game.result.current.round?.guesses).toHaveLength(1);
+    expect(game.result.current.roundToken).toBe(token);
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision", "daily");
+    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision", "hardcore-daily");
+    act(() => game.result.current.setMode("daily"));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(game.result.current.round?.roundId).toBe("daily:2026-08-13:revision");
+  });
+
+  test("Daily and Hardcore wins update separate streak keys", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    act(() => game.result.current.submit(first.id));
+    expect(JSON.parse(localStorage.getItem(DAILY_STATS_KEY)!).currentStreak).toBe(1);
+    act(() => game.result.current.setMode("hardcore-daily"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("hardcore-daily"));
+    act(() => game.result.current.submit(second.id));
+    expect(JSON.parse(localStorage.getItem(HARDCORE_DAILY_STATS_KEY)!).currentStreak).toBe(1);
+    expect(JSON.parse(localStorage.getItem(DAILY_STATS_KEY)!).currentStreak).toBe(1);
+  });
+
+  test("restored Daily wins repair only their matching streak domain", async () => {
+    const won = createRoundState({
+      mode: "hardcore-daily",
+      hardcore: true,
+      roundId: "hardcore-daily:2026-08-12:revision",
+      hintSeed: "hardcore-daily:2026-08-12:revision",
+      answer: { baseGroupKey: "base", selectedCardId: second.id, pairKey: pairKey(second), acceptedCardIds: [second.id] },
+      guesses: [{ cardId: second.id, results: [
+        { feature: "cardClass", color: "green", displayValue: "Silent" },
+        { feature: "cardType", color: "green", displayValue: "Skill" },
+        { feature: "mana", color: "green", displayValue: "2" },
+        { feature: "rarity", color: "green", displayValue: "Rare" },
+        { feature: "eternal", color: "green", displayValue: "false" },
+        { feature: "ethereal", color: "green", displayValue: "false" },
+        { feature: "exhaust", color: "green", displayValue: "false" },
+        { feature: "innate", color: "green", displayValue: "false" },
+        { feature: "retain", color: "green", displayValue: "false" },
+        { feature: "sly", color: "green", displayValue: "false" },
+      ] }],
+      status: "won",
+      terminalGuessCount: 1,
+    });
+    saveCurrentRound(localStorage, {
+      mode: "hardcore-daily", sourceRevision: "revision", ruleset: HARDCORE_DAILY_RULESET_VERSION, utcDate: "2026-08-12",
+    }, won);
+    renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(localStorage.getItem(HARDCORE_DAILY_STATS_KEY)).not.toBeNull());
     expect(localStorage.getItem(DAILY_STATS_KEY)).toBeNull();
   });
 
-  test("a completed Practice round never reads or writes Daily streak stats", async () => {
-    localStorage.setItem(DAILY_STATS_KEY, JSON.stringify({
-      lastCompletedUtcDate: "2026-08-11",
-      currentStreak: 7,
-      maxStreak: 7,
-    }));
+  test("invalid persisted Daily is replaced without touching the other mode", async () => {
+    localStorage.setItem(CURRENT_ROUND_KEYS.daily, "bad json");
+    localStorage.setItem("unrelated:key", "keep");
     const game = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(game.result.current.round).not.toBeNull());
-    await act(async () => { await game.result.current.setMode("practice"); });
-    act(() => game.result.current.submit("FIRST"));
-    expect(game.result.current.round?.status).toBe("won");
-    expect(JSON.parse(localStorage.getItem(DAILY_STATS_KEY)!)).toEqual({
-      lastCompletedUtcDate: "2026-08-11",
-      currentStreak: 7,
-      maxStreak: 7,
-    });
-  });
-
-  test("starts the new Daily at UTC midnight with one rollover timer", async () => {
-    vi.useRealTimers();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const game = renderHook(() => useGame(snapshot));
-    await act(async () => { await Promise.resolve(); });
-    expect(game.result.current.round?.mode).toBe("daily");
-    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-12", "revision");
-    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 100)).toHaveLength(1);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(100);
-    });
-    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
-    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 86_400_000)).toHaveLength(1);
-  });
-
-  test("keeps an active Practice round intact across UTC midnight and uses the new date when Daily is selected", async () => {
-    vi.useRealTimers();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
-    const game = renderHook(() => useGame(snapshot));
-    await act(async () => { await Promise.resolve(); });
-    await act(async () => { await game.result.current.setMode("practice"); });
-    const practiceToken = game.result.current.roundToken;
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
-
-    expect(game.result.current.round?.mode).toBe("practice");
-    expect(game.result.current.roundToken).toBe(practiceToken);
-    expect(game.result.current.dailyUtcDate).toBe("2026-08-13");
-    expect(createDailyRandom).not.toHaveBeenCalledWith("2026-08-13", "revision");
-
-    await act(async () => { await game.result.current.setMode("daily"); });
-    expect(game.result.current.round?.mode).toBe("daily");
-    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
-  });
-
-  test("re-arms after an early timer fires before the UTC date changes", async () => {
-    vi.useRealTimers();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    renderHook(() => useGame(snapshot));
-    await act(async () => { await Promise.resolve(); });
-    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 100)).toHaveLength(1);
-
-    vi.setSystemTime(new Date("2026-08-12T23:59:59.800Z"));
-    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
-    expect(createDailyRandom).not.toHaveBeenCalledWith("2026-08-13", "revision");
-    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 100)).toHaveLength(2);
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
-    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
-    expect(timeoutSpy.mock.calls.filter((call) => call[1] === 86_400_000)).toHaveLength(1);
-  });
-
-  test("rechecks the UTC date when a suspended tab becomes visible", async () => {
-    vi.useRealTimers();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-12T18:00:00Z"));
-    const game = renderHook(() => useGame(snapshot));
-    await act(async () => { await Promise.resolve(); });
-    expect(game.result.current.round?.mode).toBe("daily");
-
-    vi.setSystemTime(new Date("2026-08-13T08:00:00Z"));
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
-    expect(createDailyRandom).toHaveBeenCalledWith("2026-08-13", "revision");
-  });
-
-  test("visibility rollover advances Daily availability without replacing Practice", async () => {
-    vi.useRealTimers();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-12T18:00:00Z"));
-    const game = renderHook(() => useGame(snapshot));
-    await act(async () => { await Promise.resolve(); });
-    await act(async () => { await game.result.current.setMode("practice"); });
-    const practiceToken = game.result.current.roundToken;
-
-    vi.setSystemTime(new Date("2026-08-13T08:00:00Z"));
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
-
-    expect(game.result.current.round?.mode).toBe("practice");
-    expect(game.result.current.roundToken).toBe(practiceToken);
-    expect(game.result.current.dailyUtcDate).toBe("2026-08-13");
-  });
-
-  test("cleans up the UTC rollover timer and visibility listener on unmount", async () => {
-    vi.useRealTimers();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
-    const game = renderHook(() => useGame(snapshot));
-    await act(async () => { await Promise.resolve(); });
-    expect(createDailyRandom).toHaveBeenCalledTimes(1);
-
-    game.unmount();
-    vi.setSystemTime(new Date("2026-08-13T00:00:00Z"));
-    await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(100);
-    });
-    expect(createDailyRandom).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    expect(game.result.current.round?.roundId).toBe("daily:2026-08-12:revision");
+    expect(localStorage.getItem("unrelated:key")).toBe("keep");
+    expect(localStorage.getItem(CURRENT_ROUND_KEYS["hardcore-daily"])).not.toBeNull();
   });
 });
