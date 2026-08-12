@@ -21,6 +21,7 @@ export interface SnapshotLockOperations {
   monotonicNow(): number;
   inspectQuarantine(dataPath: string): Promise<boolean>;
   acquireDirectory(path: string): Promise<void>;
+  renameDirectory(from: string, to: string): Promise<void>;
   wait(milliseconds: number): Promise<void>;
 }
 
@@ -34,6 +35,7 @@ const DEFAULT_LOCK_OPERATIONS: SnapshotLockOperations = {
   monotonicNow: () => performance.now(),
   inspectQuarantine: hasQuarantinedRelease,
   acquireDirectory: async (path) => mkdir(path).then(() => undefined),
+  renameDirectory: rename,
   wait: delay,
 };
 
@@ -93,6 +95,14 @@ export class SnapshotStore {
     assertDirectChild(lockPath, dataPath, SYNC_LOCK_DIRECTORY, "Snapshot lock path");
     const token = randomUUID();
     const deadline = this.lockOperations.monotonicNow() + this.lockTimeoutMs;
+    const releaseOwnedLock = () => releaseLock(
+      dataPath,
+      lockPath,
+      token,
+      this.lockTimeoutMs,
+      this.lockRetryDelayMs,
+      this.lockOperations,
+    );
 
     while (true) {
       if (this.lockOperations.monotonicNow() >= deadline) throw this.lockTimeoutError();
@@ -146,22 +156,22 @@ export class SnapshotStore {
         throw new Error("Unable to initialize snapshot sync lock");
       }
       if (expiredAfterAcquisition || this.lockOperations.monotonicNow() >= deadline) {
-        await releaseLock(dataPath, lockPath, token);
+        await releaseOwnedLock();
         throw this.lockTimeoutError();
       }
       let quarantinedReleaseExists: boolean;
       try {
         quarantinedReleaseExists = await this.lockOperations.inspectQuarantine(dataPath);
       } catch (error: unknown) {
-        await releaseLock(dataPath, lockPath, token);
+        await releaseOwnedLock();
         throw error;
       }
       if (this.lockOperations.monotonicNow() >= deadline) {
-        await releaseLock(dataPath, lockPath, token);
+        await releaseOwnedLock();
         throw this.lockTimeoutError();
       }
       if (quarantinedReleaseExists) {
-        await releaseLock(dataPath, lockPath, token);
+        await releaseOwnedLock();
         if (this.lockOperations.monotonicNow() >= deadline) {
           throw new Error("Snapshot sync lock release state is ambiguous");
         }
@@ -174,7 +184,7 @@ export class SnapshotStore {
         result = await action();
       } catch (actionError: unknown) {
         try {
-          await releaseLock(dataPath, lockPath, token);
+          await releaseOwnedLock();
         } catch (releaseError: unknown) {
           throw new AggregateError(
             [actionError, releaseError],
@@ -184,7 +194,7 @@ export class SnapshotStore {
         }
         throw actionError;
       }
-      await releaseLock(dataPath, lockPath, token);
+      await releaseOwnedLock();
       return result;
     }
   }
@@ -519,14 +529,43 @@ async function reclaimDeadLock(
   await rm(stalePath, { force: true, recursive: true });
 }
 
-async function releaseLock(dataPath: string, lockPath: string, token: string): Promise<void> {
+async function releaseLock(
+  dataPath: string,
+  lockPath: string,
+  token: string,
+  timeoutMs: number,
+  retryDelayMs: number,
+  operations: SnapshotLockOperations,
+): Promise<void> {
   const releaseName = `${SYNC_LOCK_RELEASE_PREFIX}${randomUUID()}`;
   const releasePath = join(dataPath, releaseName);
   assertDirectChild(releasePath, dataPath, releaseName, "Snapshot lock release path");
-  try {
-    await rename(lockPath, releasePath);
-  } catch {
-    throw new Error("Unable to quarantine released snapshot sync lock");
+  const deadline = operations.monotonicNow() + timeoutMs;
+  let retrying = false;
+  while (true) {
+    if (retrying && operations.monotonicNow() >= deadline) {
+      throw new Error("Unable to quarantine released snapshot sync lock");
+    }
+    if (retrying) {
+      const owner = await readLockOwner(lockPath);
+      if (owner.token !== token) {
+        throw new Error("Snapshot sync lock ownership changed before release");
+      }
+    }
+    try {
+      await operations.renameDirectory(lockPath, releasePath);
+      break;
+    } catch (error: unknown) {
+      if (!isNodeError(error, "EPERM")) {
+        throw new Error("Unable to quarantine released snapshot sync lock");
+      }
+      const remaining = deadline - operations.monotonicNow();
+      if (remaining <= 0) {
+        throw new Error("Unable to quarantine released snapshot sync lock");
+      }
+      await operations.wait(Math.min(retryDelayMs, remaining));
+      retrying = true;
+    }
   }
   const owner = await readLockOwner(releasePath);
   if (owner.token !== token) {

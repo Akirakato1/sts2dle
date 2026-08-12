@@ -246,6 +246,154 @@ describe("SnapshotStore", () => {
     await expect(readdir(dataDir)).resolves.not.toContain(".stsdle-sync.lock");
   });
 
+  it("retries a transient Windows sharing violation while releasing the sync lock", async () => {
+    const dataDir = await createTemporaryDataDir();
+    let monotonicTime = 0;
+    let renameAttempts = 0;
+    const waits: number[] = [];
+    const store = new SnapshotStore(dataDir, {
+      lockTimeoutMs: 30,
+      lockRetryDelayMs: 5,
+      lockOperations: {
+        monotonicNow: () => monotonicTime,
+        wait: async (milliseconds) => {
+          waits.push(milliseconds);
+          monotonicTime += milliseconds;
+        },
+        renameDirectory: async (from: string, to: string) => {
+          renameAttempts += 1;
+          if (renameAttempts === 1) {
+            throw Object.assign(new Error("EPERM: sensitive local path"), { code: "EPERM" });
+          }
+          await rename(from, to);
+        },
+      },
+    });
+
+    await expect(store.withSyncLock(async () => "released")).resolves.toBe("released");
+
+    expect(renameAttempts).toBe(2);
+    expect(waits).toEqual([5]);
+    expect((await readdir(dataDir)).some((entry) => entry.startsWith(".stsdle-sync."))).toBe(false);
+  });
+
+  it("starts a fresh release retry deadline after a long protected action", async () => {
+    const dataDir = await createTemporaryDataDir();
+    let monotonicTime = 0;
+    let renameAttempts = 0;
+    const waits: number[] = [];
+    const store = new SnapshotStore(dataDir, {
+      lockTimeoutMs: 30,
+      lockRetryDelayMs: 5,
+      lockOperations: {
+        monotonicNow: () => monotonicTime,
+        wait: async (milliseconds) => {
+          waits.push(milliseconds);
+          monotonicTime += milliseconds;
+        },
+        renameDirectory: async (from: string, to: string) => {
+          renameAttempts += 1;
+          if (renameAttempts === 1) {
+            throw Object.assign(new Error("EPERM: sensitive local path"), { code: "EPERM" });
+          }
+          await rename(from, to);
+        },
+      },
+    });
+
+    await expect(store.withSyncLock(async () => {
+      monotonicTime = 31;
+      return "released";
+    })).resolves.toBe("released");
+
+    expect(renameAttempts).toBe(2);
+    expect(waits).toEqual([5]);
+  });
+
+  it("fails closed without retrying or exposing a non-transient release error", async () => {
+    const dataDir = await createTemporaryDataDir();
+    let renameAttempts = 0;
+    const store = new SnapshotStore(dataDir, {
+      lockOperations: {
+        renameDirectory: async () => {
+          renameAttempts += 1;
+          throw Object.assign(new Error("EIO: sensitive local path"), { code: "EIO" });
+        },
+      },
+    });
+
+    await expect(store.withSyncLock(async () => undefined)).rejects.toThrow(
+      "Unable to quarantine released snapshot sync lock",
+    );
+    expect(renameAttempts).toBe(1);
+    await expect(readdir(dataDir)).resolves.toContain(".stsdle-sync.lock");
+  });
+
+  it("bounds persistent transient release retries by a monotonic deadline", async () => {
+    const dataDir = await createTemporaryDataDir();
+    let monotonicTime = 0;
+    let renameAttempts = 0;
+    const waits: number[] = [];
+    const store = new SnapshotStore(dataDir, {
+      lockTimeoutMs: 12,
+      lockRetryDelayMs: 5,
+      lockOperations: {
+        monotonicNow: () => monotonicTime,
+        wait: async (milliseconds) => {
+          waits.push(milliseconds);
+          monotonicTime += milliseconds;
+        },
+        renameDirectory: async () => {
+          renameAttempts += 1;
+          throw Object.assign(new Error("EPERM: sensitive local path"), { code: "EPERM" });
+        },
+      },
+    });
+
+    await expect(store.withSyncLock(async () => undefined)).rejects.toThrow(
+      "Unable to quarantine released snapshot sync lock",
+    );
+    expect(renameAttempts).toBe(3);
+    expect(waits).toEqual([5, 5, 2]);
+    await expect(readdir(dataDir)).resolves.toContain(".stsdle-sync.lock");
+  });
+
+  it("does not quarantine a successor owner while retrying a transient release", async () => {
+    const dataDir = await createTemporaryDataDir();
+    const ownerPath = join(dataDir, ".stsdle-sync.lock", "owner.json");
+    let renameAttempts = 0;
+    const store = new SnapshotStore(dataDir, {
+      lockTimeoutMs: 30,
+      lockRetryDelayMs: 5,
+      lockOperations: {
+        monotonicNow: () => 0,
+        wait: async () => {
+          const owner = JSON.parse(await readFile(ownerPath, "utf8")) as { token: string };
+          owner.token = "successor-owner-token";
+          await writeFile(ownerPath, `${JSON.stringify(owner)}\n`);
+        },
+        renameDirectory: async (from: string, to: string) => {
+          renameAttempts += 1;
+          if (renameAttempts === 1) {
+            throw Object.assign(new Error("EPERM: sensitive local path"), { code: "EPERM" });
+          }
+          await rename(from, to);
+        },
+      },
+    });
+
+    await expect(store.withSyncLock(async () => undefined)).rejects.toThrow(
+      "Snapshot sync lock ownership changed before release",
+    );
+    expect(renameAttempts).toBe(1);
+    expect(JSON.parse(await readFile(ownerPath, "utf8"))).toMatchObject({
+      token: "successor-owner-token",
+    });
+    expect((await readdir(dataDir)).some((entry) => entry.startsWith(".stsdle-sync.release-"))).toBe(
+      false,
+    );
+  });
+
   it("serializes the same data directory with a real child-process lock holder", async () => {
     const dataDir = await createTemporaryDataDir();
     const releaseSignal = join(dataDir, "release.signal");
