@@ -11,6 +11,7 @@ import { App } from "../../src/client/App.js";
 import { REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "../../src/client/components/FeatureTile.js";
 import { REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid.js";
 import { FEATURE_ORDER } from "../../src/shared/domain.js";
+import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 
 const card = (id: string, name: string) => ({
   id, name, hasUpgrade: true, artUrl: `${id}.png`, baseCardUrl: `https://cards.example/${id}.png`, upgradedCardUrl: `https://cards.example/${id}-upgraded.png`,
@@ -139,6 +140,146 @@ describe("App snapshot cleanup", () => {
     expect(screen.getByText("How to play").closest("details")).not.toHaveAttribute("open");
   });
 
+  test("renders exactly Daily, Hardcore Daily, and Practice mode tabs", async () => {
+    const setMode = vi.fn();
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue({
+      status: "ready",
+      round: {
+        mode: "daily",
+        hardcore: false,
+        roundId: "daily:2026-08-12:revision",
+        hintSeed: "daily:2026-08-12:revision",
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+        guesses: [],
+        status: "playing",
+        terminalGuessCount: null,
+        error: null,
+        assistance: createDefaultAssistance(),
+      },
+      roundToken: 1,
+      dailyUtcDate: "2026-08-12",
+      error: null,
+      practiceHardcoreChoice: false,
+      submit: vi.fn(),
+      setMode,
+      setCandidateVisibility: vi.fn(),
+      setPracticeHardcoreChoice: vi.fn(),
+      forfeitPractice: vi.fn(),
+      nextPracticeRound: vi.fn(),
+      nextRound: vi.fn(),
+    });
+
+    render(<App />);
+    const tabs = await screen.findAllByRole("button", { name: /^(Daily|Hardcore Daily|Practice)$/ });
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Daily", "Hardcore Daily", "Practice"]);
+    fireEvent.click(screen.getByRole("button", { name: "Hardcore Daily" }));
+    expect(setMode).toHaveBeenCalledWith("hardcore-daily");
+    expect(screen.queryByRole("checkbox", { name: "Hardcore Practice" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "End game" })).not.toBeInTheDocument();
+  });
+
+  test("derives a masked selected-name hint from wrong guesses only in assisted rounds", async () => {
+    const answer = card("answer", "Alpha Beta");
+    const hintSnapshot = {
+      ...searchSnapshot,
+      cards: [...appCards, answer],
+      cardsById: new Map([...appCards, answer].map((item) => [item.id, item])),
+      spriteMap: {
+        ...searchSnapshot.spriteMap,
+        cards: { ...searchSnapshot.spriteMap.cards, answer: appSprite },
+      },
+    };
+    loads.mockResolvedValue(hintSnapshot);
+    games.mockReturnValue({
+      status: "ready",
+      round: {
+        mode: "daily",
+        hardcore: false,
+        roundId: "daily:2026-08-12:revision",
+        hintSeed: "stable-seed",
+        answer: { baseGroupKey: "base", selectedCardId: "answer", pairKey: "pair", acceptedCardIds: ["answer"] },
+        guesses: Array.from({ length: 5 }, () => submittedGuess),
+        status: "playing",
+        terminalGuessCount: null,
+        error: null,
+        assistance: createDefaultAssistance(),
+      },
+      roundToken: 1,
+      dailyUtcDate: "2026-08-12",
+      error: null,
+      practiceHardcoreChoice: false,
+      submit: vi.fn(),
+      setMode: vi.fn(),
+      setCandidateVisibility: vi.fn(),
+      setPracticeHardcoreChoice: vi.fn(),
+      forfeitPractice: vi.fn(),
+      nextPracticeRound: vi.fn(),
+      nextRound: vi.fn(),
+    });
+
+    const view = render(<App />);
+    expect(await screen.findByLabelText("Card name hint: blank blank blank blank blank; blank blank blank blank")).toBeVisible();
+    expect(view.container.querySelectorAll(".name-hint__word")).toHaveLength(2);
+    expect(screen.getByRole("group", { name: "Candidate visibility" })).toBeVisible();
+
+    games.mockReturnValue({
+      ...games.mock.results.at(-1)?.value,
+      round: {
+        ...games.mock.results.at(-1)?.value.round,
+        mode: "hardcore-daily",
+        hardcore: true,
+        assistance: null,
+      },
+      roundToken: 2,
+    });
+    view.rerender(<App />);
+    expect(screen.queryByLabelText(/Card name hint:/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Candidate visibility" })).not.toBeInTheDocument();
+  });
+
+  test("reveals forfeited Practice answers and offers the terminal next-round choice without sharing", async () => {
+    const nextPracticeRound = vi.fn();
+    const setPracticeHardcoreChoice = vi.fn();
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue({
+      status: "ready",
+      round: {
+        mode: "practice",
+        hardcore: false,
+        roundId: "practice:one",
+        hintSeed: "one",
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+        guesses: [],
+        status: "forfeited",
+        terminalGuessCount: 0,
+        error: null,
+        assistance: createDefaultAssistance(),
+      },
+      roundToken: 2,
+      dailyUtcDate: "2026-08-12",
+      error: null,
+      practiceHardcoreChoice: true,
+      submit: vi.fn(),
+      setMode: vi.fn(),
+      setCandidateVisibility: vi.fn(),
+      setPracticeHardcoreChoice,
+      forfeitPractice: vi.fn(),
+      nextPracticeRound,
+      nextRound: nextPracticeRound,
+    });
+
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Accepted answer" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
+    const choice = screen.getByRole("checkbox", { name: "Hardcore Practice" });
+    expect(choice).toBeChecked();
+    fireEvent.click(choice);
+    expect(setPracticeHardcoreChoice).toHaveBeenCalledWith(false);
+    fireEvent.click(screen.getByRole("button", { name: "New Practice Round" }));
+    expect(nextPracticeRound).toHaveBeenCalledOnce();
+  });
+
   test("wires base-card candidates to game submission and excludes prior guesses", async () => {
     const submit = vi.fn();
     loads.mockResolvedValue(searchSnapshot);
@@ -169,10 +310,15 @@ describe("App snapshot cleanup", () => {
   test("clears search state on a mode switch and on a new Practice round", async () => {
     const makeRound = (mode: "daily" | "practice", selectedCardId: string) => ({
       mode,
+      hardcore: false,
+      roundId: `${mode}:round`,
+      hintSeed: `${mode}:round`,
       answer: { baseGroupKey: "base", selectedCardId, pairKey: "pair", acceptedCardIds: [selectedCardId] },
       guesses: [],
       status: "playing",
+      terminalGuessCount: null,
       error: null,
+      assistance: createDefaultAssistance(),
     });
     const submit = vi.fn();
     let gameState = {
@@ -341,7 +487,7 @@ describe("App snapshot cleanup", () => {
     expect(screen.getByRole("button", { name: "Copy Daily result" })).toBeInTheDocument();
   });
 
-  test("shows a next-random-card action without Practice sharing after a Practice win", async () => {
+  test("shows a new-round action without Practice sharing after a Practice win", async () => {
     const nextRound = vi.fn();
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue({
@@ -361,7 +507,7 @@ describe("App snapshot cleanup", () => {
     });
 
     render(<App />);
-    const next = await screen.findByRole("button", { name: "Next random card" });
+    const next = await screen.findByRole("button", { name: "New Practice Round" });
     expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
     fireEvent.click(next);
     expect(nextRound).toHaveBeenCalledOnce();

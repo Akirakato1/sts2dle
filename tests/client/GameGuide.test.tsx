@@ -28,5 +28,18 @@ describe("GameGuide", () => {
     expect(disclosure).toHaveTextContent(/identical complete paired feature sets.*equivalent answers/i);
     expect(disclosure).toHaveTextContent(/UTC date.*restores your progress.*share result after a win/i);
     expect(disclosure).toHaveTextContent(/Practice.*unlimited random rounds.*no share result/i);
+    expect(disclosure).toHaveTextContent(/each orb.*one.use.*permanently consumed.*round/i);
+    expect(disclosure).toHaveTextContent(/drag.*click.*tap.*keyboard/i);
+    expect(disclosure).toHaveTextContent(/Reveal.*header.*full base.*upgraded pair/i);
+    expect(disclosure).toHaveTextContent(/Filter.*green.*exact pair/i);
+    expect(disclosure).toHaveTextContent(/Negation.*red.*exclude.*red.*priority/i);
+    expect(disclosure).toHaveTextContent(/candidate controls.*advisory/i);
+    expect(disclosure).toHaveTextContent(/empty.*focus.*candidate list/i);
+    expect(disclosure).toHaveTextContent(/five.*name.*blank.*seven.*first word.*subsequent.*word initials.*progressively/i);
+    expect(disclosure).toHaveTextContent("At seven wrong guesses, the first word's initial appears. Subsequent guesses reveal the remaining word initials, then other letters progressively.");
+    expect(disclosure).toHaveTextContent(/Hardcore Daily.*separate.*no orbs.*name hints/i);
+    expect(disclosure).toHaveTextContent(/Practice.*locked.*first guess or orb/i);
+    expect(disclosure).toHaveTextContent(/browser.*persists/i);
+    expect(disclosure).toHaveTextContent(/End game.*forfeit.*New Practice Round/i);
   });
 });

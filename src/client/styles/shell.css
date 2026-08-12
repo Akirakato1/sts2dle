@@ -2,14 +2,65 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
 button { font: inherit; }
-.app-shell { width: min(100% - 2rem, 720px); margin: 0 auto; padding: 3.5rem 0 5rem; text-align: center; }
+.app-shell { width: min(100% - 2rem, 1280px); margin: 0 auto; padding: 3.5rem 0 5rem; text-align: center; }
 header { margin-bottom: 2rem; }
 .eyebrow { margin: 0; color: #bba66a; font-size: .76rem; letter-spacing: .17em; text-transform: uppercase; }
 h1 { margin: .2rem 0 0; color: #e5bf60; font-size: clamp(3rem, 12vw, 5.2rem); letter-spacing: .06em; text-shadow: 0 3px #654a21; }
 .subtitle { color: #cabf9a; }
 .mode-tabs { display: inline-flex; gap: .45rem; padding: .35rem; background: #263126; border: 1px solid #546146; border-radius: .35rem; }
-.mode-tabs button, .new-round, .load-error button { cursor: pointer; border: 1px solid #77805b; border-radius: .2rem; padding: .55rem 1rem; color: #e8dfbd; background: #1b241c; }
+.mode-tabs button, .new-round, .load-error button { min-height: 44px; cursor: pointer; border: 1px solid #77805b; border-radius: .2rem; padding: .55rem 1rem; color: #e8dfbd; background: #1b241c; }
 .mode-tabs button.active { color: #201c13; background: #d7b664; border-color: #f5d77e; }
 .game-slot, .load-error { margin: .8rem 0; padding: 1.5rem; border: 1px dashed #59624b; background: #192018; color: #afa987; }
 .load-error { border-style: solid; border-color: #a34f3d; }
 .load-error button, .new-round { margin-top: 1rem; }
+
+.practice-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: .55rem;
+  margin: .8rem auto;
+}
+
+.practice-controls__hardcore,
+.practice-controls button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+}
+
+.practice-controls__hardcore {
+  gap: .45rem;
+  padding: 0 .75rem;
+  border: 1px solid #77805b;
+  border-radius: .2rem;
+}
+
+.practice-controls__hardcore:has(input:focus-visible),
+.practice-controls button:focus-visible {
+  outline: 3px solid #f5d77e;
+  outline-offset: 2px;
+}
+
+.practice-controls button {
+  cursor: pointer;
+  border: 1px solid #77805b;
+  border-radius: .2rem;
+  padding: 0 1rem;
+  color: #e8dfbd;
+  background: #1b241c;
+}
+
+.practice-controls button:disabled,
+.practice-controls__hardcore:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+.practice-controls__lock-help {
+  flex-basis: 100%;
+  margin: 0;
+  color: #b9b18f;
+  font-size: .82rem;
+}

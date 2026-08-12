@@ -6,8 +6,12 @@ import { GameGuide } from "./components/GameGuide.js";
 import { GuessGrid } from "./components/GuessGrid.js";
 import { AnswerReveal } from "./components/AnswerReveal.js";
 import { SharePanel } from "./components/SharePanel.js";
+import { NameHint } from "./components/NameHint.js";
+import { PracticeControls } from "./components/PracticeControls.js";
 import { useGame } from "./game/use-game.js";
-import type { RoundState } from "./game/game-reducer.js";
+import { isPracticeSettingsEditable, type PlayMode, type RoundState } from "./game/game-reducer.js";
+import { deriveNameHint } from "./game/name-hints.js";
+import type { CandidateCategory } from "./game/assistance.js";
 
 function ignoreCandidateVisibility(): void {}
 
@@ -16,24 +20,54 @@ interface RoundGameProps {
   roundKey: number;
   snapshot: LoadedSnapshot;
   utcDate: string;
+  practiceHardcoreChoice: boolean;
   onSubmit(cardId: string): void;
+  onCandidateVisibility(category: CandidateCategory, visible: boolean): void;
+  onPracticeHardcoreChange(hardcore: boolean): void;
+  onForfeitPractice(): void;
   onNextRound(): void;
 }
 
-function RoundGame({ round, roundKey, snapshot, utcDate, onSubmit, onNextRound }: RoundGameProps) {
+function RoundGame({
+  round,
+  roundKey,
+  snapshot,
+  utcDate,
+  practiceHardcoreChoice,
+  onSubmit,
+  onCandidateVisibility,
+  onPracticeHardcoreChange,
+  onForfeitPractice,
+  onNextRound,
+}: RoundGameProps) {
   const [animateFromIndex, setAnimateFromIndex] = useState(round.guesses.length);
   const isRevealing = animateFromIndex < round.guesses.length;
-  const showResult = round.status === "won" && !isRevealing;
+  const showResult = round.status !== "playing" && !isRevealing;
+  const answerCard = snapshot.cardsById.get(round.answer.selectedCardId);
+  const wrongGuessCount = round.guesses.filter((guess) => !round.answer.acceptedCardIds.includes(guess.cardId)).length;
+  const nameHint = !round.hardcore && answerCard
+    ? deriveNameHint(answerCard.name, wrongGuessCount, round.hintSeed)
+    : null;
   return <main className="game-board" aria-label="Card guessing game">
+    {round.mode === "practice" && <PracticeControls
+      round={round}
+      selectedHardcore={practiceHardcoreChoice}
+      settingsEditable={round.status !== "playing" || isPracticeSettingsEditable(round)}
+      disabled={isRevealing}
+      onHardcoreChange={onPracticeHardcoreChange}
+      onForfeit={onForfeitPractice}
+      onNextRound={onNextRound}
+    />}
     <CardSearch
       cards={snapshot.cards}
       cardsById={snapshot.cardsById}
       spriteMap={snapshot.spriteMap}
       guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}
-      assistance={null}
+      assistance={round.assistance ?? null}
       roundKey={roundKey}
-      disabled={isRevealing || round.status === "won"}
-      onVisibilityChange={ignoreCandidateVisibility}
+      disabled={isRevealing || round.status !== "playing"}
+      nameHintSlot={<NameHint hint={nameHint} cardName={answerCard?.name ?? ""} />}
+      onVisibilityChange={onCandidateVisibility}
       onSelect={onSubmit}
     />
     <GuessGrid
@@ -58,14 +92,31 @@ function RoundGame({ round, roundKey, snapshot, utcDate, onSubmit, onNextRound }
 function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
   const game = useGame(snapshot);
   if (game.error) return <p role="alert">Unable to start the round: {game.error}</p>;
-  if (!game.round) return <p role="status">Preparing today&apos;s card…</p>;
+  if (game.status === "loading" || !game.round) return <p role="status">Preparing today&apos;s card…</p>;
   const { round } = game;
+  const modeLabels: Readonly<Record<PlayMode, string>> = {
+    daily: "Daily",
+    "hardcore-daily": "Hardcore Daily",
+    practice: "Practice",
+  };
   return <section className="game-panel" aria-label="Card guessing controls">
     <nav className="mode-tabs" aria-label="Round mode">
-      {(["daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={round.mode === mode ? "page" : undefined} className={round.mode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{mode === "daily" ? "Daily" : "Practice"}</button>)}
+      {(["daily", "hardcore-daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={round.mode === mode ? "page" : undefined} className={round.mode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{modeLabels[mode]}</button>)}
     </nav>
     <GameGuide />
-    <RoundGame key={game.roundToken} round={round} roundKey={game.roundToken} snapshot={snapshot} utcDate={game.dailyUtcDate} onSubmit={game.submit} onNextRound={game.nextRound} />
+    <RoundGame
+      key={game.roundToken}
+      round={round}
+      roundKey={game.roundToken}
+      snapshot={snapshot}
+      utcDate={game.dailyUtcDate}
+      practiceHardcoreChoice={game.practiceHardcoreChoice ?? round.hardcore}
+      onSubmit={game.submit}
+      onCandidateVisibility={game.setCandidateVisibility ?? ignoreCandidateVisibility}
+      onPracticeHardcoreChange={game.setPracticeHardcoreChoice ?? ignoreCandidateVisibility}
+      onForfeitPractice={game.forfeitPractice ?? ignoreCandidateVisibility}
+      onNextRound={game.nextPracticeRound ?? game.nextRound}
+    />
   </section>;
 }
 

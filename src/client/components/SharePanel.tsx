@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 
 import { formatDailyShare } from "../../shared/share.js";
+import { orbUsage } from "../game/assistance.js";
 import type { RoundState } from "../game/game-reducer.js";
 
 export interface SharePanelProps {
@@ -17,17 +18,21 @@ export function SharePanel({ round, utcDate, siteUrl, onNextRound }: SharePanelP
   const copyGeneration = useRef(0);
   if (round.status !== "won") return null;
 
-  if (round.mode === "practice") {
-    return <section className="share-panel" aria-label="Practice result">
-      <button type="button" onClick={onNextRound}>Next random card</button>
-    </section>;
-  }
+  if (round.mode === "practice") return null;
+
+  const resultName = round.hardcore ? "Hardcore Daily" : "Daily";
 
   const copy = async () => {
     const generation = ++copyGeneration.current;
     setCopyState("pending");
     try {
-      const text = formatDailyShare({ utcDate, guesses: round.guesses, siteUrl });
+      const text = formatDailyShare({
+        utcDate,
+        guesses: round.guesses,
+        siteUrl,
+        hardcore: round.hardcore,
+        ...(round.assistance ? { orbUsage: orbUsage(round.assistance) } : {}),
+      });
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable");
       await navigator.clipboard.writeText(text);
       if (copyGeneration.current === generation) setCopyState("success");
@@ -36,10 +41,10 @@ export function SharePanel({ round, utcDate, siteUrl, onNextRound }: SharePanelP
     }
   };
 
-  return <section className="share-panel" aria-label="Daily result" aria-busy={copyState === "pending"}>
-    <button type="button" aria-label="Copy Daily result" onClick={() => void copy()}>Copy result</button>
-    {copyState === "pending" && <p role="status">Copying Daily result…</p>}
-    {copyState === "success" && <p role="status">Daily result copied.</p>}
-    {copyState === "error" && <p role="alert">We could not copy the Daily result. Please try again.</p>}
+  return <section className="share-panel" aria-label={`${resultName} result`} aria-busy={copyState === "pending"}>
+    <button type="button" aria-label={`Copy ${resultName} result`} onClick={() => void copy()}>Copy result</button>
+    {copyState === "pending" && <p role="status">Copying {resultName} result…</p>}
+    {copyState === "success" && <p role="status">{resultName} result copied.</p>}
+    {copyState === "error" && <p role="alert">We could not copy the {resultName} result. Please try again.</p>}
   </section>;
 }

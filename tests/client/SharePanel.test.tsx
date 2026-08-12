@@ -46,6 +46,7 @@ describe("SharePanel", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
     const copied = writeText.mock.calls[0]![0];
     expect(copied).toContain("STS-dle 2026-08-12 1/∞");
+    expect(copied).toContain("Orbs: \u{1F7E3} \u{1F7E2} \u{1F534}");
     expect(copied).not.toContain("SECRET_GUESS_ID");
     expect(screen.getByRole("status")).toHaveTextContent("Daily result copied");
   });
@@ -99,12 +100,32 @@ describe("SharePanel", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Daily result copied");
   });
 
-  test("shows only the next-random-card action after a Practice win", () => {
-    const onNextRound = vi.fn();
-    render(<SharePanel round={{ ...round, mode: "practice" }} utcDate="2026-08-12" siteUrl="https://example.test/" onNextRound={onNextRound} />);
-    expect(screen.queryByRole("button", { name: "Copy Daily result" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Next random card" }));
-    expect(onNextRound).toHaveBeenCalledOnce();
+  test("renders no sharing UI for won or forfeited Practice", () => {
+    const won = render(<SharePanel round={{ ...round, mode: "practice" }} utcDate="2026-08-12" siteUrl="https://example.test/" onNextRound={vi.fn()} />);
+    expect(won.container).toBeEmptyDOMElement();
+    won.rerender(<SharePanel
+      round={{ ...round, mode: "practice", status: "forfeited" }}
+      utcDate="2026-08-12"
+      siteUrl="https://example.test/"
+      onNextRound={vi.fn()}
+    />);
+    expect(won.container).toBeEmptyDOMElement();
+  });
+
+  test("copies Hardcore Daily without an orb line", async () => {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<SharePanel
+      round={{ ...round, mode: "hardcore-daily", hardcore: true, assistance: null }}
+      utcDate="2026-08-12"
+      siteUrl="https://example.test/"
+      onNextRound={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy Hardcore Daily result" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    expect(writeText.mock.calls[0]![0]).toContain("STS-dle Hardcore 2026-08-12 1/∞");
+    expect(writeText.mock.calls[0]![0]).not.toContain("Orbs:");
   });
 
   test("renders no result action while a round is unfinished", () => {

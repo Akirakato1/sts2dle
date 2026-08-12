@@ -31,12 +31,15 @@ describe("formatDailyShare", () => {
       utcDate: "2026-08-12",
       guesses,
       siteUrl: "https://example.test/daily?answer=SECRET#today",
+      hardcore: false,
+      orbUsage: { reveal: false, filter: true, negation: false },
     };
 
     expect(formatDailyShare(options)).toBe([
       "STS-dle 2026-08-12 2/∞",
       "\u{1F7E5}\u{1F7E9}\u{1F7E8}\u{1F7E5}\u{1F7E9}\u{1F7E9}\u{1F7E5}\u{1F7E9}\u{1F7E5}\u{1F7E9}",
       "\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}",
+      "Orbs: \u{1F7E3} \u26AB \u{1F534}",
       "https://example.test/",
     ].join("\n"));
     const row = formatDailyShare(options).split("\n")[1]!;
@@ -58,6 +61,8 @@ describe("formatDailyShare", () => {
         })),
       }],
       siteUrl: "https://example.test/daily",
+      hardcore: false,
+      orbUsage: { reveal: false, filter: false, negation: false },
     });
 
     for (const secret of secretValues) expect(text).not.toContain(secret);
@@ -72,6 +77,8 @@ describe("formatDailyShare", () => {
         { cardId: "SECOND_GUESS", results: FEATURE_ORDER.map((feature) => result(feature, "green")) },
       ],
       siteUrl: "https://example.test/",
+      hardcore: false,
+      orbUsage: { reveal: false, filter: false, negation: false },
     });
 
     expect(text.split("\n").slice(1, 3)).toEqual([
@@ -85,6 +92,65 @@ describe("formatDailyShare", () => {
       utcDate: "2026-08-12",
       guesses: [{ cardId: "id", results: [result("mana", "red")] }],
       siteUrl: "https://example.test/",
+      hardcore: false,
+      orbUsage: { reveal: false, filter: false, negation: false },
     })).toThrow("exactly one result for every feature");
+  });
+
+  test("formats Normal and Hardcore Daily without exposing hint or target secrets", () => {
+    const guesses = [
+      { cardId: "SECRET_FIRST", results: FEATURE_ORDER.map((feature) => result(feature, "red")) },
+      { cardId: "SECRET_SECOND", results: FEATURE_ORDER.map((feature) => result(feature, "green")) },
+    ];
+    const firstGuessRow = "\u{1F7E5}".repeat(10);
+    const secondGuessRow = "\u{1F7E9}".repeat(10);
+
+    expect(formatDailyShare({
+      utcDate: "2026-08-12",
+      guesses,
+      siteUrl: "https://example.test/daily?hint=SECRET_REVEALED_LETTER",
+      hardcore: false,
+      orbUsage: { reveal: false, filter: true, negation: false },
+    })).toBe([
+      "STS-dle 2026-08-12 2/∞",
+      firstGuessRow,
+      secondGuessRow,
+      "Orbs: \u{1F7E3} \u26AB \u{1F534}",
+      "https://example.test/",
+    ].join("\n"));
+
+    const hardcore = formatDailyShare({
+      utcDate: "2026-08-12",
+      guesses,
+      siteUrl: "https://example.test/SECRET_TARGET_ID",
+      hardcore: true,
+    });
+    expect(hardcore).toBe([
+      "STS-dle Hardcore 2026-08-12 2/∞",
+      firstGuessRow,
+      secondGuessRow,
+      "https://example.test/",
+    ].join("\n"));
+    expect(hardcore).not.toContain("Orbs");
+
+    for (const text of [hardcore, formatDailyShare({
+      utcDate: "2026-08-12",
+      guesses,
+      siteUrl: "https://example.test/",
+      hardcore: false,
+      orbUsage: { reveal: false, filter: true, negation: false },
+    })]) {
+      expect(text).not.toMatch(/SECRET|Alchemize|target|hint|revealed/i);
+      expect(text.split("\n").slice(1, 3).every((row) => Array.from(row).length === 10)).toBe(true);
+    }
+  });
+
+  test("rejects Normal Daily sharing without complete orb usage metadata", () => {
+    expect(() => formatDailyShare({
+      utcDate: "2026-08-12",
+      guesses: [],
+      siteUrl: "https://example.test/",
+      hardcore: false,
+    })).toThrow("Normal Daily share requires orb usage.");
   });
 });
