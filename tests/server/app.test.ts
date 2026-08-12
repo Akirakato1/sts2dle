@@ -254,6 +254,45 @@ describe("main", () => {
     expect(events).toEqual(["sync", "createApp", "listen"]);
   });
 
+  it("closes before releasing a failed-startup lease and preserves cleanup failures", async () => {
+    const roots = await createStaticRoots();
+    const startupError = new Error("listen failed");
+    const leaseError = new Error("lease release failed");
+    const events: string[] = [];
+    let closeHook: (() => Promise<void>) | undefined;
+    let releasePromise: Promise<void> | undefined;
+    const release = vi.fn(async () => {
+      events.push("release");
+      releasePromise ??= Promise.reject(leaseError);
+      await releasePromise;
+    });
+    const close = vi.fn(async () => {
+      events.push("close");
+      await closeHook?.();
+    });
+
+    const rejection = await main({
+      env: { STSDLE_DATA_DIR: roots.snapshotRoot },
+      store: {
+        loadActive: vi.fn(async () => null),
+        acquireSnapshotLease: vi.fn(async () => ({ release })),
+      },
+      sync: vi.fn(async () => active(roots.snapshotRoot)),
+      createApp: vi.fn(async () => ({
+        listen: vi.fn(async () => { throw startupError; }),
+        addHook: (_name: "onClose", hook: () => Promise<void>) => { closeHook = hook; },
+        close,
+      })),
+    }).then(() => undefined, (error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect((rejection as AggregateError).cause).toBe(startupError);
+    expect((rejection as AggregateError).errors).toEqual([startupError, leaseError]);
+    expect(events).toEqual(["close", "release", "release"]);
+    expect(close).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
   it("does not listen when synchronization fails and no prior snapshot exists", async () => {
     const listen = vi.fn();
 

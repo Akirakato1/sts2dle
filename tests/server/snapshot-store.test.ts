@@ -9,7 +9,32 @@ import {
 } from "../../src/server/sync/snapshot-store.js";
 
 const temporaryDirectories: string[] = [];
-const childProcesses: ChildProcess[] = [];
+interface ChildCloseResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  spawnErrorName: string | null;
+}
+
+interface OutputWaiter {
+  marker: string;
+  resolve(): void;
+  reject(error: Error): void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+interface TrackedChild {
+  process: ChildProcess;
+  stdout: string;
+  stderr: string;
+  spawnErrorName: string | null;
+  closed: boolean;
+  closeResult: Promise<ChildCloseResult>;
+  waiters: Set<OutputWaiter>;
+}
+
+const childProcesses: TrackedChild[] = [];
 
 async function createTemporaryDataDir(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "stsdle-snapshot-store-"));
@@ -27,9 +52,10 @@ async function activateEmptySnapshot(
 }
 
 afterEach(async () => {
-  for (const child of childProcesses.splice(0)) {
-    if (child.exitCode === null && child.signalCode === null) child.kill();
-    await waitForChildClose(child).catch(() => undefined);
+  for (const tracked of childProcesses.splice(0)) {
+    const child = tracked.process;
+    if (!tracked.closed && child.exitCode === null && child.signalCode === null) child.kill();
+    await waitForChildClose(tracked);
   }
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, {
     recursive: true,
@@ -37,91 +63,114 @@ afterEach(async () => {
   })));
 });
 
-async function waitForOutput(child: ChildProcess, marker: string): Promise<void> {
+function trackChild(child: ChildProcess): TrackedChild {
   const stdout = child.stdout;
-  if (!stdout) throw new Error("Snapshot lock worker stdout is unavailable");
-  await new Promise<void>((resolveOutput, reject) => {
-    let output = "";
-    const cleanup = () => {
-      clearTimeout(timeout);
-      stdout.off("data", onData);
-      child.off("close", onClose);
-    };
-    const onData = (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      if (output.includes(marker)) {
-        cleanup();
-        resolveOutput();
+  const stderr = child.stderr;
+  const tracked: TrackedChild = {
+    process: child,
+    stdout: "",
+    stderr: "",
+    spawnErrorName: null,
+    closed: false,
+    closeResult: undefined as unknown as Promise<ChildCloseResult>,
+    waiters: new Set<OutputWaiter>(),
+  };
+  const onStdout = (chunk: Buffer) => {
+    tracked.stdout += chunk.toString("utf8");
+    for (const waiter of tracked.waiters) {
+      if (!tracked.stdout.includes(waiter.marker)) continue;
+      clearTimeout(waiter.timeout);
+      tracked.waiters.delete(waiter);
+      waiter.resolve();
+    }
+  };
+  const onStderr = (chunk: Buffer) => { tracked.stderr += chunk.toString("utf8"); };
+  const onError = (error: Error) => { tracked.spawnErrorName = error.name; };
+  stdout?.on("data", onStdout);
+  stderr?.on("data", onStderr);
+  child.once("error", onError);
+  tracked.closeResult = new Promise((resolveClose) => {
+    child.once("close", (code, signal) => {
+      tracked.closed = true;
+      const result = childCloseResult(tracked, code, signal);
+      for (const waiter of tracked.waiters) {
+        clearTimeout(waiter.timeout);
+        waiter.reject(workerClosedError(waiter.marker, result));
       }
+      tracked.waiters.clear();
+      stdout?.off("data", onStdout);
+      stderr?.off("data", onStderr);
+      child.off("error", onError);
+      resolveClose(result);
+    });
+  });
+  childProcesses.push(tracked);
+  return tracked;
+}
+
+async function waitForOutput(tracked: TrackedChild, marker: string): Promise<void> {
+  if (tracked.stdout.includes(marker)) return;
+  if (tracked.closed) {
+    throw workerClosedError(marker, await tracked.closeResult);
+  }
+  await new Promise<void>((resolveOutput, rejectOutput) => {
+    const waiter: OutputWaiter = {
+      marker,
+      resolve: resolveOutput,
+      reject: rejectOutput,
+      timeout: setTimeout(() => {
+        tracked.waiters.delete(waiter);
+        rejectOutput(new Error(`Timed out waiting for snapshot lock worker output ${marker}`));
+      }, 10_000),
     };
-    const onClose = () => {
-      cleanup();
-      reject(new Error("Snapshot lock worker closed before expected output"));
-    };
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("Timed out waiting for snapshot lock worker"));
-    }, 10_000);
-    stdout.on("data", onData);
-    child.once("close", onClose);
+    tracked.waiters.add(waiter);
   });
 }
 
-function observeOutput(child: ChildProcess): (marker: string) => Promise<void> {
-  const stdout = child.stdout;
-  if (!stdout) throw new Error("Snapshot lock worker stdout is unavailable");
-  let output = "";
-  let closed = false;
-  const waiters = new Set<{
-    marker: string;
-    resolve: () => void;
-    reject: (error: Error) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  }>();
-  stdout.on("data", (chunk: Buffer) => {
-    output += chunk.toString("utf8");
-    for (const waiter of waiters) {
-      if (!output.includes(waiter.marker)) continue;
-      clearTimeout(waiter.timeout);
-      waiters.delete(waiter);
-      waiter.resolve();
-    }
-  });
-  child.once("close", () => {
-    closed = true;
-    for (const waiter of waiters) {
-      clearTimeout(waiter.timeout);
-      waiter.reject(new Error("Snapshot lock worker closed before expected output"));
-    }
-    waiters.clear();
-  });
-  return async (marker: string) => {
-    if (output.includes(marker)) return;
-    if (closed) throw new Error("Snapshot lock worker closed before expected output");
-    await new Promise<void>((resolveOutput, rejectOutput) => {
-      const waiter = {
-        marker,
-        resolve: resolveOutput,
-        reject: rejectOutput,
-        timeout: setTimeout(() => {
-          waiters.delete(waiter);
-          rejectOutput(new Error("Timed out waiting for snapshot lock worker"));
-        }, 10_000),
-      };
-      waiters.add(waiter);
-    });
+function childCloseResult(
+  tracked: TrackedChild,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): ChildCloseResult {
+  return {
+    code,
+    signal,
+    stdout: tracked.stdout,
+    stderr: tracked.stderr,
+    spawnErrorName: tracked.spawnErrorName,
   };
 }
 
-async function waitForChildClose(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolveClose, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for child close")), 10_000);
-    child.once("close", () => {
-      clearTimeout(timeout);
-      resolveClose();
-    });
-  });
+function workerClosedError(marker: string, result: ChildCloseResult): Error {
+  return new Error(
+    `Snapshot lock worker closed before ${marker}; ${JSON.stringify(result)}`,
+  );
+}
+
+async function waitForChildClose(tracked: TrackedChild): Promise<ChildCloseResult> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      tracked.closeResult,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("Timed out waiting for child close")), 10_000);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function settlePendingLock(
+  tracked: TrackedChild,
+  pending: Promise<void> | undefined,
+): Promise<void> {
+  if (!pending) return;
+  const settled = pending.catch(() => undefined);
+  const child = tracked.process;
+  if (!tracked.closed && child.exitCode === null && child.signalCode === null) child.kill();
+  await waitForChildClose(tracked);
+  await settled;
 }
 
 describe("SnapshotStore", () => {
@@ -201,27 +250,41 @@ describe("SnapshotStore", () => {
     const dataDir = await createTemporaryDataDir();
     const releaseSignal = join(dataDir, "release.signal");
     const workerPath = resolve("tests/server/fixtures/snapshot-lock-worker.ts");
-    const child = spawn(process.execPath, ["--import", "tsx", workerPath, dataDir, releaseSignal], {
+    const child = spawn(process.execPath, [
+      "--import", "tsx", workerPath, dataDir, releaseSignal, "silent-release",
+    ], {
       cwd: resolve("."),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
-    childProcesses.push(child);
-    let childError = "";
-    child.stderr?.on("data", (chunk: Buffer) => { childError += chunk.toString("utf8"); });
-    const waitForMarker = observeOutput(child);
-    await waitForMarker("LOCK_ACQUIRED");
-    let entered = false;
-    const waiting = new SnapshotStore(dataDir).withSyncLock(async () => { entered = true; });
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-    expect(entered).toBe(false);
+    const tracked = trackChild(child);
+    let waiting: Promise<void> | undefined;
+    try {
+      await waitForOutput(tracked, "LOCK_ACQUIRED");
+      let entered = false;
+      waiting = new SnapshotStore(dataDir).withSyncLock(async () => { entered = true; });
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      expect(entered).toBe(false);
 
-    await writeFile(releaseSignal, "release");
-    await waitForMarker("LOCK_RELEASED");
-    await waitForChildClose(child);
-    await waiting;
-    expect(child.exitCode, childError).toBe(0);
-    expect(entered).toBe(true);
+      await writeFile(releaseSignal, "release");
+      const closeResult = await waitForChildClose(tracked);
+      await waiting;
+      waiting = undefined;
+      expect(closeResult).toEqual({
+        code: 0,
+        signal: null,
+        stdout: "LOCK_ACQUIRED\n",
+        stderr: "",
+        spawnErrorName: null,
+      });
+      expect(entered).toBe(true);
+      expect(child.stdout?.listenerCount("data")).toBe(0);
+      expect(child.stderr?.listenerCount("data")).toBe(0);
+      expect(child.listenerCount("error")).toBe(0);
+      expect(child.listenerCount("close")).toBe(0);
+    } finally {
+      await settlePendingLock(tracked, waiting);
+    }
   });
 
   it("recovers a confirmed dead child lock and removes its abandoned owned staging directory", async () => {
@@ -235,10 +298,10 @@ describe("SnapshotStore", () => {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
-    childProcesses.push(child);
-    await waitForOutput(child, "LOCK_ACQUIRED");
+    const tracked = trackChild(child);
+    await waitForOutput(tracked, "LOCK_ACQUIRED");
     child.kill();
-    await waitForChildClose(child);
+    await waitForChildClose(tracked);
 
     const store = new SnapshotStore(dataDir);
     await store.withSyncLock(async () => store.cleanupAbandonedStaging());
@@ -297,8 +360,8 @@ describe("SnapshotStore", () => {
       stdio: "ignore",
       windowsHide: true,
     });
-    childProcesses.push(deadOwner);
-    await waitForChildClose(deadOwner);
+    const trackedDeadOwner = trackChild(deadOwner);
+    await waitForChildClose(trackedDeadOwner);
     owner.processId = deadOwner.pid!;
     await writeFile(leasePath, `${JSON.stringify(owner)}\n`);
     await activateEmptySnapshot(store, "second");
@@ -324,9 +387,8 @@ describe("SnapshotStore", () => {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
-    childProcesses.push(child);
-    const waitForMarker = observeOutput(child);
-    await waitForMarker("LEASE_ACQUIRED");
+    const tracked = trackChild(child);
+    await waitForOutput(tracked, "LEASE_ACQUIRED");
     await activateEmptySnapshot(store, "second");
     const third = await activateEmptySnapshot(store, "third");
 
@@ -334,9 +396,9 @@ describe("SnapshotStore", () => {
     await expect(readdir(join(dataDir, "snapshots"))).resolves.toContain(first.buildId);
 
     await writeFile(releaseSignal, "release");
-    await waitForMarker("LEASE_RELEASED");
-    await waitForChildClose(child);
-    expect(child.exitCode).toBe(0);
+    await waitForOutput(tracked, "LEASE_RELEASED");
+    const closeResult = await waitForChildClose(tracked);
+    expect(closeResult).toMatchObject({ code: 0, signal: null, stderr: "", spawnErrorName: null });
     const fourth = await activateEmptySnapshot(store, "fourth");
     await store.retainValidatedSnapshots(fourth, async () => true);
     await expect(readdir(join(dataDir, "snapshots"))).resolves.not.toContain(first.buildId);

@@ -104,8 +104,25 @@ export async function main(dependencies: MainDependencies = {}): Promise<MainApp
     await app.listen({ host: config.host, port: config.port });
     return app;
   } catch (error: unknown) {
-    await lease?.release();
-    await app?.close?.().catch(() => undefined);
+    const cleanupErrors: unknown[] = [];
+    try {
+      await app?.close?.();
+    } catch (closeError: unknown) {
+      cleanupErrors.push(closeError);
+    } finally {
+      try {
+        await lease?.release();
+      } catch (releaseError: unknown) {
+        if (!cleanupErrors.includes(releaseError)) cleanupErrors.push(releaseError);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        "Application startup failed and cleanup also failed",
+        { cause: error },
+      );
+    }
     throw error;
   }
 }

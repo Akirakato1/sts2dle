@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     process.stdout.write("LOCK_ACQUIRED\n");
     while (!await signalExists(releaseSignal)) await delay(5);
   });
-  process.stdout.write("LOCK_RELEASED\n");
+  if (mode !== "silent-release") process.stdout.write("LOCK_RELEASED\n");
 }
 
 async function signalExists(path: string): Promise<boolean> {
