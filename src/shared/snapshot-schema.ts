@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CARD_RARITIES, CARD_TYPES } from "./domain.js";
 
 export const SOURCE_REVISION_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -12,9 +13,9 @@ const canonicalTimestampSchema = z.string().refine(isCanonicalIsoTimestamp);
 
 const featureVectorSchema = z.object({
   cardClass: z.enum(["Ironclad", "Silent", "Defect", "Necrobinder", "Regent", "Neutral", "Event"]),
-  cardType: z.enum(["Attack", "Skill", "Power", "Quest", "Status", "Curse"]),
+  cardType: z.enum(CARD_TYPES),
   mana: z.union([z.number(), z.literal("X"), z.literal("None")]),
-  rarity: z.enum(["Common", "Uncommon", "Rare", "None"]),
+  rarity: z.enum(CARD_RARITIES),
   eternal: z.boolean(), ethereal: z.boolean(), exhaust: z.boolean(), innate: z.boolean(), retain: z.boolean(), sly: z.boolean(),
 }).strict();
 

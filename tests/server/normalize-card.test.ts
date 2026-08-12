@@ -15,7 +15,45 @@ function card(id: string) {
   return result;
 }
 
+function rawCard(overrides: Record<string, unknown>) {
+  return RawSpireCardsSchema.parse([{ ...card("FALLING_STAR"), ...overrides }])[0]!;
+}
+
 describe("normalizeCard", () => {
+  it("uses Codex canonical keys for Falling Star instead of localized display fields", () => {
+    const fallingStar = rawCard({
+      id: "FALLING_STAR",
+      name: "Falling Star",
+      color: "regent",
+      type: "Localized Attack",
+      type_key: "Attack",
+      rarity: null,
+      rarity_key: "Basic",
+    });
+
+    expect(normalizeCard(fallingStar, BASE_URL).base).toMatchObject({
+      cardClass: "Regent",
+      cardType: "Attack",
+      rarity: "Basic",
+    });
+  });
+
+  it.each([
+    ["Attack", "Attack"], ["Skill", "Skill"], ["Power", "Power"],
+    ["Quest", "Quest"], ["Status", "Status"], ["Curse", "Curse"],
+  ] as const)("uses type_key %s as the feature card type", (typeKey, expected) => {
+    expect(normalizeCard(rawCard({ type: "Localized", type_key: typeKey }), BASE_URL).base.cardType)
+      .toBe(expected);
+  });
+
+  it.each([
+    ["Ancient", "Ancient"], ["Basic", "Basic"], ["Common", "Common"], ["Curse", "Curse"],
+    ["Event", "Event"], ["Quest", "Quest"], ["Rare", "Rare"], ["Status", "Status"],
+    ["Token", "Token"], ["Uncommon", "Uncommon"],
+  ] as const)("uses rarity_key %s as the feature rarity", (rarityKey, expected) => {
+    expect(normalizeCard(rawCard({ rarity: null, rarity_key: rarityKey }), BASE_URL).base.rarity)
+      .toBe(expected);
+  });
   it("applies keyword-only upgrades without an upgraded description", () => {
     expect(normalizeCard(card("AFTERIMAGE"), BASE_URL).upgraded.innate).toBe(true);
   });

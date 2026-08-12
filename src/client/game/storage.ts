@@ -3,7 +3,7 @@ import { FEATURE_ORDER, type CardIdentity, type FeatureName } from "../../shared
 import type { SelectedAnswer } from "../../shared/selection.js";
 import type { RoundState, RoundStatus, SubmittedGuess } from "./game-reducer.js";
 
-export const DAILY_RULESET_VERSION = "v2";
+export const DAILY_RULESET_VERSION = "v3";
 export const DAILY_STATS_KEY = "stsdle:stats:v1";
 
 export interface DailyStorageIdentity {
@@ -19,7 +19,7 @@ export interface DailyStats {
 }
 
 interface StoredDailyRound {
-  version: 2;
+  version: 3;
   answer: SelectedAnswer;
   guesses: SubmittedGuess[];
   status: RoundStatus;
@@ -79,7 +79,7 @@ function isSubmittedGuess(value: unknown): value is SubmittedGuess {
 
 function isStoredDailyRound(value: unknown): value is StoredDailyRound {
   return isRecord(value)
-    && value.version === 2
+    && value.version === 3
     && isSelectedAnswer(value.answer)
     && Array.isArray(value.guesses)
     && value.guesses.every(isSubmittedGuess)
@@ -147,7 +147,7 @@ export function saveDailyRound(
 ): void {
   if (round.mode !== "daily") return;
   const stored: StoredDailyRound = {
-    version: 2,
+    version: 3,
     answer: round.answer,
     guesses: round.guesses,
     status: round.status,

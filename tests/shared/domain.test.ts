@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { FEATURE_ORDER, type ManaValue } from "../../src/shared/domain.js";
+import {
+  CARD_RARITIES,
+  CARD_TYPES,
+  FEATURE_ORDER,
+  type ManaValue,
+} from "../../src/shared/domain.js";
 
 describe("FEATURE_ORDER", () => {
   it("keeps the approved ten-column order", () => {
@@ -7,6 +12,16 @@ describe("FEATURE_ORDER", () => {
       "cardClass", "cardType", "mana", "rarity",
       "eternal", "ethereal", "exhaust", "innate",
       "retain", "sly",
+    ]);
+  });
+});
+
+describe("Spire Codex feature domains", () => {
+  it("preserves every canonical card type and rarity", () => {
+    expect(CARD_TYPES).toEqual(["Attack", "Skill", "Power", "Quest", "Status", "Curse"]);
+    expect(CARD_RARITIES).toEqual([
+      "Ancient", "Basic", "Common", "Curse", "Event",
+      "Quest", "Rare", "Status", "Token", "Uncommon",
     ]);
   });
 });

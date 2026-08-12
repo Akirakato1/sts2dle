@@ -14,7 +14,7 @@ import type {
   SpriteMap,
   SpriteRect,
 } from "../../shared/domain.js";
-import { FEATURE_ORDER } from "../../shared/domain.js";
+import { CARD_RARITIES, CARD_TYPES, FEATURE_ORDER } from "../../shared/domain.js";
 import { isCanonicalIsoTimestamp, SOURCE_REVISION_PATTERN } from "../../shared/snapshot-schema.js";
 import type { ActivatedSnapshot } from "./build-snapshot.js";
 import { assertAllowedImageUrl, parseAllowedImageOrigins } from "../images/url-policy.js";
@@ -29,8 +29,8 @@ const REQUIRED_HASHED_FILES = [
   "sprite-map.json",
 ] as const;
 const CARD_CLASSES = new Set(["Ironclad", "Silent", "Defect", "Necrobinder", "Regent", "Neutral", "Event"]);
-const CARD_TYPES = new Set(["Attack", "Skill", "Power", "Quest", "Status", "Curse"]);
-const CARD_RARITIES = new Set(["Common", "Uncommon", "Rare", "None"]);
+const CARD_TYPE_VALUES = new Set(CARD_TYPES);
+const CARD_RARITY_VALUES = new Set(CARD_RARITIES);
 const KEYWORDS = ["eternal", "ethereal", "exhaust", "innate", "retain", "sly"] as const;
 const MAX_ATLAS_DIMENSION = 8192;
 const FALLBACK_WIDTH = 400;
@@ -372,8 +372,8 @@ function validateFeatureVector(
     issues.push(`Invalid ${variant} feature keys for ${cardId}: ${details}`);
   }
   if (!CARD_CLASSES.has(String(value.cardClass))) issues.push(`Unknown card class in ${variant} features for ${cardId}`);
-  if (!CARD_TYPES.has(String(value.cardType))) issues.push(`Unknown card type in ${variant} features for ${cardId}`);
-  if (!CARD_RARITIES.has(String(value.rarity))) issues.push(`Unknown card rarity in ${variant} features for ${cardId}`);
+  if (!CARD_TYPE_VALUES.has(String(value.cardType) as (typeof CARD_TYPES)[number])) issues.push(`Unknown card type in ${variant} features for ${cardId}`);
+  if (!CARD_RARITY_VALUES.has(String(value.rarity) as (typeof CARD_RARITIES)[number])) issues.push(`Unknown card rarity in ${variant} features for ${cardId}`);
   if (!isMana(value.mana)) issues.push(`Unknown mana value in ${variant} features for ${cardId}`);
   for (const keyword of KEYWORDS) {
     if (typeof value[keyword] !== "boolean") {
@@ -685,8 +685,8 @@ function isFeatureVector(value: unknown): value is FeatureVector {
   if (!isRecord(value)) return false;
   return Object.keys(value).length === FEATURE_ORDER.length &&
     FEATURE_ORDER.every((feature) => Object.hasOwn(value, feature)) &&
-    CARD_CLASSES.has(String(value.cardClass)) && CARD_TYPES.has(String(value.cardType)) &&
-    CARD_RARITIES.has(String(value.rarity)) && isMana(value.mana) &&
+    CARD_CLASSES.has(String(value.cardClass)) && CARD_TYPE_VALUES.has(String(value.cardType) as (typeof CARD_TYPES)[number]) &&
+    CARD_RARITY_VALUES.has(String(value.rarity) as (typeof CARD_RARITIES)[number]) && isMana(value.mana) &&
     KEYWORDS.every((keyword) => typeof value[keyword] === "boolean");
 }
 

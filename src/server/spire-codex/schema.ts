@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CARD_RARITIES, CARD_TYPES } from "../../shared/domain.js";
 
 const UpgradeValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 const UpgradeSchema = z.record(z.string(), UpgradeValueSchema);
@@ -8,7 +9,9 @@ export const RawSpireCardSchema = z.object({
   name: z.string().min(1),
   color: z.string().min(1),
   type: z.string().min(1),
+  type_key: z.enum(CARD_TYPES),
   rarity: z.string().nullable(),
+  rarity_key: z.enum(CARD_RARITIES),
   cost: z.number().nullable(),
   is_x_cost: z.boolean().nullable().optional(),
   star_cost: z.union([z.number(), z.string()]).nullable().optional(),

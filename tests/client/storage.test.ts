@@ -61,7 +61,7 @@ const guessCard = card("GUESS", {
 });
 const results = compareGuess(guessCard, answerCard);
 const cardsById = new Map([[answerCard.id, answerCard], [guessCard.id, guessCard]]);
-const identity = { sourceRevision: "abc", utcDate: "2026-08-12", ruleset: "v2" };
+const identity = { sourceRevision: "abc", utcDate: "2026-08-12", ruleset: "v3" };
 const round: RoundState = {
   mode: "daily",
   answer: {
@@ -77,7 +77,7 @@ const round: RoundState = {
 
 describe("Daily round storage", () => {
   test("uses ruleset, source revision, and UTC date in the Daily key", () => {
-    expect(dailyStorageKey(identity)).toBe("stsdle:daily:v2:abc:2026-08-12");
+    expect(dailyStorageKey(identity)).toBe("stsdle:daily:v3:abc:2026-08-12");
   });
 
   test("round-trips only serializable Daily answer IDs, guesses/results, and status", () => {
@@ -85,8 +85,8 @@ describe("Daily round storage", () => {
     saveDailyRound(storage, identity, round);
 
     const raw = storage.getItem(dailyStorageKey(identity));
-    expect(DAILY_RULESET_VERSION).toBe("v2");
-    expect(JSON.parse(raw!).version).toBe(2);
+    expect(DAILY_RULESET_VERSION).toBe("v3");
+    expect(JSON.parse(raw!).version).toBe(3);
     expect(raw).not.toContain("transient UI error");
     expect(raw).not.toContain("https://cards.example");
     expect(loadDailyRound(storage, identity, cardsById, round.answer)).toEqual({
@@ -102,7 +102,7 @@ describe("Daily round storage", () => {
     const validRound = JSON.parse(storage.getItem(key)!);
 
     for (const invalidRound of [
-      { ...validRound, version: 1 },
+      { ...validRound, version: 2 },
       { ...validRound, guesses: [{ ...validRound.guesses[0], results: [...validRound.guesses[0].results, validRound.guesses[0].results[0]] }] },
       { ...validRound, guesses: [{ ...validRound.guesses[0], results: validRound.guesses[0].results.map((result: Record<string, unknown>) => ({ ...result, hint: "none" })) }] },
     ]) {
@@ -111,7 +111,7 @@ describe("Daily round storage", () => {
       expect(storage.getItem(key)).toBeNull();
     }
 
-    storage.setItem(dailyStorageKey({ ...identity, ruleset: "v1" }), JSON.stringify(validRound));
+    storage.setItem(dailyStorageKey({ ...identity, ruleset: "v2" }), JSON.stringify(validRound));
     expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
   });
 
@@ -227,6 +227,29 @@ describe("UTC rollover", () => {
 });
 
 describe("global Daily streak storage", () => {
+  test("keeps v1 stats while deleting an incompatible v2 round before restoring or recording streaks", () => {
+    const storage = new MemoryStorage();
+    const key = dailyStorageKey(identity);
+    storage.setItem(key, JSON.stringify({ version: 2, answer: round.answer, guesses: round.guesses, status: round.status }));
+    storage.setItem(DAILY_STATS_KEY, JSON.stringify({
+      lastCompletedUtcDate: "2026-08-11",
+      currentStreak: 2,
+      maxStreak: 4,
+    }));
+
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
+    expect(storage.getItem(key)).toBeNull();
+    expect(loadDailyStats(storage)).toEqual({
+      lastCompletedUtcDate: "2026-08-11",
+      currentStreak: 2,
+      maxStreak: 4,
+    });
+    expect(recordDailyCompletion(storage, "2026-08-12")).toEqual({
+      lastCompletedUtcDate: "2026-08-12",
+      currentStreak: 3,
+      maxStreak: 4,
+    });
+  });
   test("starts at one, increments on the next day, and preserves its maximum after a gap", () => {
     const storage = new MemoryStorage();
     expect(recordDailyCompletion(storage, "2026-08-10")).toEqual({

@@ -143,9 +143,9 @@ describe("useGame", () => {
   });
 
   test("restores the current revision/date Daily and persists later guesses", async () => {
-    const key = dailyStorageKey({ sourceRevision: "revision", utcDate: "2026-08-12", ruleset: "v2" });
+    const key = dailyStorageKey({ sourceRevision: "revision", utcDate: "2026-08-12", ruleset: "v3" });
     localStorage.setItem(key, JSON.stringify({
-      version: 2,
+      version: 3,
       answer: dailyAnswer,
       guesses: [{ cardId: "SECOND", results: compareGuess(cards[1]!, cards[0]!) }],
       status: "won",
@@ -173,9 +173,9 @@ describe("useGame", () => {
   });
 
   test("does not award a streak for forged won storage", async () => {
-    const key = dailyStorageKey({ sourceRevision: "revision", utcDate: "2026-08-12", ruleset: "v2" });
+    const key = dailyStorageKey({ sourceRevision: "revision", utcDate: "2026-08-12", ruleset: "v3" });
     localStorage.setItem(key, JSON.stringify({
-      version: 2,
+      version: 3,
       answer: dailyAnswer,
       guesses: [],
       status: "won",

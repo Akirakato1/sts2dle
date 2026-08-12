@@ -1,8 +1,6 @@
 import type {
   CardClass,
   CardIdentity,
-  CardRarity,
-  CardType,
   FeatureVector,
   ManaValue,
 } from "../../shared/domain.js";
@@ -45,18 +43,6 @@ function normalizeClass(value: string): CardClass {
   return result;
 }
 
-function normalizeType(value: string): CardType {
-  if (["Attack", "Skill", "Power", "Quest", "Status", "Curse"].includes(value)) {
-    return value as CardType;
-  }
-  throw new Error("Unsupported card type: " + value);
-}
-
-function normalizeRarity(value: string | null): CardRarity {
-  if (value === "Common" || value === "Uncommon" || value === "Rare") return value;
-  return "None";
-}
-
 function keywordFlags(keywords: string[] | null | undefined): Record<Keyword, boolean> {
   const values = new Set(keywords?.map((keyword) => keyword.toLowerCase()));
   return Object.fromEntries(KEYWORDS.map((keyword) => [keyword, values.has(keyword)])) as Record<Keyword, boolean>;
@@ -66,9 +52,9 @@ function buildFeatures(raw: RawSpireCard, mana: ManaValue): FeatureVector {
   const flags = keywordFlags(raw.keywords_key);
   return {
     cardClass: normalizeClass(raw.color),
-    cardType: normalizeType(raw.type),
+    cardType: raw.type_key,
     mana,
-    rarity: normalizeRarity(raw.rarity),
+    rarity: raw.rarity_key,
     eternal: flags.eternal,
     ethereal: flags.ethereal,
     exhaust: flags.exhaust,

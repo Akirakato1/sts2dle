@@ -90,8 +90,17 @@ async function writeBytesAndRehash(path: string, filename: string, bytes: Buffer
 
 function corruptWebpPayload(bytes: Buffer): Buffer {
   const corrupted = Buffer.from(bytes);
-  corrupted.fill(0, 40);
-  return corrupted;
+  for (let offset = 12; offset + 8 <= corrupted.length;) {
+    const chunkType = corrupted.subarray(offset, offset + 4).toString("ascii");
+    const chunkSize = corrupted.readUInt32LE(offset + 4);
+    const payloadStart = offset + 8;
+    if ((chunkType === "VP8 " || chunkType === "VP8L") && payloadStart + 20 < corrupted.length) {
+      corrupted.fill(0, payloadStart + 20);
+      return corrupted;
+    }
+    offset = payloadStart + chunkSize + (chunkSize % 2);
+  }
+  throw new Error("WebP image data chunk is required for corruption fixture");
 }
 
 async function expectIssues(path: string, patterns: readonly RegExp[]): Promise<void> {
@@ -108,17 +117,17 @@ describe("validateSnapshot", () => {
     const path = await createValidSnapshot();
 
     await expect(validateSnapshot(path, VALIDATION_OPTIONS)).resolves.toMatchObject({
-      cardCount: 6,
-      upgradeCount: 5,
-      baseGroupCount: 6,
-      pairGroupCount: 6,
+      cardCount: 7,
+      upgradeCount: 6,
+      baseGroupCount: 7,
+      pairGroupCount: 7,
       missingRawArtCardIds: [],
       fallbackCardIds: ["MAD_SCIENCE"],
-      candidateSprite: { width: 192, height: 128 },
-      guessSprite: { width: 480, height: 320 },
+      candidateSprite: { width: 192, height: 192 },
+      guessSprite: { width: 480, height: 480 },
     });
     const report = await validateSnapshot(path, VALIDATION_OPTIONS);
-    expect(Object.values(report.baseGroupHistogram).reduce((sum, value) => sum + value, 0)).toBe(6);
+    expect(Object.values(report.baseGroupHistogram).reduce((sum, value) => sum + value, 0)).toBe(7);
     expect(report.candidateSprite.bytes).toBeGreaterThan(0);
     expect(report.guessSprite.bytes).toBeGreaterThan(0);
   });
@@ -236,12 +245,12 @@ describe("validateSnapshot", () => {
     await expect(validateSnapshot(path, {
       ...VALIDATION_OPTIONS,
       imageDecodeObserver,
-    })).resolves.toMatchObject({ cardCount: 6 });
+    })).resolves.toMatchObject({ cardCount: 7 });
 
     const requests = imageDecodeObserver.mock.calls.map(([request]) => request);
     expect(requests).toEqual(expect.arrayContaining([
-      { label: "candidate.webp", limitInputPixels: 192 * 128 },
-      { label: "guess.webp", limitInputPixels: 480 * 320 },
+      { label: "candidate.webp", limitInputPixels: 192 * 192 },
+      { label: "guess.webp", limitInputPixels: 480 * 480 },
     ]));
     expect(requests.filter(({ label }) => label.startsWith("fallback/"))).toHaveLength(2);
     expect(requests.filter(({ label }) => label.startsWith("fallback/")).every(
@@ -395,6 +404,7 @@ describe("validateSnapshot", () => {
     ["cardClass", "Watcher", /unknown card class.*AFTERIMAGE/i],
     ["cardType", "Relic", /unknown card type.*AFTERIMAGE/i],
     ["rarity", "Mythic", /unknown card rarity.*AFTERIMAGE/i],
+    ["rarity", "None", /unknown card rarity.*AFTERIMAGE/i],
     ["mana", -5, /unknown mana value.*AFTERIMAGE/i],
     ["exhaust", "sometimes", /unknown keyword value.*exhaust.*AFTERIMAGE/i],
   ] as const)("rejects an unknown %s feature value", async (field, value, pattern) => {
@@ -440,7 +450,7 @@ describe("validateSnapshot", () => {
     dazed.upgraded = Object.fromEntries(Object.entries(dazed.upgraded).reverse());
     await writeJsonAndRehash(path, "cards.json", cards);
 
-    await expect(validateSnapshot(path, VALIDATION_OPTIONS)).resolves.toMatchObject({ cardCount: 6 });
+    await expect(validateSnapshot(path, VALIDATION_OPTIONS)).resolves.toMatchObject({ cardCount: 7 });
   });
 
   it("still rejects a changed feature on a non-upgradable card", async () => {

@@ -8,8 +8,14 @@ export type FeatureName = (typeof FEATURE_ORDER)[number];
 export type CardClass =
   | "Ironclad" | "Silent" | "Defect" | "Necrobinder"
   | "Regent" | "Neutral" | "Event";
-export type CardType = "Attack" | "Skill" | "Power" | "Quest" | "Status" | "Curse";
-export type CardRarity = "Common" | "Uncommon" | "Rare" | "None";
+export const CARD_TYPES = ["Attack", "Skill", "Power", "Quest", "Status", "Curse"] as const;
+export type CardType = (typeof CARD_TYPES)[number];
+
+export const CARD_RARITIES = [
+  "Ancient", "Basic", "Common", "Curse", "Event",
+  "Quest", "Rare", "Status", "Token", "Uncommon",
+] as const;
+export type CardRarity = (typeof CARD_RARITIES)[number];
 export type ManaValue = number | "X" | "None";
 
 export interface FeatureVector {

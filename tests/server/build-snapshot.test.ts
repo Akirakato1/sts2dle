@@ -267,7 +267,7 @@ describe("buildSnapshot", () => {
       fetchedAt: "2026-08-11T23:59:00.000Z",
       generatedAt: "2026-08-12T00:00:00.000Z",
       cardCount: fixture.length,
-      upgradeCount: 5,
+      upgradeCount: 6,
     });
     expect(activated.manifest.baseGroupCount).toBeGreaterThan(0);
     expect(activated.report.cardCount).toBe(fixture.length);

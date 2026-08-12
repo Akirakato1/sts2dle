@@ -51,6 +51,34 @@ describe("loadSnapshot", () => {
     expect(snapshot.cards[0]?.base.mana).toBe("None");
   });
 
+  test("accepts canonical Codex rarities and rejects the legacy None rarity", async () => {
+    const basicCard = {
+      ...card,
+      base: { ...card.base, rarity: "Basic" },
+      upgraded: { ...card.upgraded, rarity: "Basic" },
+    };
+    await expect(loadSnapshot(jsonFetch({
+      "/runtime/manifest.json": manifest,
+      "/runtime/cards.json": [basicCard],
+      "/runtime/base-groups.json": baseGroups,
+      "/runtime/pair-groups.json": pairGroups,
+      "/runtime/sprite-map.json": spriteMap,
+    }))).resolves.toMatchObject({ cards: [expect.objectContaining({ base: expect.objectContaining({ rarity: "Basic" }) })] });
+
+    const legacyCard = {
+      ...card,
+      base: { ...card.base, rarity: "None" },
+      upgraded: { ...card.upgraded, rarity: "None" },
+    };
+    await expect(loadSnapshot(jsonFetch({
+      "/runtime/manifest.json": manifest,
+      "/runtime/cards.json": [legacyCard],
+      "/runtime/base-groups.json": baseGroups,
+      "/runtime/pair-groups.json": pairGroups,
+      "/runtime/sprite-map.json": spriteMap,
+    }))).rejects.toThrow("/runtime/cards.json");
+  });
+
   test.each([
     ["unplayable feature", { ...card.base, unplayable: true }],
     ["en dash mana", { ...card.base, mana: "\u2013" }],

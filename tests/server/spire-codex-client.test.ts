@@ -42,6 +42,22 @@ describe("SpireCodexClient", () => {
     await expect(client.fetchCards()).rejects.toThrow("invalid cards response");
   });
 
+  it.each([
+    ["missing type key", (card: Record<string, unknown>) => { delete card.type_key; }],
+    ["missing rarity key", (card: Record<string, unknown>) => { delete card.rarity_key; }],
+    ["unknown type key", (card: Record<string, unknown>) => { card.type_key = "FutureType"; }],
+    ["unknown rarity key", (card: Record<string, unknown>) => { card.rarity_key = "FutureRarity"; }],
+  ])("rejects a response with a %s", async (_label, mutate) => {
+    const cards = structuredClone(fixture) as Array<Record<string, unknown>>;
+    mutate(cards[0]!);
+    const client = new SpireCodexClient({
+      baseUrl: "https://example.test",
+      fetchImpl: async () => new Response(JSON.stringify(cards)),
+    });
+
+    await expect(client.fetchCards()).rejects.toThrow("Spire Codex returned an invalid cards response");
+  });
+
   it("includes HTTP and rate-limit context when the server rejects the request", async () => {
     const client = new SpireCodexClient({
       baseUrl: "https://example.test",

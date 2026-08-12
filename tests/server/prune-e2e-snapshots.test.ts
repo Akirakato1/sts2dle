@@ -293,7 +293,7 @@ describe("withE2eFixtureDataLock", () => {
     expect(pointer.buildId).toBe(secondSnapshot.buildId);
     expect(snapshotDirectories).toEqual([secondSnapshot.buildId]);
     await expect(validateSnapshot(secondSnapshot.path, VALIDATION_OPTIONS)).resolves.toMatchObject({
-      cardCount: 6,
+      cardCount: 7,
     });
   });
 
