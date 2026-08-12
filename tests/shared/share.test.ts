@@ -64,6 +64,22 @@ describe("formatDailyShare", () => {
     expect(text).toContain("https://example.test/");
   });
 
+  test("keeps share symbol rows in chronological guess order", () => {
+    const text = formatDailyShare({
+      utcDate: "2026-08-12",
+      guesses: [
+        { cardId: "FIRST_GUESS", results: FEATURE_ORDER.map((feature) => result(feature, "red")) },
+        { cardId: "SECOND_GUESS", results: FEATURE_ORDER.map((feature) => result(feature, "green")) },
+      ],
+      siteUrl: "https://example.test/",
+    });
+
+    expect(text.split("\n").slice(1, 3)).toEqual([
+      "\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}",
+      "\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}",
+    ]);
+  });
+
   test("rejects a malformed guess rather than leaking a partial result", () => {
     expect(() => formatDailyShare({
       utcDate: "2026-08-12",

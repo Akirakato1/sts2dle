@@ -24,6 +24,7 @@ const features = {
 const cards: CardIdentity[] = [
   { id: "first", name: "First Guess", hasUpgrade: true, artUrl: "", baseCardUrl: null, upgradedCardUrl: null, base: features, upgraded: features },
   { id: "second", name: "Second Guess", hasUpgrade: true, artUrl: "", baseCardUrl: null, upgradedCardUrl: null, base: features, upgraded: features },
+  { id: "third", name: "Third Guess", hasUpgrade: true, artUrl: "", baseCardUrl: null, upgradedCardUrl: null, base: features, upgraded: features },
 ];
 
 const results: FeatureResult[] = [
@@ -42,6 +43,7 @@ const results: FeatureResult[] = [
 const guesses: SubmittedGuess[] = [
   { cardId: "first", results },
   { cardId: "second", results: results.map((result) => ({ ...result, displayValue: result.feature === "cardClass" ? "Silent" : result.displayValue })) },
+  { cardId: "third", results: results.map((result) => ({ ...result, displayValue: result.feature === "cardClass" ? "Defect" : result.displayValue })) },
 ];
 
 const spriteMap: SpriteMap = {
@@ -50,6 +52,7 @@ const spriteMap: SpriteMap = {
   cards: {
     first: { candidate: { x: 0, y: 0, width: 64, height: 64 }, guess: { x: 0, y: 0, width: 160, height: 160 } },
     second: { candidate: { x: 64, y: 0, width: 64, height: 64 }, guess: { x: 160, y: 0, width: 160, height: 160 } },
+    third: { candidate: { x: 0, y: 0, width: 64, height: 64 }, guess: { x: 0, y: 0, width: 160, height: 160 } },
   },
 };
 
@@ -84,13 +87,38 @@ describe("GuessGrid", () => {
     expect(within(guessRow).getAllByRole("cell")).toHaveLength(10);
   });
 
-  test("keeps the earliest guess above later guesses and displays 160px source art at 72px", () => {
+  test("renders newest guesses immediately below the header while preserving source art sizing", () => {
     render(<GuessGrid guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={2} />);
 
-    const rows = screen.getAllByRole("row");
-    expect(within(rows[1]!).getByRole("rowheader")).toHaveAccessibleName("First Guess artwork and name");
-    expect(within(rows[2]!).getByRole("rowheader")).toHaveAccessibleName("Second Guess artwork and name");
+    expect(screen.getAllByRole("rowheader").map((cell) => cell.getAttribute("aria-label"))).toEqual([
+      "Third Guess artwork and name",
+      "Second Guess artwork and name",
+      "First Guess artwork and name",
+    ]);
     expect(screen.getByRole("img", { name: "First Guess guess artwork" })).toHaveStyle({ width: "72px", height: "72px" });
+  });
+
+  test("animates only the newest submitted row and completes its reveal from the first body row", () => {
+    vi.useFakeTimers();
+    const onRevealComplete = vi.fn();
+    const { container } = render(<GuessGrid guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={2} onRevealComplete={onRevealComplete} />);
+
+    expect(screen.getAllByRole("rowheader").map((cell) => cell.getAttribute("aria-label"))).toEqual([
+      "Third Guess artwork and name",
+      "Second Guess artwork and name",
+      "First Guess artwork and name",
+    ]);
+    const rows = screen.getAllByRole("row");
+    expect(within(rows[1]!).getAllByRole("cell").every((tile) => !tile.classList.contains("feature-tile--immediate"))).toBe(true);
+    expect(within(rows[2]!).getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
+    expect(within(rows[3]!).getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
+
+    const surfaces = container.querySelectorAll(".feature-tile__surface");
+    dispatchTransitionEnd(surfaces[19]!, "transform");
+    expect(onRevealComplete).not.toHaveBeenCalled();
+    dispatchTransitionEnd(surfaces[9]!, "transform");
+    dispatchTransitionEnd(surfaces[9]!, "transform");
+    expect(onRevealComplete).toHaveBeenCalledOnce();
   });
 
   test("assigns sequential reveal indices and completes only after the final new tile flips", () => {
@@ -110,7 +138,12 @@ describe("GuessGrid", () => {
 
   test("renders restored guesses in their final state without replaying animation", () => {
     render(<GuessGrid guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={guesses.length} />);
-    expect(screen.getAllByRole("cell")).toHaveLength(20);
+    expect(screen.getAllByRole("rowheader").map((cell) => cell.getAttribute("aria-label"))).toEqual([
+      "Third Guess artwork and name",
+      "Second Guess artwork and name",
+      "First Guess artwork and name",
+    ]);
+    expect(screen.getAllByRole("cell")).toHaveLength(30);
     expect(screen.getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
   });
 

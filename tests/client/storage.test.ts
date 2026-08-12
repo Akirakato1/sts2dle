@@ -60,7 +60,20 @@ const guessCard = card("GUESS", {
   eternal: true,
 });
 const results = compareGuess(guessCard, answerCard);
-const cardsById = new Map([[answerCard.id, answerCard], [guessCard.id, guessCard]]);
+const laterGuessCard = card("LATER_GUESS", {
+  ...base,
+  cardClass: "Defect",
+  cardType: "Power",
+  mana: 3,
+  rarity: "Uncommon",
+  ethereal: true,
+});
+const laterResults = compareGuess(laterGuessCard, answerCard);
+const cardsById = new Map([
+  [answerCard.id, answerCard],
+  [guessCard.id, guessCard],
+  [laterGuessCard.id, laterGuessCard],
+]);
 const identity = { sourceRevision: "abc", utcDate: "2026-08-12", ruleset: "v3" };
 const round: RoundState = {
   mode: "daily",
@@ -93,6 +106,27 @@ describe("Daily round storage", () => {
       ...round,
       error: null,
     });
+  });
+
+  test("serializes and restores guesses in chronological order", () => {
+    const storage = new MemoryStorage();
+    const chronologicalRound = {
+      ...round,
+      guesses: [
+        { cardId: guessCard.id, results },
+        { cardId: laterGuessCard.id, results: laterResults },
+      ],
+    };
+    saveDailyRound(storage, identity, chronologicalRound);
+
+    expect(JSON.parse(storage.getItem(dailyStorageKey(identity))!).guesses.map((guess: { cardId: string }) => guess.cardId)).toEqual([
+      "GUESS",
+      "LATER_GUESS",
+    ]);
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)?.guesses.map((guess) => guess.cardId)).toEqual([
+      "GUESS",
+      "LATER_GUESS",
+    ]);
   });
 
   test("rejects rounds with an old version or a non-canonical result shape", () => {

@@ -48,6 +48,9 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
   const completedRevealKeyRef = useRef<string | null>(null);
   const onRevealCompleteRef = useRef(onRevealComplete);
   onRevealCompleteRef.current = onRevealComplete;
+  const renderedGuesses = useMemo(() => guesses
+    .map((guess, chronologicalIndex) => ({ guess, chronologicalIndex }))
+    .reverse(), [guesses]);
   const hasPendingReveal = animateFromIndex < guesses.length;
   const activeRevealKey = `${String(roundKey)}:${animateFromIndex}:${guesses.length}:${guesses.at(-1)?.cardId ?? ""}`;
   const renderedController = useMemo<RevealController | null>(() => hasPendingReveal
@@ -100,21 +103,22 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
           key={feature}
         >{FEATURE_LABELS[feature]}</div>)}
       </div>
-      {guesses.map((guess, rowIndex) => {
+      {renderedGuesses.map(({ guess, chronologicalIndex }) => {
         const card = cardsById.get(guess.cardId);
         if (!card) return null;
-        const animate = !reducedMotion && rowIndex >= animateFromIndex;
-        return <div className="guess-grid__row" role="row" key={`${String(roundKey)}:${guess.cardId}:${rowIndex}`}>
+        const animate = !reducedMotion && chronologicalIndex >= animateFromIndex;
+        const isNewestChronologicalGuess = chronologicalIndex === guesses.length - 1;
+        return <div className="guess-grid__row" role="row" key={`${String(roundKey)}:${guess.cardId}:${chronologicalIndex}`}>
           <div className="guess-grid__art" role="rowheader" aria-label={`${card.name} artwork and name`}>
             <SpriteArt cardId={card.id} spriteMap={spriteMap} kind="guess" label={`${card.name} guess artwork`} />
             <span className="guess-grid__card-name">{card.name}</span>
           </div>
           {guess.results.map((result, featureIndex) => <FeatureTile
-            key={`${animate ? activeRevealKey : `settled:${rowIndex}`}:${result.feature}`}
+            key={`${animate ? activeRevealKey : `settled:${chronologicalIndex}`}:${result.feature}`}
             result={result}
             revealIndex={featureIndex}
             animate={animate}
-            {...(animate && rowIndex === guesses.length - 1 && featureIndex === FEATURE_ORDER.length - 1 && onRevealComplete && renderedController
+            {...(animate && isNewestChronologicalGuess && featureIndex === FEATURE_ORDER.length - 1 && onRevealComplete && renderedController
               ? { onRevealEnd: (event: React.TransitionEvent<HTMLDivElement>) => handleFinalTransition(renderedController, event) }
               : {})}
           />)}
