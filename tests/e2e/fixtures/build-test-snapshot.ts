@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 
-import type { CardIdentity } from "../../../src/shared/domain.js";
+import {
+  CARD_RARITIES,
+  CARD_TYPES,
+  type CardIdentity,
+} from "../../../src/shared/domain.js";
 import { baseKey, pairKey } from "../../../src/shared/feature-keys.js";
 import { RawSpireCardsSchema, type RawSpireCard } from "../../../src/server/spire-codex/schema.js";
 import { buildSnapshot } from "../../../src/server/sync/build-snapshot.js";
@@ -103,6 +107,18 @@ async function main(): Promise<void> {
     const builtCards = JSON.parse(
       await readFile(resolve(built.path, "cards.json"), "utf8"),
     ) as CardIdentity[];
+    const fallingStar = builtCards.find((card) => card.id === "FALLING_STAR");
+    if (fallingStar?.base.rarity !== "Basic" || fallingStar.upgraded.rarity !== "Basic") {
+      throw new Error("Falling Star fixture rarity was not preserved");
+    }
+    for (const card of builtCards) {
+      if (!CARD_TYPES.includes(card.base.cardType) || !CARD_TYPES.includes(card.upgraded.cardType)) {
+        throw new Error(`Fixture card type is outside the canonical domain: ${card.id}`);
+      }
+      if (!CARD_RARITIES.includes(card.base.rarity) || !CARD_RARITIES.includes(card.upgraded.rarity)) {
+        throw new Error(`Fixture rarity is outside the canonical domain: ${card.id}`);
+      }
+    }
     const dazed = builtCards.find((card) => card.id === "DAZED");
     const dazedPair = builtCards.find((card) => card.id === "DAZED_PAIR");
     if (!dazed || !dazedPair) throw new Error("Dazed E2E pair was not retained");

@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from "@playwright/test";
 
 import type { CardIdentity, PairGroup, SnapshotManifest } from "../../src/shared/domain.js";
 import { compareGuess } from "../../src/shared/comparison.js";
@@ -19,7 +19,12 @@ const FIXED_UTC_DATE = FIXED_NOW.toISOString().slice(0, 10);
 interface FixtureModel {
   cards: CardIdentity[];
   answer: SelectedAnswer;
-  wrongGuess: CardIdentity;
+  wrongGuesses: readonly [CardIdentity, CardIdentity];
+}
+
+interface AtlasReadiness {
+  urls: { candidate: string; guess: string };
+  responses: Map<string, Promise<Response>>;
 }
 
 interface FullCardFailureGate {
@@ -60,13 +65,16 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
   const source = await createDailyRandom(FIXED_UTC_DATE, manifest.sourceRevision);
   const answer = selectAnswer({ baseGroups, pairGroups, pairGroupsByKey, baseGroupsByKey: new Map(baseGroups.map((group: { key: string }) => [group.key, group])) }, cardsById, source);
   const answerCard = cardsById.get(answer.selectedCardId)!;
-  const wrongGuess = cards.find((card) => !answer.acceptedCardIds.includes(card.id)
-    && compareGuess(card, answerCard).some((result) => result.color === "yellow")
-    && compareGuess(card, answerCard).some(
-      (result) => result.feature === "mana" && result.color !== "green",
-    ));
-  if (!wrongGuess) throw new Error("Fixture does not contain a yellow-plus-mana mismatch");
-  return { cards, answer, wrongGuess };
+  const risingGuess = cards.find((card) => card.id === "AFTERIMAGE");
+  const fallingGuess = cards.find((card) => card.id === "APPARITION");
+  if (!risingGuess || !fallingGuess) throw new Error("Directional E2E guesses were not retained");
+  if (!compareGuess(risingGuess, answerCard).some((result) => result.displayValue === "false → true")) {
+    throw new Error("Afterimage no longer demonstrates the false-to-true fixture direction");
+  }
+  if (!compareGuess(fallingGuess, answerCard).some((result) => result.displayValue === "true → false")) {
+    throw new Error("Apparition no longer demonstrates the true-to-false fixture direction");
+  }
+  return { cards, answer, wrongGuesses: [risingGuess, fallingGuess] };
 }
 
 async function chooseCard(page: Page, name: string): Promise<void> {
@@ -86,8 +94,15 @@ async function prepareOfflinePage(
     }
     return route.fulfill({ status: 200, contentType: "image/png", body: ONE_PIXEL_PNG });
   });
-  await page.clock.setFixedTime(FIXED_NOW);
-  await page.addInitScript(() => {
+  await page.addInitScript((fixedNow) => {
+    const NativeDate = Date;
+    class FixedDate extends NativeDate {
+      constructor(value?: string | number | Date) {
+        super(value === undefined ? fixedNow : value);
+      }
+      static override now(): number { return fixedNow; }
+    }
+    Object.defineProperty(window, "Date", { configurable: true, value: FixedDate });
     Object.defineProperty(window.crypto, "getRandomValues", {
       configurable: true,
       value: (values: Uint32Array) => {
@@ -95,7 +110,7 @@ async function prepareOfflinePage(
         return values;
       },
     });
-  });
+  }, FIXED_NOW.valueOf());
   return guard;
 }
 
@@ -106,6 +121,36 @@ async function expectAccessibleTarget(locator: Locator): Promise<void> {
   expect(box!.width).toBeGreaterThanOrEqual(44);
 }
 
+function watchAtlasResponses(page: Page): AtlasReadiness {
+  const urls = {
+    candidate: new URL("/runtime/candidate.webp", "http://127.0.0.1:3000").href,
+    guess: new URL("/runtime/guess.webp", "http://127.0.0.1:3000").href,
+  };
+  const responses = new Map<string, Promise<Response>>();
+  page.on("response", (response) => {
+    if (Object.values(urls).includes(response.url())) {
+      responses.set(response.url(), response.finished().then(() => response));
+    }
+  });
+  return { urls, responses };
+}
+
+async function expectAtlasesReady(page: Page, readiness: AtlasReadiness): Promise<void> {
+  for (const url of Object.values(readiness.urls)) {
+    const response = await readiness.responses.get(url);
+    expect(response, `${url} should finish before gameplay`).toBeDefined();
+    expect(response!.ok()).toBe(true);
+  }
+  await expect.poll(() => page.evaluate((urls) => performance.getEntriesByType("resource")
+    .filter((entry) => urls.includes(entry.name))
+    .map((entry) => ({ name: entry.name, responseEnd: (entry as PerformanceResourceTiming).responseEnd })), Object.values(readiness.urls)))
+    .toHaveLength(2);
+  const completedTimings = await page.evaluate((urls) => performance.getEntriesByType("resource")
+    .filter((entry) => urls.includes(entry.name))
+    .map((entry) => ({ name: entry.name, responseEnd: (entry as PerformanceResourceTiming).responseEnd })), Object.values(readiness.urls));
+  expect(completedTimings.every((entry) => entry.responseEnd > 0)).toBe(true);
+}
+
 test("Daily and Practice complete the full paired-card experience without leaking the answer", async ({ context, page, request }) => {
   const model = await loadFixtureModel(request);
   const retryCard = model.answer.acceptedCardIds
@@ -113,8 +158,11 @@ test("Daily and Practice complete the full paired-card experience without leakin
     .find((card) => card.baseCardUrl?.startsWith("https://cdn.test/"))!;
   const fullCardFailure = { allow: false, url: retryCard.baseCardUrl! };
   const codexGuard = await prepareOfflinePage(page, fullCardFailure);
+  const atlasReadiness = watchAtlasResponses(page);
 
   await page.goto("/");
+  await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
+  await expectAtlasesReady(page, atlasReadiness);
   await context.grantPermissions(
     ["clipboard-read", "clipboard-write"],
     { origin: new URL(page.url()).origin },
@@ -126,9 +174,23 @@ test("Daily and Practice complete the full paired-card experience without leakin
   );
   await expect(attribution).toContainText(/unofficial fan project/i);
   await expect(attribution).toContainText(/not affiliated with or endorsed by Mega Crit/i);
-  await expect(page.getByText(/Each guess compares its base card and upgrade together/i)).toBeVisible();
+  for (const meaning of [
+    "Both base and upgraded features match",
+    "Exactly one version matches",
+    "Neither version matches",
+  ]) await expect(page.getByText(meaning, { exact: true })).toBeVisible();
+  const rules = page.getByText("How to play", { exact: true }).locator("..");
+  await expect(rules).not.toHaveAttribute("open");
+  await page.getByText("How to play", { exact: true }).click();
+  await expect(rules).toHaveAttribute("open");
+  await expect(rules).toContainText("Guess a base card name. Each guess compares the guessed base to the answer base and the guessed upgraded card to the answer upgraded card: base-to-base and upgraded-to-upgraded.");
+  await expect(rules).toContainText("An X means keyword absent; a checkmark means keyword present.");
+  await expect(rules).toContainText("Cards with identical complete paired feature sets are accepted as equivalent answers.");
+  await expect(rules).toContainText("Daily uses the UTC date, restores your progress, and produces a share result after a win.");
+  await expect(rules).toContainText("Practice provides unlimited random rounds and no share result.");
   const dailyTab = page.getByRole("button", { name: "Daily" });
   await expectAccessibleTarget(dailyTab);
+  await page.keyboard.press("Tab");
   await dailyTab.focus();
   const focusRing = await dailyTab.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -145,26 +207,49 @@ test("Daily and Practice complete the full paired-card experience without leakin
   await expect(page.getByRole("option").getByRole("img")).toHaveCount(candidateNames.length);
   await search.fill("");
 
-  await chooseCard(page, model.wrongGuess.name);
-  const wrongRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(model.wrongGuess.name) }) });
+  await search.fill("A");
+  const firstCandidate = page.getByRole("option").first();
+  const candidateSprite = firstCandidate.locator(".sprite-art--candidate");
+  await expect(candidateSprite).toHaveCSS("background-image", /candidate\.webp/);
+  await search.fill("");
+
+  const [firstWrongGuess, secondWrongGuess] = model.wrongGuesses;
+  await chooseCard(page, firstWrongGuess.name);
+  const wrongRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(firstWrongGuess.name) }) });
   await expect(wrongRow.getByRole("cell")).toHaveCount(10);
   const guessArtworkBox = await wrongRow.getByRole("img", {
-    name: `${model.wrongGuess.name} guess artwork`,
+    name: `${firstWrongGuess.name} guess artwork`,
   }).boundingBox();
   expect(guessArtworkBox).toMatchObject({ width: 72, height: 72 });
   await expect(wrongRow.getByRole("cell", { name: /Result: yellow/ }).first()).toBeVisible();
   await expect(wrongRow.getByRole("cell", { name: /Mana: .*Result: (red|yellow)\./ })).toBeVisible();
   await expect(wrongRow).not.toContainText(/Direction:/);
   await expect(wrongRow.locator(".feature-tile__result-mark, .feature-tile__hint")).toHaveCount(0);
+  const risingCell = wrongRow.getByRole("cell", { name: /absent to present/ });
+  await expect(risingCell.locator("svg[data-icon='x']")).toHaveCount(1);
+  await expect(risingCell.locator("svg[data-icon='check']")).toHaveCount(1);
+  await expect(wrongRow.locator(".sprite-art--guess")).toHaveCSS("background-image", /guess\.webp/);
   await expect(search).toBeEnabled({ timeout: 5_000 });
 
   await page.reload();
-  const restoredRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(model.wrongGuess.name) }) });
+  const restoredRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(firstWrongGuess.name) }) });
   await expect(restoredRow.getByRole("cell")).toHaveCount(10);
   await expect(restoredRow.locator(".feature-tile--immediate")).toHaveCount(10);
   await expect(restoredRow).not.toContainText(/Direction:/);
   await expect(restoredRow.locator(".feature-tile__result-mark, .feature-tile__hint")).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled();
+
+  await chooseCard(page, secondWrongGuess.name);
+  const secondWrongRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(secondWrongGuess.name) }) });
+  const fallingCell = secondWrongRow.getByRole("cell", { name: /present to absent/ });
+  await expect(fallingCell.locator("svg[data-icon='check']")).toHaveCount(1);
+  await expect(fallingCell.locator("svg[data-icon='x']")).toHaveCount(1);
+  await expect(search).toBeEnabled({ timeout: 5_000 });
+  const visibleRowHeaders = await page.getByRole("rowheader").allTextContents();
+  expect(visibleRowHeaders).toEqual([
+    secondWrongGuess.name,
+    firstWrongGuess.name,
+  ]);
 
   const equivalentId = model.answer.acceptedCardIds.find((id) => id !== model.answer.selectedCardId)!;
   const equivalent = model.cards.find((card) => card.id === equivalentId)!;
@@ -210,12 +295,20 @@ test("Daily and Practice complete the full paired-card experience without leakin
   expect(shareText).toContain(FIXED_UTC_DATE);
   for (const card of model.cards) expect(shareText).not.toContain(card.name);
   const shareRows = shareText.split(/\r?\n/).filter((line) => /^[🟩🟨🟥]+$/u.test(line));
-  expect(shareRows).toHaveLength(2);
+  expect(shareRows).toEqual([
+    "🟩🟥🟥🟩🟩🟩🟥🟨🟩🟩",
+    "🟥🟩🟥🟥🟩🟨🟩🟩🟩🟩",
+    "🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩",
+  ]);
   for (const row of shareRows) expect([...row]).toHaveLength(10);
   const dailyStorage = await page.evaluate(() => Object.fromEntries(Object.entries(localStorage)
     .filter(([key]) => key.startsWith("stsdle:daily:") || key === "stsdle:stats:v1")));
 
   await page.getByRole("button", { name: "Practice" }).click();
+  await chooseCard(page, "Falling Star");
+  const fallingStarRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /Falling Star/ }) });
+  await expect(fallingStarRow.getByRole("cell", { name: /^Rarity: Basic\. Result:/ })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled({ timeout: 5_000 });
   const firstPair = (await request.get("/runtime/pair-groups.json").then((response) => response.json() as Promise<PairGroup[]>))[0]!;
   const rawUnplayable = model.cards.find((card) => card.id === "DAZED")!;
   expect(firstPair.cardIds).not.toContain(rawUnplayable.id);
