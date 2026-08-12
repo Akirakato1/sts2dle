@@ -29,6 +29,11 @@ describe("paired feature comparison", () => {
     expect(Object.hasOwn(compareFeature("mana", baseOnlyMatch, answer), "hint")).toBe(false);
   });
 
+  it("marks a mana comparison red when neither base nor upgraded value matches", () => {
+    const noMatches = card("no-matches", { mana: 1 }, { mana: 3 });
+    expect(compareFeature("mana", noMatches, answer).color).toBe("red");
+  });
+
   it("returns one ordered result for every feature", () => {
     expect(compareGuess(card("guess"), answer)).toHaveLength(10);
   });
