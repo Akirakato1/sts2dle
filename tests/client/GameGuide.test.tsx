@@ -33,6 +33,9 @@ describe("GameGuide", () => {
     expect(disclosure).toHaveTextContent(/Reveal.*header.*full base.*upgraded pair/i);
     expect(disclosure).toHaveTextContent(/Filter.*green.*exact pair/i);
     expect(disclosure).toHaveTextContent(/Negation.*red.*exclude.*red.*priority/i);
+    expect(disclosure).toHaveTextContent(/badges.*persist/i);
+    expect(disclosure).toHaveTextContent(/colored candidates.*guessable/i);
+    expect(disclosure).toHaveTextContent(/category checkboxes.*only hide.*list rows/i);
     expect(disclosure).toHaveTextContent(/candidate controls.*advisory/i);
     expect(disclosure).toHaveTextContent(/empty.*focus.*candidate list/i);
     expect(disclosure).toHaveTextContent("The name-hint mask uses the deterministically selected answer name. Equivalent answers with the same complete paired-feature set remain accepted.");

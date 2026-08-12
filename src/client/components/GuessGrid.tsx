@@ -1,17 +1,67 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SubmittedGuess } from "../game/game-reducer.js";
-import { FEATURE_ORDER, type CardIdentity, type SpriteMap } from "../../shared/domain.js";
-import { FEATURE_LABELS, FeatureTile, REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "./FeatureTile.js";
+import type { AssistanceState, ConstraintOrbTarget } from "../game/assistance.js";
+import { formatFeatureValue } from "../../shared/comparison.js";
+import { FEATURE_ORDER, type CardIdentity, type FeatureName, type SpriteMap } from "../../shared/domain.js";
+import { FEATURE_LABELS, FeatureTile, keywordAccessibleValue, REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "./FeatureTile.js";
+import { KeywordStateIcons, type KeywordStateDisplayValue } from "./KeywordStateIcons.js";
+import { useOrbInteraction } from "./OrbInteractionContext.js";
 import { SpriteArt } from "./SpriteArt.js";
 
 export interface GuessGridProps {
   guesses: readonly SubmittedGuess[];
   cardsById: ReadonlyMap<string, CardIdentity>;
+  selectedAnswer: CardIdentity;
+  assistance: AssistanceState | null;
   spriteMap: SpriteMap;
   roundKey: string | number;
   animateFromIndex: number;
   onRevealComplete?: () => void;
+}
+
+function isKeywordFeature(feature: FeatureName): boolean {
+  return feature !== "cardClass" && feature !== "cardType" && feature !== "mana" && feature !== "rarity";
+}
+
+function FeatureHeader({ feature, selectedAnswer, revealed }: {
+  feature: FeatureName;
+  selectedAnswer: CardIdentity;
+  revealed: boolean;
+}) {
+  const binding = useOrbInteraction().bindTarget(
+    { kind: "header", feature },
+    ["reveal"],
+    `${FEATURE_LABELS[feature]} feature heading`,
+  );
+  const displayValue = formatFeatureValue(selectedAnswer.base[feature], selectedAnswer.upgraded[feature]);
+  const accessibleValue = isKeywordFeature(feature) ? keywordAccessibleValue(displayValue) : displayValue;
+
+  return <div className="guess-grid__header" role="columnheader" data-feature={feature}>
+    <span className="guess-grid__header-label">{FEATURE_LABELS[feature]}</span>
+    {revealed && <span className="guess-grid__reveal-bubble" role="note" aria-label={`Answer: ${accessibleValue}`}>
+      {isKeywordFeature(feature)
+        ? <KeywordStateIcons displayValue={displayValue as KeywordStateDisplayValue} />
+        : displayValue}
+    </span>}
+    {binding.valid && <button
+      {...binding.targetProps}
+      type="button"
+      className="guess-grid__header-target orb-target--active orb-target--valid"
+    />}
+  </div>;
+}
+
+function sameConstraintTarget(
+  target: ConstraintOrbTarget | null,
+  guessIndex: number,
+  cardId: string,
+  feature: FeatureName,
+): boolean {
+  return target !== null
+    && target.guessIndex === guessIndex
+    && target.cardId === cardId
+    && target.feature === feature;
 }
 
 export const REVEAL_FALLBACK_SAFETY_MS = 70;
@@ -42,7 +92,16 @@ function usePrefersReducedMotion(): boolean {
   return reducedMotion;
 }
 
-export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFromIndex, onRevealComplete }: GuessGridProps) {
+export function GuessGrid({
+  guesses,
+  cardsById,
+  selectedAnswer,
+  assistance,
+  spriteMap,
+  roundKey,
+  animateFromIndex,
+  onRevealComplete,
+}: GuessGridProps) {
   const reducedMotion = usePrefersReducedMotion();
   const activeControllerRef = useRef<RevealController | null>(null);
   const completedRevealKeyRef = useRef<string | null>(null);
@@ -96,12 +155,12 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
     <div className="guess-grid" role="table" aria-label="Card feature comparisons" aria-colcount={FEATURE_ORDER.length + 1}>
       <div className="guess-grid__row guess-grid__header-row" role="row">
         <div className="guess-grid__header guess-grid__art-header" role="columnheader">Card</div>
-        {FEATURE_ORDER.map((feature) => <div
-          className="guess-grid__header"
-          role="columnheader"
-          data-feature={feature}
+        {FEATURE_ORDER.map((feature) => <FeatureHeader
+          feature={feature}
           key={feature}
-        >{FEATURE_LABELS[feature]}</div>)}
+          revealed={assistance?.reveal?.feature === feature}
+          selectedAnswer={selectedAnswer}
+        />)}
       </div>
       {renderedGuesses.map(({ guess, chronologicalIndex }) => {
         const card = cardsById.get(guess.cardId);
@@ -116,8 +175,15 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
           {guess.results.map((result, featureIndex) => <FeatureTile
             key={`${animate ? activeRevealKey : `settled:${chronologicalIndex}`}:${result.feature}`}
             result={result}
+            cardId={guess.cardId}
+            chronologicalGuessIndex={chronologicalIndex}
             revealIndex={featureIndex}
             animate={animate}
+            {...(sameConstraintTarget(assistance?.negation ?? null, chronologicalIndex, guess.cardId, result.feature)
+              ? { orbBadge: "negation" as const }
+              : sameConstraintTarget(assistance?.filter ?? null, chronologicalIndex, guess.cardId, result.feature)
+                ? { orbBadge: "filter" as const }
+                : {})}
             {...(animate && isNewestChronologicalGuess && featureIndex === FEATURE_ORDER.length - 1 && onRevealComplete && renderedController
               ? { onRevealEnd: (event: React.TransitionEvent<HTMLDivElement>) => handleFinalTransition(renderedController, event) }
               : {})}

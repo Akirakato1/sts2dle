@@ -5,6 +5,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GuessGrid, REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid.js";
 import { REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "../../src/client/components/FeatureTile.js";
+import { OrbInteractionProvider, type OrbTargetDescriptor } from "../../src/client/components/OrbInteractionContext.js";
+import { OrbTray } from "../../src/client/components/OrbTray.js";
+import { createDefaultAssistance, type AssistanceState } from "../../src/client/game/assistance.js";
 import type { SubmittedGuess } from "../../src/client/game/game-reducer.js";
 import type { FeatureResult } from "../../src/shared/comparison.js";
 import { FEATURE_ORDER, type CardIdentity, type SpriteMap } from "../../src/shared/domain.js";
@@ -26,6 +29,14 @@ const cards: CardIdentity[] = [
   { id: "second", name: "Second Guess", hasUpgrade: true, artUrl: "", baseCardUrl: null, upgradedCardUrl: null, base: features, upgraded: features },
   { id: "third", name: "Third Guess", hasUpgrade: true, artUrl: "", baseCardUrl: null, upgradedCardUrl: null, base: features, upgraded: features },
 ];
+
+const selectedAnswer: CardIdentity = {
+  ...cards[0]!,
+  id: "answer",
+  name: "Selected Answer",
+  base: { ...features, mana: 2, eternal: false },
+  upgraded: { ...features, mana: 1, eternal: true },
+};
 
 const results: FeatureResult[] = [
   { feature: "cardClass", color: "red", displayValue: "Ironclad" },
@@ -67,9 +78,107 @@ function dispatchTransitionEnd(target: Element, propertyName: string): void {
   fireEvent(target, event);
 }
 
+interface GridHarnessProps extends Omit<React.ComponentProps<typeof GuessGrid>, "assistance" | "selectedAnswer"> {
+  assistance?: AssistanceState | null;
+  selectedAnswer?: CardIdentity;
+  onUse?: (orb: "reveal" | "filter" | "negation", target: OrbTargetDescriptor) => { accepted: boolean; announcement: string };
+}
+
+function GridHarness({
+  assistance = createDefaultAssistance(),
+  selectedAnswer = cards[0]!,
+  onUse = () => ({ accepted: true, announcement: "Orb consumed." }),
+  ...gridProps
+}: GridHarnessProps) {
+  return <OrbInteractionProvider
+    assistance={assistance}
+    disabled={false}
+    onUse={onUse}
+    roundKey={gridProps.roundKey}
+  >
+    {assistance && <OrbTray assistance={assistance} disabled={false} />}
+    <GuessGrid {...gridProps} assistance={assistance} selectedAnswer={selectedAnswer} />
+  </OrbInteractionProvider>;
+}
+
 describe("GuessGrid", () => {
+  test.each(FEATURE_ORDER)("makes only the %s heading dispatchable after selecting Reveal", (feature) => {
+    const onUse = vi.fn(() => ({ accepted: true, announcement: "Feature revealed." }));
+    render(<GridHarness
+      guesses={[]}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      roundKey={`round-${feature}`}
+      animateFromIndex={0}
+      selectedAnswer={selectedAnswer}
+      onUse={onUse}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Orb, available" }));
+    const cardHeader = screen.getByRole("columnheader", { name: "Card" });
+    expect(within(cardHeader).queryByRole("button")).not.toBeInTheDocument();
+    const featureHeader = document.querySelector<HTMLElement>(`[role="columnheader"][data-feature="${feature}"]`)!;
+    fireEvent.click(within(featureHeader).getByRole("button", { name: /Use Reveal Orb/ }));
+
+    expect(onUse).toHaveBeenCalledOnce();
+    expect(onUse).toHaveBeenCalledWith("reveal", { kind: "header", feature });
+  });
+
+  test("persists one formatted Reveal bubble and uses directional keyword state icons", () => {
+    const assistance = { ...createDefaultAssistance(), reveal: { feature: "eternal" as const } };
+    const view = render(<GridHarness
+      guesses={[]}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      roundKey="round-bubble"
+      animateFromIndex={0}
+      selectedAnswer={selectedAnswer}
+      assistance={assistance}
+    />);
+
+    const eternalHeader = document.querySelector<HTMLElement>('[role="columnheader"][data-feature="eternal"]')!;
+    const bubble = within(eternalHeader).getByRole("note", { name: "Answer: absent to present" });
+    expect(view.container.querySelectorAll(".guess-grid__reveal-bubble")).toHaveLength(1);
+    expect([...bubble.querySelectorAll("svg")].map((icon) => icon.dataset.icon)).toEqual(["x", "check"]);
+
+    view.rerender(<GridHarness
+      guesses={[]}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      roundKey="round-bubble"
+      animateFromIndex={0}
+      selectedAnswer={selectedAnswer}
+      assistance={{ ...createDefaultAssistance(), reveal: { feature: "mana" } }}
+    />);
+    expect(screen.getByLabelText("Answer: 2 \u2192 1")).toHaveTextContent("2 \u2192 1");
+    expect(view.container.querySelectorAll(".guess-grid__reveal-bubble")).toHaveLength(1);
+  });
+
+  test("badges only the exact chronological card and feature targets in newest-first rows", () => {
+    const assistance: AssistanceState = {
+      ...createDefaultAssistance(),
+      filter: { guessIndex: 0, cardId: "first", feature: "cardType" },
+      negation: { guessIndex: 1, cardId: "second", feature: "cardClass" },
+    };
+    render(<GridHarness
+      guesses={guesses}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      roundKey="round-badges"
+      animateFromIndex={guesses.length}
+      assistance={assistance}
+    />);
+
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]!).queryByLabelText(/Orb used here/)).not.toBeInTheDocument();
+    expect(within(rows[1]!).getByLabelText("Negation Orb used here")).toBeInTheDocument();
+    expect(within(rows[1]!).queryByLabelText("Filter Orb used here")).not.toBeInTheDocument();
+    expect(within(rows[2]!).getByLabelText("Filter Orb used here")).toBeInTheDocument();
+    expect(within(rows[2]!).queryByLabelText("Negation Orb used here")).not.toBeInTheDocument();
+  });
+
   test("renders a sticky artwork column followed by exactly the ten canonical feature columns", () => {
-    render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} />);
+    render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} />);
 
     expect(screen.getByRole("table")).toHaveAttribute("aria-colcount", "11");
     const headers = screen.getAllByRole("columnheader");
@@ -88,7 +197,7 @@ describe("GuessGrid", () => {
   });
 
   test("renders newest guesses immediately below the header while preserving source art sizing", () => {
-    render(<GuessGrid guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={2} />);
+    render(<GridHarness guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={2} />);
 
     expect(screen.getAllByRole("rowheader").map((cell) => cell.getAttribute("aria-label"))).toEqual([
       "Third Guess artwork and name",
@@ -101,7 +210,7 @@ describe("GuessGrid", () => {
   test("animates only the newest submitted row and completes its reveal from the first body row", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
-    const { container } = render(<GuessGrid guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={2} onRevealComplete={onRevealComplete} />);
+    const { container } = render(<GridHarness guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={2} onRevealComplete={onRevealComplete} />);
 
     expect(screen.getAllByRole("rowheader").map((cell) => cell.getAttribute("aria-label"))).toEqual([
       "Third Guess artwork and name",
@@ -124,7 +233,7 @@ describe("GuessGrid", () => {
   test("assigns sequential reveal indices and completes only after the final new tile flips", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
-    const { container } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    const { container } = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
 
     const tiles = screen.getAllByRole("cell");
     expect(tiles.map((tile) => tile.style.getPropertyValue("--reveal-index"))).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
@@ -137,7 +246,7 @@ describe("GuessGrid", () => {
   });
 
   test("renders restored guesses in their final state without replaying animation", () => {
-    render(<GuessGrid guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={guesses.length} />);
+    render(<GridHarness guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={guesses.length} />);
     expect(screen.getAllByRole("rowheader").map((cell) => cell.getAttribute("aria-label"))).toEqual([
       "Third Guess artwork and name",
       "Second Guess artwork and name",
@@ -155,15 +264,15 @@ describe("GuessGrid", () => {
       removeEventListener: vi.fn(),
     }));
     const onRevealComplete = vi.fn();
-    const { rerender } = render(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
+    const { rerender } = render(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
 
     expect(screen.getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
     await act(async () => Promise.resolve());
     expect(onRevealComplete).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-    rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} /></StrictMode>);
+    rerender(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} /></StrictMode>);
     expect(onRevealComplete).toHaveBeenCalledOnce();
-    rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
+    rerender(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
     expect(onRevealComplete).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -171,15 +280,15 @@ describe("GuessGrid", () => {
   test("completes a reused normal reveal key once per settled lifecycle", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
-    const view = render(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
+    const view = render(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
     const firstSurface = view.container.querySelectorAll(".feature-tile__surface")[9]!;
     dispatchTransitionEnd(firstSurface, "transform");
     dispatchTransitionEnd(firstSurface, "transform");
     expect(onRevealComplete).toHaveBeenCalledOnce();
 
-    view.rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} /></StrictMode>);
+    view.rerender(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} /></StrictMode>);
     expect(onRevealComplete).toHaveBeenCalledOnce();
-    view.rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
+    view.rerender(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
     const secondSurface = view.container.querySelectorAll(".feature-tile__surface")[9]!;
     dispatchTransitionEnd(secondSurface, "transform");
     dispatchTransitionEnd(secondSurface, "transform");
@@ -191,7 +300,7 @@ describe("GuessGrid", () => {
   test("uses a fallback exactly once when the final transition event is missing", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
-    render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
 
     act(() => vi.advanceTimersByTime(revealFallbackMs - 1));
     expect(onRevealComplete).not.toHaveBeenCalled();
@@ -204,7 +313,7 @@ describe("GuessGrid", () => {
   test("ignores a bubbled transform transition from the final tile child", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
-    const { container } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    const { container } = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
     const finalSurface = container.querySelectorAll(".feature-tile__surface")[9]!;
 
     dispatchTransitionEnd(finalSurface.querySelector(".feature-tile__back")!, "transform");
@@ -216,7 +325,7 @@ describe("GuessGrid", () => {
   test("ignores a transition for the wrong property", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
-    const { container } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    const { container } = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
 
     dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[9]!, "opacity");
     expect(onRevealComplete).not.toHaveBeenCalled();
@@ -227,7 +336,7 @@ describe("GuessGrid", () => {
   test("accepts duplicate valid transition events only once", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
-    const { container } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    const { container } = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
     const finalSurface = container.querySelectorAll(".feature-tile__surface")[9]!;
 
     act(() => vi.advanceTimersByTime(20));
@@ -240,7 +349,7 @@ describe("GuessGrid", () => {
   test("cancels the fallback without completing after unmount", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
-    const view = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    const view = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
     expect(vi.getTimerCount()).toBeGreaterThan(0);
 
     view.unmount();

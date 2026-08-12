@@ -31,6 +31,10 @@
   outline-offset: 2px;
 }
 
+.card-search > .orb-tray {
+  margin-block: .65rem .55rem;
+}
+
 .candidate-visibility {
   display: flex;
   flex-wrap: wrap;

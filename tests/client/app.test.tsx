@@ -12,6 +12,7 @@ import { REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "../../src/client/componen
 import { REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid.js";
 import { FEATURE_ORDER } from "../../src/shared/domain.js";
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
+import type { RoundState } from "../../src/client/game/game-reducer.js";
 
 const card = (id: string, name: string) => ({
   id, name, hasUpgrade: true, artUrl: `${id}.png`, baseCardUrl: `https://cards.example/${id}.png`, upgradedCardUrl: `https://cards.example/${id}-upgraded.png`,
@@ -36,6 +37,13 @@ const makeResult = (feature: (typeof appFeatureNames)[number]) => ({
   displayValue: String(appCards[1]!.base[feature]),
 });
 const submittedGuess = { cardId: "apparition", results: appFeatureNames.map(makeResult) };
+const mixedGuess = {
+  cardId: "apparition",
+  results: appFeatureNames.map((feature) => ({
+    ...makeResult(feature),
+    color: feature === "cardType" ? "green" as const : feature === "mana" ? "yellow" as const : "red" as const,
+  })),
+};
 const revealFallbackMs = FEATURE_ORDER.length * REVEAL_STAGGER_MS
   + REVEAL_DURATION_MS
   + REVEAL_FALLBACK_SAFETY_MS;
@@ -54,9 +62,138 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+  delete (HTMLElement.prototype as Partial<HTMLElement>).setPointerCapture;
+  delete (HTMLElement.prototype as Partial<HTMLElement>).releasePointerCapture;
 });
 
+function assistedRound(overrides: Partial<RoundState> = {}): RoundState {
+  return {
+    mode: "daily",
+    hardcore: false,
+    roundId: "daily:2026-08-12:revision",
+    hintSeed: "stable-seed",
+    answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+    guesses: [],
+    status: "playing",
+    terminalGuessCount: null,
+    error: null,
+    assistance: createDefaultAssistance(),
+    ...overrides,
+  };
+}
+
+function readyGame(round: RoundState, overrides: Record<string, unknown> = {}) {
+  return {
+    status: "ready",
+    round,
+    roundToken: 1,
+    dailyUtcDate: "2026-08-12",
+    error: null,
+    practiceHardcoreChoice: false,
+    submit: vi.fn(),
+    setMode: vi.fn(),
+    consumeReveal: vi.fn(),
+    consumeFilter: vi.fn(),
+    consumeNegation: vi.fn(),
+    setCandidateVisibility: vi.fn(),
+    setPracticeHardcoreChoice: vi.fn(),
+    forfeitPractice: vi.fn(),
+    nextPracticeRound: vi.fn(),
+    nextRound: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("App snapshot cleanup", () => {
+  test("composes the live assisted controls in tray, visibility, and name-hint order", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound({
+      guesses: Array.from({ length: 5 }, () => submittedGuess),
+    })));
+
+    const view = render(<App />);
+    await screen.findByRole("combobox");
+    const search = view.container.querySelector(".card-search")!;
+    const inputIndex = [...search.children].findIndex((child) => child.matches("input"));
+    const trayIndex = [...search.children].findIndex((child) => child.matches(".orb-tray"));
+    const visibilityIndex = [...search.children].findIndex((child) => child.matches(".candidate-visibility"));
+    const hintIndex = [...search.children].findIndex((child) => child.matches(".name-hint"));
+
+    expect([inputIndex, trayIndex, visibilityIndex, hintIndex]).toEqual([1, 2, 3, 4]);
+  });
+
+  test("routes Reveal, Filter, and Negation target activations to their durable game actions", async () => {
+    const consumeReveal = vi.fn();
+    const consumeFilter = vi.fn();
+    const consumeNegation = vi.fn();
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound({ guesses: [mixedGuess] }), {
+      consumeReveal,
+      consumeFilter,
+      consumeNegation,
+    }));
+
+    render(<App />);
+    await screen.findByRole("combobox");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Orb, available" }));
+    fireEvent.click(screen.getByRole("button", { name: /Mana feature heading.*Use Reveal Orb/ }));
+    expect(consumeReveal).toHaveBeenCalledWith({ feature: "mana" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter Orb, available" }));
+    fireEvent.click(screen.getByRole("button", { name: /Type green result tile.*Use Filter Orb/ }));
+    expect(consumeFilter).toHaveBeenCalledWith({ guessIndex: 0, cardId: "apparition", feature: "cardType" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Negation Orb, available" }));
+    fireEvent.click(screen.getByRole("button", { name: /Class red result tile.*Use Negation Orb/ }));
+    expect(consumeNegation).toHaveBeenCalledWith({ guessIndex: 0, cardId: "apparition", feature: "cardClass" });
+  });
+
+  test("keeps a stale Filter orb selected and announces the fixed semantic rejection", async () => {
+    const consumeFilter = vi.fn();
+    const staleGuess = { ...mixedGuess, results: mixedGuess.results.map((result) => ({ ...result })) };
+    const round = assistedRound({ guesses: [staleGuess] });
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(round, { consumeFilter }));
+
+    render(<App />);
+    await screen.findByRole("combobox");
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    fireEvent.click(filter);
+    const target = screen.getByRole("button", { name: /Type green result tile.*Use Filter Orb/ });
+    const sourceResult = round.guesses[0]!.results.find((result) => result.feature === "cardType")!;
+    sourceResult.color = "red";
+    fireEvent.click(target);
+
+    expect(consumeFilter).not.toHaveBeenCalled();
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("Filter Orb requires a revealed green feature tile.");
+  });
+
+  test("renders durable bubble and exact badges while red classification overrides green", async () => {
+    const assistance = {
+      ...createDefaultAssistance(),
+      reveal: { feature: "eternal" as const },
+      filter: { guessIndex: 0, cardId: "apparition", feature: "cardType" as const },
+      negation: { guessIndex: 0, cardId: "apparition", feature: "cardClass" as const },
+    };
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound({ guesses: [mixedGuess], assistance })));
+
+    render(<App />);
+    const input = await screen.findByRole("combobox");
+    expect(screen.getByLabelText("Answer: absent")).toBeInTheDocument();
+    expect(screen.getByLabelText("Filter Orb used here")).toBeInTheDocument();
+    expect(screen.getByLabelText("Negation Orb used here")).toBeInTheDocument();
+
+    fireEvent.focus(input);
+    const candidate = screen.getByRole("option", { name: /Apotheosis.*excluded by Negation Orb/ });
+    expect(candidate).toHaveClass("card-search__option--red");
+    expect(candidate).not.toHaveClass("card-search__option--green");
+    fireEvent.click(candidate);
+    expect(games.mock.results.at(-1)?.value.submit).toHaveBeenCalledWith("apotheosis");
+  });
+
   test("shows visible Spire Codex attribution and an explicit unofficial Mega Crit disclaimer", () => {
     loads.mockImplementation(() => new Promise(() => undefined));
     render(<App />);
@@ -352,24 +489,15 @@ describe("App snapshot cleanup", () => {
   test("locks the search from row insertion through the tenth tile reveal", async () => {
     const submit = vi.fn();
     let gameState = {
-      round: {
-        mode: "daily" as const,
-        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
-        guesses: [] as Array<typeof submittedGuess>,
-        status: "playing" as const,
-        error: null,
-      },
-      roundToken: 1,
-      error: null,
+      ...readyGame(assistedRound()),
       submit,
-      setMode: vi.fn(),
-      nextRound: vi.fn(),
     };
     games.mockImplementation(() => gameState);
     loads.mockResolvedValue(searchSnapshot);
     const view = render(<App />);
     const input = await screen.findByRole("combobox");
     expect(input).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reveal Orb, available" })).toBeEnabled();
 
     gameState = {
       ...gameState,
@@ -380,10 +508,76 @@ describe("App snapshot cleanup", () => {
     };
     view.rerender(<App />);
     expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reveal Orb, available" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Filter Orb, available" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Negation Orb, available" })).toBeDisabled();
 
     const surfaces = view.container.querySelectorAll(".feature-tile__surface");
     dispatchTransformEnd(surfaces[surfaces.length - 1]!);
     expect(screen.getByRole("combobox")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reveal Orb, available" })).toBeEnabled();
+  });
+
+  test.each(["won", "forfeited"] as const)("keeps terminal %s rounds free of active orb targets", async (status) => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound({
+      mode: status === "forfeited" ? "practice" : "daily",
+      roundId: status === "forfeited" ? "practice:terminal" : "daily:terminal",
+      status,
+      terminalGuessCount: 1,
+      guesses: [mixedGuess],
+    })));
+
+    const view = render(<App />);
+    await screen.findByRole("combobox");
+    expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reveal Orb, available" })).toBeDisabled();
+    expect(view.container.querySelector(".guess-grid__header-target, .feature-tile__target")).toBeNull();
+  });
+
+  test("omits every assistance surface and orb share marker in Hardcore", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound({
+      mode: "hardcore-daily",
+      hardcore: true,
+      roundId: "hardcore-daily:2026-08-12:revision",
+      guesses: Array.from({ length: 5 }, () => submittedGuess),
+      assistance: null,
+    })));
+
+    const view = render(<App />);
+    await screen.findByRole("combobox");
+    expect(screen.queryByRole("region", { name: "Orb inventory" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Candidate visibility" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Card name hint:/)).not.toBeInTheDocument();
+    expect(view.container.querySelector(".guess-grid__header-target, .feature-tile__target")).toBeNull();
+    expect(view.container).not.toHaveTextContent("Orbs:");
+  });
+
+  test("disables Practice End game while an orb is actively dragging", async () => {
+    class TestPointerEvent extends MouseEvent {
+      readonly pointerId: number;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 0;
+      }
+    }
+    vi.stubGlobal("PointerEvent", TestPointerEvent);
+    Object.defineProperty(HTMLElement.prototype, "setPointerCapture", { configurable: true, value: vi.fn() });
+    Object.defineProperty(HTMLElement.prototype, "releasePointerCapture", { configurable: true, value: vi.fn() });
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound({
+      mode: "practice",
+      roundId: "practice:drag",
+    })));
+
+    render(<App />);
+    const endGame = await screen.findByRole("button", { name: "End game" });
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    expect(endGame).toBeEnabled();
+    fireEvent.pointerDown(filter, { pointerId: 41, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(filter, { pointerId: 41, clientX: 20, clientY: 20 });
+    expect(endGame).toBeDisabled();
   });
 
   test("keeps the search locked until a missing transition reaches the fallback", async () => {

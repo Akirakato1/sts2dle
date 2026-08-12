@@ -25,6 +25,8 @@ vi.mock("../../src/client/components/FeatureTile.js", async (importOriginal) => 
 });
 
 import { GuessGrid } from "../../src/client/components/GuessGrid.js";
+import { OrbInteractionProvider } from "../../src/client/components/OrbInteractionContext.js";
+import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 import type { SubmittedGuess } from "../../src/client/game/game-reducer.js";
 import { FEATURE_ORDER, type CardIdentity, type FeatureVector, type SpriteMap } from "../../src/shared/domain.js";
 
@@ -47,6 +49,30 @@ const results: FeatureResult[] = FEATURE_ORDER.map((feature) => ({
   feature, color: "red", displayValue: "wrong",
 }));
 const guesses: SubmittedGuess[] = cards.map((card) => ({ cardId: card.id, results }));
+const assistance = createDefaultAssistance();
+
+function GridHarness({ animateFromIndex, onRevealComplete }: {
+  animateFromIndex: number;
+  onRevealComplete: () => void;
+}) {
+  return <OrbInteractionProvider
+    assistance={assistance}
+    disabled={false}
+    onUse={() => ({ accepted: true, announcement: "Orb consumed." })}
+    roundKey="round-1"
+  >
+    <GuessGrid
+      guesses={[guesses[0]!]}
+      cardsById={cardsById}
+      selectedAnswer={cards[0]!}
+      assistance={assistance}
+      spriteMap={spriteMap}
+      roundKey="round-1"
+      animateFromIndex={animateFromIndex}
+      onRevealComplete={onRevealComplete}
+    />
+  </OrbInteractionProvider>;
+}
 
 beforeEach(() => {
   capturedTiles.length = 0;
@@ -66,7 +92,7 @@ describe("GuessGrid stale reveal handler", () => {
       return timeoutCallbacks.length as unknown as ReturnType<typeof setTimeout>;
     }) as unknown as typeof setTimeout);
     const onRevealComplete = vi.fn();
-    const view = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    const view = render(<GridHarness animateFromIndex={0} onRevealComplete={onRevealComplete} />);
     const staleHandler = capturedTiles.findLast((props) => props.onRevealEnd)?.onRevealEnd;
     expect(staleHandler).toBeTypeOf("function");
     const staleTimeout = timeoutCallbacks.at(-1);
@@ -78,8 +104,8 @@ describe("GuessGrid stale reveal handler", () => {
     expect(onRevealComplete).toHaveBeenCalledOnce();
 
     capturedTiles.length = 0;
-    view.rerender(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} />);
-    view.rerender(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
+    view.rerender(<GridHarness animateFromIndex={1} onRevealComplete={onRevealComplete} />);
+    view.rerender(<GridHarness animateFromIndex={0} onRevealComplete={onRevealComplete} />);
     const currentHandler = capturedTiles.findLast((props) => props.onRevealEnd)?.onRevealEnd;
     expect(currentHandler).toBeTypeOf("function");
     const currentTimeout = timeoutCallbacks.at(-1);

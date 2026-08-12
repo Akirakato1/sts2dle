@@ -121,6 +121,23 @@ describe("searchCards", () => {
 });
 
 describe("CardSearch", () => {
+  test("composes assisted controls under the input as tray, visibility, then name hint", () => {
+    const { view } = renderSearch({
+      assistance: assisted,
+      assistanceSlot: <section aria-label="Test orb tray">Orb assistance</section>,
+      nameHintSlot: <section aria-label="Test name hint">Name hint</section>,
+    });
+
+    const search = view.container.querySelector(".card-search")!;
+    expect([...search.children].map((child) => child.getAttribute("aria-label") ?? child.tagName)).toEqual([
+      "LABEL",
+      "INPUT",
+      "Test orb tray",
+      "Candidate visibility",
+      "Test name hint",
+    ]);
+  });
+
   test("shows classified visible candidates on empty focus and applies visibility without blocking red guesses", () => {
     const onVisibilityChange = vi.fn();
     const { input, onSelect, view } = renderSearch({ assistance: assisted, onVisibilityChange });
