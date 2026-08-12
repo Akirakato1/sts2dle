@@ -1,20 +1,10 @@
-import type { FeatureResult, ManaHint, TileColor } from "./comparison.js";
+import type { FeatureResult, TileColor } from "./comparison.js";
 import { FEATURE_ORDER, type FeatureName } from "./domain.js";
 
 const COLOR_SYMBOLS: Record<TileColor, string> = {
-  green: "🟩",
-  yellow: "🟨",
-  red: "🟥",
-};
-
-const HINT_SYMBOLS: Record<ManaHint, string> = {
-  none: "",
-  up: "↑",
-  down: "↓",
-  dash: "–",
-  both: "↑↓",
-  "up-dash": "↑ –",
-  "down-dash": "↓ –",
+  green: "\u{1F7E9}",
+  yellow: "\u{1F7E8}",
+  red: "\u{1F7E5}",
 };
 
 export interface ShareGuess {
@@ -37,11 +27,7 @@ function formatGuess(guess: ShareGuess): string {
     throw new Error("A share guess must contain exactly one result for every feature.");
   }
 
-  return FEATURE_ORDER.map((feature) => {
-    const result = byFeature.get(feature)!;
-    const hint = feature === "mana" && result.color !== "green" ? HINT_SYMBOLS[result.hint] : "";
-    return `${COLOR_SYMBOLS[result.color]}${hint}`;
-  }).join("");
+  return FEATURE_ORDER.map((feature) => COLOR_SYMBOLS[byFeature.get(feature)!.color]).join("");
 }
 
 export function formatDailyShare({ utcDate, guesses, siteUrl }: FormatDailyShareOptions): string {

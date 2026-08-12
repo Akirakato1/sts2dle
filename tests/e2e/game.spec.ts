@@ -62,8 +62,8 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
   const answerCard = cardsById.get(answer.selectedCardId)!;
   const wrongGuess = cards.find((card) => !answer.acceptedCardIds.includes(card.id)
     && compareGuess(card, answerCard).some((result) => result.color === "yellow")
-    && compareGuess(card, answerCard).some((result) => result.feature === "mana" && result.hint !== "none"));
-  if (!wrongGuess) throw new Error("Fixture does not contain a yellow-plus-mana wrong guess");
+    && compareGuess(card, answerCard).some((result) => result.feature === "mana" && result.color !== "green"));
+  if (!wrongGuess) throw new Error("Fixture does not contain a yellow-plus-mana mismatch");
   return { cards, answer, wrongGuess };
 }
 

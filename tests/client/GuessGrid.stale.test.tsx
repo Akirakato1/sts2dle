@@ -44,7 +44,7 @@ const spriteMap: SpriteMap = {
   cards: {},
 };
 const results: FeatureResult[] = FEATURE_ORDER.map((feature) => ({
-  feature, color: "red", displayValue: "wrong", hint: "none",
+  feature, color: "red", displayValue: "wrong",
 }));
 const guesses: SubmittedGuess[] = cards.map((card) => ({ cardId: card.id, results }));
 

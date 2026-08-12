@@ -1,33 +1,15 @@
-import { FEATURE_ORDER, type CardIdentity, type FeatureName, type ManaValue } from "./domain.js";
+import { FEATURE_ORDER, type CardIdentity, type FeatureName } from "./domain.js";
 
 export type TileColor = "green" | "yellow" | "red";
-export type ManaHint = "none" | "up" | "down" | "dash" | "both" | "up-dash" | "down-dash";
 
 export interface FeatureResult {
   feature: FeatureName;
   color: TileColor;
   displayValue: string;
-  hint: ManaHint;
 }
 
 function displayValue(base: unknown, upgraded: unknown): string {
-  return base === upgraded ? String(base) : `${String(base)} → ${String(upgraded)}`;
-}
-
-type SingleManaHint = "none" | "up" | "down" | "dash";
-
-function manaHint(guess: ManaValue, answer: ManaValue): SingleManaHint {
-  if (guess === answer) return "none";
-  if (typeof guess !== "number" || typeof answer !== "number") return "dash";
-  return guess < answer ? "up" : "down";
-}
-
-function mergeHints(first: SingleManaHint, second: SingleManaHint): ManaHint {
-  if (first === "none") return second;
-  if (second === "none" || first === second) return first;
-  if ((first === "up" && second === "down") || (first === "down" && second === "up")) return "both";
-  if (first === "dash") return second === "up" ? "up-dash" : "down-dash";
-  return first === "up" ? "up-dash" : "down-dash";
+  return base === upgraded ? String(base) : `${String(base)} \u2192 ${String(upgraded)}`;
 }
 
 export function compareFeature(feature: FeatureName, guess: CardIdentity, answer: CardIdentity): FeatureResult {
@@ -38,9 +20,6 @@ export function compareFeature(feature: FeatureName, guess: CardIdentity, answer
     feature,
     color,
     displayValue: displayValue(guess.base[feature], guess.upgraded[feature]),
-    hint: feature === "mana"
-      ? mergeHints(manaHint(guess.base.mana, answer.base.mana), manaHint(guess.upgraded.mana, answer.upgraded.mana))
-      : "none",
   };
 }
 

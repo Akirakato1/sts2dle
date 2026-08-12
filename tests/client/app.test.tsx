@@ -33,7 +33,6 @@ const makeResult = (feature: (typeof appFeatureNames)[number]) => ({
   feature,
   color: "red" as const,
   displayValue: String(appCards[1]!.base[feature]),
-  hint: "none" as const,
 });
 const submittedGuess = { cardId: "apparition", results: appFeatureNames.map(makeResult) };
 const revealFallbackMs = FEATURE_ORDER.length * REVEAL_STAGGER_MS
@@ -150,7 +149,7 @@ describe("App snapshot cleanup", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
-  test("locks the search from row insertion through the eleventh tile reveal", async () => {
+  test("locks the search from row insertion through the tenth tile reveal", async () => {
     const submit = vi.fn();
     let gameState = {
       round: {

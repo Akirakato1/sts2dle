@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  DAILY_RULESET_VERSION,
   DAILY_STATS_KEY,
   dailyStorageKey,
   loadDailyRound,
@@ -60,7 +61,7 @@ const guessCard = card("GUESS", {
 });
 const results = compareGuess(guessCard, answerCard);
 const cardsById = new Map([[answerCard.id, answerCard], [guessCard.id, guessCard]]);
-const identity = { sourceRevision: "abc", utcDate: "2026-08-12", ruleset: "v1" };
+const identity = { sourceRevision: "abc", utcDate: "2026-08-12", ruleset: "v2" };
 const round: RoundState = {
   mode: "daily",
   answer: {
@@ -76,7 +77,7 @@ const round: RoundState = {
 
 describe("Daily round storage", () => {
   test("uses ruleset, source revision, and UTC date in the Daily key", () => {
-    expect(dailyStorageKey(identity)).toBe("stsdle:daily:v1:abc:2026-08-12");
+    expect(dailyStorageKey(identity)).toBe("stsdle:daily:v2:abc:2026-08-12");
   });
 
   test("round-trips only serializable Daily answer IDs, guesses/results, and status", () => {
@@ -84,12 +85,34 @@ describe("Daily round storage", () => {
     saveDailyRound(storage, identity, round);
 
     const raw = storage.getItem(dailyStorageKey(identity));
+    expect(DAILY_RULESET_VERSION).toBe("v2");
+    expect(JSON.parse(raw!).version).toBe(2);
     expect(raw).not.toContain("transient UI error");
     expect(raw).not.toContain("https://cards.example");
     expect(loadDailyRound(storage, identity, cardsById, round.answer)).toEqual({
       ...round,
       error: null,
     });
+  });
+
+  test("rejects rounds with an old version or a non-canonical result shape", () => {
+    const storage = new MemoryStorage();
+    const key = dailyStorageKey(identity);
+    saveDailyRound(storage, identity, round);
+    const validRound = JSON.parse(storage.getItem(key)!);
+
+    for (const invalidRound of [
+      { ...validRound, version: 1 },
+      { ...validRound, guesses: [{ ...validRound.guesses[0], results: [...validRound.guesses[0].results, validRound.guesses[0].results[0]] }] },
+      { ...validRound, guesses: [{ ...validRound.guesses[0], results: validRound.guesses[0].results.map((result: Record<string, unknown>) => ({ ...result, hint: "none" })) }] },
+    ]) {
+      storage.setItem(key, JSON.stringify(invalidRound));
+      expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
+      expect(storage.getItem(key)).toBeNull();
+    }
+
+    storage.setItem(dailyStorageKey({ ...identity, ruleset: "v1" }), JSON.stringify(validRound));
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
   });
 
   test("separates dates and source revisions without deleting valid sibling keys", () => {

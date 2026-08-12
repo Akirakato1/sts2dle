@@ -17,7 +17,7 @@ const round: RoundState = {
   answer: { baseGroupKey: "base", selectedCardId: "answer", pairKey: "pair", acceptedCardIds: ["answer"] },
   guesses: [{
     cardId: "SECRET_GUESS_ID",
-    results: FEATURE_ORDER.map((feature) => ({ feature, color: "green" as const, displayValue: "SECRET_VALUE", hint: "none" as const })),
+    results: FEATURE_ORDER.map((feature) => ({ feature, color: "green" as const, displayValue: "SECRET_VALUE" })),
   }],
   status: "won",
   error: null,

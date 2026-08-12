@@ -21,36 +21,12 @@ describe("paired feature comparison", () => {
     expect(compareFeature("rarity", card("same"), answer).color).toBe("green");
   });
 
-  it("marks a base-only match yellow and points toward the answer", () => {
+  it("returns a three-property result for a base-only mana match", () => {
     const baseOnlyMatch = card("base", { mana: 2 }, { mana: 1 });
-    expect(compareFeature("mana", baseOnlyMatch, answer)).toMatchObject({
-      color: "yellow", hint: "down", displayValue: "2 → 1",
+    expect(compareFeature("mana", baseOnlyMatch, answer)).toEqual({
+      feature: "mana", color: "yellow", displayValue: "2 \u2192 1",
     });
-  });
-
-  it("combines opposite mana directions for crossing costs", () => {
-    const crossingCosts = card("crossing", { mana: 1 }, { mana: 2 });
-    expect(compareFeature("mana", crossingCosts, answer)).toMatchObject({ color: "red", hint: "both" });
-  });
-
-  it("collapses matching upward directions", () => {
-    expect(compareFeature("mana", card("up", { mana: 1 }, { mana: -1 }), answer).hint).toBe("up");
-  });
-
-  it("collapses matching downward directions", () => {
-    expect(compareFeature("mana", card("down", { mana: 3 }, { mana: 2 }), answer).hint).toBe("down");
-  });
-
-  it("merges an upward direction with non-comparable mana", () => {
-    expect(compareFeature("mana", card("up-dash", { mana: 1 }, { mana: "X" }), answer).hint).toBe("up-dash");
-  });
-
-  it("merges a downward direction with non-comparable mana", () => {
-    expect(compareFeature("mana", card("down-dash", { mana: 3 }, { mana: "X" }), answer).hint).toBe("down-dash");
-  });
-
-  it("uses a dash for non-comparable mana values", () => {
-    expect(compareFeature("mana", card("x", { mana: "X" }, { mana: "X" }), answer).hint).toBe("dash");
+    expect(Object.hasOwn(compareFeature("mana", baseOnlyMatch, answer), "hint")).toBe(false);
   });
 
   it("returns one ordered result for every feature", () => {

@@ -1,9 +1,9 @@
-import { compareGuess, type FeatureResult, type ManaHint, type TileColor } from "../../shared/comparison.js";
+import { compareGuess, type FeatureResult, type TileColor } from "../../shared/comparison.js";
 import { FEATURE_ORDER, type CardIdentity, type FeatureName } from "../../shared/domain.js";
 import type { SelectedAnswer } from "../../shared/selection.js";
 import type { RoundState, RoundStatus, SubmittedGuess } from "./game-reducer.js";
 
-export const DAILY_RULESET_VERSION = "v1";
+export const DAILY_RULESET_VERSION = "v2";
 export const DAILY_STATS_KEY = "stsdle:stats:v1";
 
 export interface DailyStorageIdentity {
@@ -19,7 +19,7 @@ export interface DailyStats {
 }
 
 interface StoredDailyRound {
-  version: 1;
+  version: 2;
   answer: SelectedAnswer;
   guesses: SubmittedGuess[];
   status: RoundStatus;
@@ -32,7 +32,6 @@ const EMPTY_STATS: DailyStats = {
 };
 
 const COLORS: readonly TileColor[] = ["green", "yellow", "red"];
-const HINTS: readonly ManaHint[] = ["none", "up", "down", "dash", "both", "up-dash", "down-dash"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -59,11 +58,15 @@ function isSelectedAnswer(value: unknown): value is SelectedAnswer {
 }
 
 function isFeatureResult(value: unknown, expectedFeature: FeatureName): value is FeatureResult {
-  return isRecord(value)
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  return keys.length === 3
+    && keys[0] === "color"
+    && keys[1] === "displayValue"
+    && keys[2] === "feature"
     && value.feature === expectedFeature
     && COLORS.includes(value.color as TileColor)
-    && typeof value.displayValue === "string"
-    && HINTS.includes(value.hint as ManaHint);
+    && typeof value.displayValue === "string";
 }
 
 function isSubmittedGuess(value: unknown): value is SubmittedGuess {
@@ -76,7 +79,7 @@ function isSubmittedGuess(value: unknown): value is SubmittedGuess {
 
 function isStoredDailyRound(value: unknown): value is StoredDailyRound {
   return isRecord(value)
-    && value.version === 1
+    && value.version === 2
     && isSelectedAnswer(value.answer)
     && Array.isArray(value.guesses)
     && value.guesses.every(isSubmittedGuess)
@@ -97,8 +100,7 @@ function sameResults(stored: readonly FeatureResult[], canonical: readonly Featu
     return expected !== undefined
       && result.feature === expected.feature
       && result.color === expected.color
-      && result.displayValue === expected.displayValue
-      && result.hint === expected.hint;
+      && result.displayValue === expected.displayValue;
   });
 }
 
@@ -145,7 +147,7 @@ export function saveDailyRound(
 ): void {
   if (round.mode !== "daily") return;
   const stored: StoredDailyRound = {
-    version: 1,
+    version: 2,
     answer: round.answer,
     guesses: round.guesses,
     status: round.status,

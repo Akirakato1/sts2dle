@@ -27,16 +27,16 @@ const cards: CardIdentity[] = [
 ];
 
 const results: FeatureResult[] = [
-  { feature: "cardClass", color: "red", displayValue: "Ironclad", hint: "none" },
-  { feature: "cardType", color: "green", displayValue: "Attack", hint: "none" },
-  { feature: "mana", color: "yellow", displayValue: "2 \u2192 1", hint: "down" },
-  { feature: "rarity", color: "red", displayValue: "Common", hint: "none" },
-  { feature: "eternal", color: "green", displayValue: "false", hint: "none" },
-  { feature: "ethereal", color: "green", displayValue: "false", hint: "none" },
-  { feature: "exhaust", color: "red", displayValue: "false", hint: "none" },
-  { feature: "innate", color: "green", displayValue: "false", hint: "none" },
-  { feature: "retain", color: "green", displayValue: "false", hint: "none" },
-  { feature: "sly", color: "green", displayValue: "false", hint: "none" },
+  { feature: "cardClass", color: "red", displayValue: "Ironclad" },
+  { feature: "cardType", color: "green", displayValue: "Attack" },
+  { feature: "mana", color: "yellow", displayValue: "2 \u2192 1" },
+  { feature: "rarity", color: "red", displayValue: "Common" },
+  { feature: "eternal", color: "green", displayValue: "false" },
+  { feature: "ethereal", color: "green", displayValue: "false" },
+  { feature: "exhaust", color: "red", displayValue: "false" },
+  { feature: "innate", color: "green", displayValue: "false" },
+  { feature: "retain", color: "green", displayValue: "false" },
+  { feature: "sly", color: "green", displayValue: "false" },
 ];
 
 const guesses: SubmittedGuess[] = [
