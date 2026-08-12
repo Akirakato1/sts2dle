@@ -1,4 +1,5 @@
 import { mkdtemp, readdir, rm, writeFile, mkdir } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +22,7 @@ afterEach(async () => {
   })));
 });
 
-async function createStaticRoots(): Promise<{ clientRoot: string; snapshotRoot: string }> {
+async function createStaticRoots(): Promise<{ root: string; clientRoot: string; snapshotRoot: string }> {
   const root = await mkdtemp(join(tmpdir(), "stsdle-app-"));
   temporaryDirectories.push(root);
   const clientRoot = join(root, "client");
@@ -35,7 +36,7 @@ async function createStaticRoots(): Promise<{ clientRoot: string; snapshotRoot: 
       generatedAt: "2026-08-12T00:00:00.000Z",
     })),
   ]);
-  return { clientRoot, snapshotRoot };
+  return { root, clientRoot, snapshotRoot };
 }
 
 function active(path: string): ActivatedSnapshot {
@@ -84,6 +85,26 @@ async function unusedPort(): Promise<number> {
   return port;
 }
 
+async function rawHttpRequest(
+  port: number,
+  method: "GET" | "HEAD",
+  path: string,
+): Promise<{ statusCode: number; headers: Record<string, string | string[] | undefined>; body: string }> {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const request = httpRequest({ hostname: "127.0.0.1", port, method, path }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.once("end", () => resolveRequest({
+        statusCode: response.statusCode ?? 0,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString("utf8"),
+      }));
+    });
+    request.once("error", rejectRequest);
+    request.end();
+  });
+}
+
 describe("createApp", () => {
   it("serves runtime files, built client assets, SPA routes, and health metadata", async () => {
     const roots = await createStaticRoots();
@@ -93,7 +114,7 @@ describe("createApp", () => {
       const runtime = await app.inject({ url: "/runtime/manifest.json" });
       expect(runtime.statusCode).toBe(200);
       expect(runtime.json()).toMatchObject({ sourceRevision: "source-revision" });
-      const asset = await app.inject({ url: "/main.js" });
+      const asset = await app.inject({ url: "/main.js?source=%2Fclient%5Casset" });
       expect(asset.statusCode).toBe(200);
       expect(asset.headers["content-type"]).toContain("javascript");
       const route = await app.inject({ url: "/non-route" });
@@ -142,6 +163,54 @@ describe("createApp", () => {
           expect([400, 404], `${method} ${url}`).toContain(response.statusCode);
           expect(response.headers["content-type"] ?? "", `${method} ${url}`).not.toContain("text/html");
           expect(response.body, `${method} ${url}`).not.toContain("STS-dle");
+        }
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "strictly rejects non-canonical static paths before runtime, asset, or SPA routing for %s",
+    async (method) => {
+      const roots = await createStaticRoots();
+      await Promise.all([
+        writeFile(join(roots.root, "outside-secret.txt"), "OUTSIDE_ROOT_SECRET"),
+        writeFile(join(roots.clientRoot, ".client-secret.txt"), "CLIENT_DOTFILE_SECRET"),
+      ]);
+      const app = await createApp({
+        clientRoot: roots.clientRoot,
+        snapshotRoot: roots.snapshotRoot,
+        logger: false,
+      });
+
+      try {
+        await app.listen({ host: "127.0.0.1", port: 0 });
+        const port = (app.server.address() as AddressInfo).port;
+        for (const url of [
+          "/runtime/../main.js",
+          "/runtime/%2e%2e/main.js",
+          "/runtime//missing.json",
+          "/./runtime/missing.json",
+          "//runtime/missing.json",
+          "/safe/../runtime/missing.json",
+          "/safe/%2e%2e/runtime/missing.json",
+          "/safe%2fruntime/missing.json",
+          "/safe%5cruntime/missing.json",
+          "/../outside-secret.txt",
+          "/%2e%2e/outside-secret.txt",
+          "/foo/../.client-secret.txt",
+          "/foo/%2e%2e/.client-secret.txt",
+          "/foo%2f..%2f.client-secret.txt",
+          "/foo%5c..%5c.client-secret.txt",
+        ]) {
+          const response = await rawHttpRequest(port, method, url);
+          expect(response.statusCode, `${method} ${url}`).toBe(404);
+          expect(response.headers["content-type"] ?? "", `${method} ${url}`).not.toContain("text/html");
+          expect(response.body, `${method} ${url}`).not.toContain("STS-dle");
+          expect(response.body, `${method} ${url}`).not.toContain("OUTSIDE_ROOT_SECRET");
+          expect(response.body, `${method} ${url}`).not.toContain("CLIENT_DOTFILE_SECRET");
+          expect(response.body, `${method} ${url}`).not.toContain("globalThis.loaded");
         }
       } finally {
         await app.close();

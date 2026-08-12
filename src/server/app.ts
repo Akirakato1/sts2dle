@@ -23,6 +23,12 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const health = await readHealthManifest(join(snapshotRoot, "manifest.json"));
   const app = Fastify({ logger: options.logger ?? true });
 
+  app.addHook("onRequest", async (request, reply) => {
+    if (hasUnsafeStaticPath(request.raw.url ?? request.url)) {
+      return reply.code(404).type("application/json").send({ error: "Not Found" });
+    }
+  });
+
   await app.register(fastifyStatic, {
     root: snapshotRoot,
     prefix: "/runtime/",
@@ -47,6 +53,31 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   await app.ready();
   return app;
+}
+
+function hasUnsafeStaticPath(rawUrl: string): boolean {
+  let pathname = rawUrl.split("?", 1)[0] ?? rawUrl;
+  const maxDecodePasses = pathname.length;
+
+  for (let pass = 0; pass < maxDecodePasses; pass += 1) {
+    if (
+      pathname.includes("\\") ||
+      pathname.includes("//") ||
+      /%2f|%5c/i.test(pathname) ||
+      pathname.split("/").some((segment) => segment.startsWith("."))
+    ) {
+      return true;
+    }
+    try {
+      const decoded = decodeURIComponent(pathname);
+      if (decoded === pathname) return false;
+      pathname = decoded;
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function isRuntimeNamespace(rawUrl: string): boolean {
