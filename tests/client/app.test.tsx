@@ -116,6 +116,29 @@ describe("App snapshot cleanup", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Loading card data");
   });
 
+  test("shows the result legend and collapsed play rules with the active game", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue({
+      round: {
+        mode: "daily",
+        answer: { baseGroupKey: "base", selectedCardId: "apotheosis", pairKey: "pair", acceptedCardIds: ["apotheosis"] },
+        guesses: [],
+        status: "playing",
+        error: null,
+      },
+      roundToken: 1,
+      error: null,
+      submit: vi.fn(),
+      setMode: vi.fn(),
+      nextRound: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("Both base and upgraded features match")).toBeVisible();
+    expect(screen.getByText("How to play").closest("details")).not.toHaveAttribute("open");
+  });
+
   test("wires base-card candidates to game submission and excludes prior guesses", async () => {
     const submit = vi.fn();
     loads.mockResolvedValue(searchSnapshot);

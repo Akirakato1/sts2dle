@@ -172,18 +172,66 @@ h1 {
   box-shadow: inset 0 1px rgb(255 255 255 / 40%), 0 0 18px rgb(208 91 50 / 18%);
 }
 
-.round-note {
+.game-guide {
   max-width: 42rem;
   margin: 1.35rem auto 1.2rem;
   color: #dfd0ad;
-  font-size: .98rem;
+  font-size: .94rem;
   line-height: 1.55;
 }
 
-.round-note span {
-  margin-right: .25rem;
-  color: #f2ca72;
+.result-legend {
+  display: flex;
+  justify-content: center;
+  gap: .55rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
+
+.result-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+}
+
+.result-legend__swatch {
+  width: .8rem;
+  height: .8rem;
+  border: 1px solid rgb(255 235 204 / 35%);
+  border-radius: 50%;
+  box-shadow: inset 0 1px rgb(255 255 255 / 18%);
+}
+
+.result-legend__swatch--green { background: #2f7d4a; }
+.result-legend__swatch--yellow { background: #a7791d; }
+.result-legend__swatch--red { background: #963d36; }
+
+.game-rules { margin-top: .65rem; }
+
+.game-rules summary {
+  width: fit-content;
+  margin: 0 auto;
+  color: #f2ca72;
+  cursor: pointer;
+}
+
+.game-rules p { margin: .55rem 0 0; }
+
+.keyword-state-icons {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .18em;
+  color: currentColor;
+}
+
+.keyword-state-icons svg {
+  width: 1.2em;
+  height: 1.2em;
+}
+
+.keyword-state-icons__arrow { margin-inline: .08em; }
 
 .card-search__input {
   border-color: #977348;
@@ -285,10 +333,11 @@ h1 {
 
   .game-panel { padding: .8rem; }
 
-  .round-note {
-    margin-block: 1rem;
-    font-size: .92rem;
-  }
+  .game-guide { margin-block: 1rem; font-size: .92rem; }
+
+  .result-legend { align-items: flex-start; flex-direction: column; }
+
+  .result-legend li { text-align: left; }
 }
 
 @media (prefers-reduced-motion: reduce) {

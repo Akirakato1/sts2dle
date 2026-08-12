@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { CardSearch } from "./components/CardSearch.js";
+import { GameGuide } from "./components/GameGuide.js";
 import { GuessGrid } from "./components/GuessGrid.js";
 import { AnswerReveal } from "./components/AnswerReveal.js";
 import { SharePanel } from "./components/SharePanel.js";
@@ -53,11 +54,11 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
   if (game.error) return <p role="alert">Unable to start the round: {game.error}</p>;
   if (!game.round) return <p role="status">Preparing today&apos;s card…</p>;
   const { round } = game;
-  return <section className="game-panel" aria-labelledby="paired-rules">
+  return <section className="game-panel" aria-label="Card guessing controls">
     <nav className="mode-tabs" aria-label="Round mode">
       {(["daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={round.mode === mode ? "page" : undefined} className={round.mode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{mode === "daily" ? "Daily" : "Practice"}</button>)}
     </nav>
-    <p className="round-note" id="paired-rules"><span aria-hidden="true">&#9670;</span> Each guess compares its base card and upgrade together. Match every trait to find today&apos;s card.</p>
+    <GameGuide />
     <RoundGame key={game.roundToken} round={round} roundKey={game.roundToken} snapshot={snapshot} utcDate={game.dailyUtcDate} onSubmit={game.submit} onNextRound={game.nextRound} />
   </section>;
 }

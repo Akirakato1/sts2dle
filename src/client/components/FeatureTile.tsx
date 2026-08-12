@@ -1,5 +1,6 @@
 import React, { useEffect, useState, type CSSProperties } from "react";
 
+import { KeywordStateIcons, type KeywordStateDisplayValue } from "./KeywordStateIcons.js";
 import type { FeatureResult, TileColor } from "../../shared/comparison.js";
 import type { FeatureName } from "../../shared/domain.js";
 
@@ -24,10 +25,6 @@ const TILE_COLORS: Record<TileColor, string> = {
   yellow: "#a7791d",
   red: "#963d36",
 };
-
-function keywordVisualValue(value: string): string {
-  return value.split(" \u2192 ").map((part) => part === "true" ? "Yes" : "").join(" \u2192 ");
-}
 
 function keywordAccessibleValue(value: string): string {
   return value.split(" \u2192 ")
@@ -62,7 +59,7 @@ export function FeatureTile({ result, revealIndex, animate = true, onRevealEnd }
   }, [animate]);
 
   const coreFeature = isCoreFeature(result.feature);
-  const visualValue = coreFeature ? result.displayValue : keywordVisualValue(result.displayValue);
+  const visualValue = coreFeature ? result.displayValue : <KeywordStateIcons displayValue={result.displayValue as KeywordStateDisplayValue} />;
   const accessibleValue = coreFeature ? result.displayValue : keywordAccessibleValue(result.displayValue);
   const label = `${FEATURE_LABELS[result.feature]}: ${accessibleValue}. Result: ${result.color}.`;
   const style = {

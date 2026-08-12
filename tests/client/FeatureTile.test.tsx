@@ -33,14 +33,23 @@ describe("FeatureTile", () => {
     expect(tile).toHaveTextContent(displayValue);
   });
 
-  test("shows paired base and upgraded values while rendering absent keywords visibly blank", () => {
-    const view = render(<FeatureTile result={result({ feature: "mana", displayValue: "2 \u2192 1" })} revealIndex={1} />);
+  test("shows paired base and upgraded core values", () => {
+    render(<FeatureTile result={result({ feature: "mana", displayValue: "2 \u2192 1" })} revealIndex={1} />);
     expect(screen.getByText("2 \u2192 1")).toBeInTheDocument();
 
-    view.rerender(<FeatureTile result={result({ feature: "exhaust", color: "red", displayValue: "false" })} revealIndex={1} />);
-    const tile = screen.getByRole("cell");
-    expect(tile).toHaveTextContent("");
-    expect(tile).toHaveAccessibleName("Exhaust: absent. Result: red.");
+  });
+
+  test.each([
+    ["false", "absent"],
+    ["true", "present"],
+    ["false → true", "absent to present"],
+    ["true → false", "present to absent"],
+  ] as const)("renders keyword state %s without text labels", (displayValue, accessibleValue) => {
+    const view = render(<FeatureTile result={result({ feature: "exhaust", color: "red", displayValue })} revealIndex={1} />);
+    const tile = screen.getByRole("cell", { name: `Exhaust: ${accessibleValue}. Result: red.` });
+
+    expect(tile).toHaveAccessibleName(`Exhaust: ${accessibleValue}. Result: red.`);
+    expect(view.container.textContent).not.toMatch(/Yes|true|false/);
     expect(view.container.querySelector(".feature-tile__result-mark")).toBeNull();
     expect(view.container.querySelector(".feature-tile__hint")).toBeNull();
   });
