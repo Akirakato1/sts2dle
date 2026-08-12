@@ -57,6 +57,7 @@ export interface OrbTargetBinding {
 
 interface DragState {
   orb: OrbKind;
+  epoch: InteractionEpoch;
   pointerId: number;
   startX: number;
   startY: number;
@@ -64,6 +65,29 @@ interface DragState {
   y: number;
   dragging: boolean;
   settled: boolean;
+}
+
+interface SelectionState {
+  orb: OrbKind;
+  epoch: InteractionEpoch;
+}
+
+interface ConstraintEpochTarget {
+  guessIndex: number;
+  cardId: string;
+  feature: FeatureName;
+}
+
+interface AssistanceEpoch {
+  reveal: FeatureName | null;
+  filter: ConstraintEpochTarget | null;
+  negation: ConstraintEpochTarget | null;
+}
+
+interface InteractionEpoch {
+  roundKey: string | number;
+  disabled: boolean;
+  assistance: AssistanceEpoch | null;
 }
 
 interface TargetRegistration {
@@ -114,6 +138,40 @@ function sameTarget(left: OrbTargetDescriptor, right: OrbTargetDescriptor) {
     && left.revealed === right.revealed;
 }
 
+function epochFor(
+  roundKey: string | number,
+  disabled: boolean,
+  assistance: AssistanceState | null,
+): InteractionEpoch {
+  return {
+    roundKey,
+    disabled,
+    assistance: assistance ? {
+      reveal: assistance.reveal?.feature ?? null,
+      filter: assistance.filter ? { ...assistance.filter } : null,
+      negation: assistance.negation ? { ...assistance.negation } : null,
+    } : null,
+  };
+}
+
+function sameConstraintEpochTarget(
+  left: ConstraintEpochTarget | null,
+  right: ConstraintEpochTarget | null,
+) {
+  return left === right || Boolean(left && right
+    && left.guessIndex === right.guessIndex
+    && left.cardId === right.cardId
+    && left.feature === right.feature);
+}
+
+function sameEpoch(left: InteractionEpoch, right: InteractionEpoch) {
+  if (!Object.is(left.roundKey, right.roundKey) || left.disabled !== right.disabled) return false;
+  if (!left.assistance || !right.assistance) return left.assistance === right.assistance;
+  return left.assistance.reveal === right.assistance.reveal
+    && sameConstraintEpochTarget(left.assistance.filter, right.assistance.filter)
+    && sameConstraintEpochTarget(left.assistance.negation, right.assistance.negation);
+}
+
 function particlesFor(orb: OrbKind) {
   if (orb === "reveal") {
     return <><i className="orb-vfx__glitter orb-vfx__glitter--one" /><i className="orb-vfx__glitter orb-vfx__glitter--two" /></>;
@@ -132,14 +190,14 @@ export function OrbInteractionProvider({
   hitTest,
   children,
 }: OrbInteractionProviderProps) {
-  const [selectedOrb, setSelectedOrbState] = useState<OrbKind | null>(null);
+  const [selection, setSelectionState] = useState<SelectionState | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [poof, setPoof] = useState<OrbInteractionValue["poof"]>(null);
   const [announcement, setAnnouncement] = useState("");
 
-  const selectedOrbRef = useRef<OrbKind | null>(null);
+  const selectedOrbRef = useRef<SelectionState | null>(null);
   const dragRef = useRef<DragState | null>(null);
-  const selectionBeforePointerRef = useRef<OrbKind | null>(null);
+  const selectionBeforePointerRef = useRef<SelectionState | null>(null);
   const captureElementRef = useRef<HTMLButtonElement | null>(null);
   const pointerListenersRef = useRef<PointerListeners | null>(null);
   const ignoreNextClickRef = useRef(false);
@@ -153,21 +211,30 @@ export function OrbInteractionProvider({
   const hitTestRef = useRef(hitTest);
   const disabledRef = useRef(disabled);
   const assistanceRef = useRef(assistance);
+  const epochRef = useRef(epochFor(roundKey, disabled, assistance));
   const cancelFromEscapeRef = useRef<() => void>(() => undefined);
 
   onUseRef.current = onUse;
   hitTestRef.current = hitTest;
   disabledRef.current = disabled;
   assistanceRef.current = assistance;
+  const currentEpoch = epochFor(roundKey, disabled, assistance);
+  epochRef.current = currentEpoch;
 
   if (registryRoundRef.current !== roundKey) {
     registryRoundRef.current = roundKey;
     targetsRef.current = [];
   }
 
-  const setSelectedOrb = (next: OrbKind | null) => {
+  const setSelectedOrb = (next: OrbKind | null, epoch = epochRef.current) => {
+    const nextSelection = next ? { orb: next, epoch } : null;
+    selectedOrbRef.current = nextSelection;
+    setSelectionState(nextSelection);
+  };
+
+  const setSelection = (next: SelectionState | null) => {
     selectedOrbRef.current = next;
-    setSelectedOrbState(next);
+    setSelectionState(next);
   };
 
   const setCurrentDrag = (next: DragState | null) => {
@@ -232,7 +299,17 @@ export function OrbInteractionProvider({
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   };
 
-  const attemptUse = (orb: OrbKind, target: TargetRegistration, x: number, y: number) => {
+  const attemptUse = (
+    orb: OrbKind,
+    target: TargetRegistration,
+    x: number,
+    y: number,
+    epoch: InteractionEpoch,
+  ) => {
+    if (!sameEpoch(epoch, epochRef.current)) {
+      setSelectedOrb(null);
+      return false;
+    }
     if (disabledRef.current || !assistanceRef.current) {
       setSelectedOrb(null);
       setAnnouncement(`${ORB_LABELS[orb]} Orb interaction is unavailable.`);
@@ -262,13 +339,25 @@ export function OrbInteractionProvider({
     return true;
   };
 
-  const toggleSelection = (orb: OrbKind) => {
+  const toggleSelection = (orb: OrbKind, epoch = epochRef.current) => {
+    if (!sameEpoch(epoch, epochRef.current)) return;
     if (disabledRef.current || !assistanceRef.current || assistanceRef.current[orb] !== null) return;
-    const next = selectedOrbRef.current === orb ? null : orb;
-    setSelectedOrb(next);
+    const current = selectedOrbRef.current;
+    const currentOrb = current && sameEpoch(current.epoch, epoch) ? current.orb : null;
+    const next = currentOrb === orb ? null : orb;
+    setSelectedOrb(next, epoch);
     setAnnouncement(next
       ? `${ORB_LABELS[orb]} Orb selected. Choose a target.`
       : `${ORB_LABELS[orb]} Orb selection canceled.`);
+  };
+
+  const suppressCompatibilityClick = () => {
+    ignoreNextClickRef.current = true;
+    if (ignoreClickTimerRef.current !== null) clearTimeout(ignoreClickTimerRef.current);
+    ignoreClickTimerRef.current = setTimeout(() => {
+      ignoreNextClickRef.current = false;
+      ignoreClickTimerRef.current = null;
+    }, 0);
   };
 
   const settleDrag = (
@@ -284,37 +373,39 @@ export function OrbInteractionProvider({
     releaseCapture(pointerId);
     setCurrentDrag(null);
 
+    if (!sameEpoch(drag.epoch, epochRef.current)) {
+      if (reason === "up" || reason === "lost") suppressCompatibilityClick();
+      setSelectedOrb(null);
+      return;
+    }
+
     if (reason === "up" && !drag.dragging) {
-      ignoreNextClickRef.current = true;
-      if (ignoreClickTimerRef.current !== null) clearTimeout(ignoreClickTimerRef.current);
-      ignoreClickTimerRef.current = setTimeout(() => {
-        ignoreNextClickRef.current = false;
-        ignoreClickTimerRef.current = null;
-      }, 0);
-      toggleSelection(drag.orb);
+      suppressCompatibilityClick();
+      toggleSelection(drag.orb, drag.epoch);
       return;
     }
 
     if (reason === "up" && x !== undefined && y !== undefined) {
       const target = findTarget(x, y);
       if (target && target.validFor.includes(drag.orb)) {
-        attemptUse(drag.orb, target, x, y);
+        attemptUse(drag.orb, target, x, y, drag.epoch);
         return;
       }
-      setSelectedOrb(selectionBeforePointerRef.current);
+      setSelection(selectionBeforePointerRef.current);
       setAnnouncement(target
         ? `${target.label} is an invalid target for the ${ORB_LABELS[drag.orb]} Orb. Orb returned.`
         : `${ORB_LABELS[drag.orb]} Orb returned; no target was selected.`);
       return;
     }
 
-    setSelectedOrb(selectionBeforePointerRef.current);
+    setSelection(selectionBeforePointerRef.current);
     setAnnouncement(`${ORB_LABELS[drag.orb]} Orb drag canceled and returned.`);
   };
 
   const movePointer = (event: PointerEvent) => {
     const drag = dragRef.current;
     if (!drag || drag.settled || drag.pointerId !== event.pointerId) return;
+    if (!sameEpoch(drag.epoch, epochRef.current)) return;
     const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
     const dragging = drag.dragging || distance >= DRAG_THRESHOLD_PX;
     const next = { ...drag, x: event.clientX, y: event.clientY, dragging };
@@ -331,6 +422,7 @@ export function OrbInteractionProvider({
     const pointerId = event.pointerId;
     const drag: DragState = {
       orb,
+      epoch: epochRef.current,
       pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -339,7 +431,10 @@ export function OrbInteractionProvider({
       dragging: false,
       settled: false,
     };
-    selectionBeforePointerRef.current = selectedOrbRef.current;
+    const selection = selectedOrbRef.current;
+    selectionBeforePointerRef.current = selection && sameEpoch(selection.epoch, epochRef.current)
+      ? selection
+      : null;
     captureElementRef.current = event.currentTarget;
     setCurrentDrag(drag);
     try {
@@ -385,7 +480,7 @@ export function OrbInteractionProvider({
     if (drag) {
       settleDrag(drag.pointerId, "escape");
     } else if (selectedOrbRef.current) {
-      const orb = selectedOrbRef.current;
+      const orb = selectedOrbRef.current.orb;
       setSelectedOrb(null);
       setAnnouncement(`${ORB_LABELS[orb]} Orb selection canceled.`);
     }
@@ -410,7 +505,7 @@ export function OrbInteractionProvider({
   const filterAvailable = assistance?.filter === null;
   const negationAvailable = assistance?.negation === null;
   useEffect(() => {
-    const orb = dragRef.current?.orb ?? selectedOrbRef.current;
+    const orb = dragRef.current?.orb ?? selectedOrbRef.current?.orb;
     if (!assistance || (orb && assistance[orb] !== null)) clearTransient();
   }, [assistance, revealAvailable, filterAvailable, negationAvailable]);
 
@@ -435,6 +530,11 @@ export function OrbInteractionProvider({
     if (ignoreClickTimerRef.current !== null) clearTimeout(ignoreClickTimerRef.current);
     targetsRef.current = [];
   }, []);
+
+  const currentSelection = selection && sameEpoch(selection.epoch, currentEpoch) ? selection : null;
+  const currentDrag = dragState && sameEpoch(dragState.epoch, currentEpoch) ? dragState : null;
+  const selectedOrb = currentSelection?.orb ?? null;
+  const draggingOrb = currentDrag?.dragging ? currentDrag.orb : null;
 
   const getOrbButtonProps = (orb: OrbKind, available: boolean): ButtonHTMLAttributes<HTMLButtonElement> => {
     const selected = selectedOrb === orb;
@@ -471,14 +571,14 @@ export function OrbInteractionProvider({
       registration.label = label;
     }
 
-    const activeOrb = dragState?.dragging ? dragState.orb : selectedOrb;
+    const activeOrb = currentDrag?.dragging ? currentDrag.orb : selectedOrb;
     const active = activeOrb !== null;
     const valid = activeOrb !== null && validFor.includes(activeOrb);
     const activate = (element: HTMLElement) => {
-      const orb = selectedOrbRef.current;
-      if (!orb) return;
+      const selection = selectedOrbRef.current;
+      if (!selection || !sameEpoch(selection.epoch, epochRef.current)) return;
       const point = targetPoint(element);
-      attemptUse(orb, registration, point.x, point.y);
+      attemptUse(selection.orb, registration, point.x, point.y, selection.epoch);
     };
 
     return {
@@ -502,7 +602,6 @@ export function OrbInteractionProvider({
     };
   };
 
-  const draggingOrb = dragState?.dragging ? dragState.orb : null;
   const value = useMemo<OrbInteractionValue>(() => ({
     selectedOrb,
     draggingOrb,
@@ -514,13 +613,13 @@ export function OrbInteractionProvider({
 
   return <OrbInteractionContext.Provider value={value}>
     {children}
-    {dragState?.dragging && <div
+    {currentDrag?.dragging && <div
       aria-hidden="true"
-      className={`orb-drag-avatar orb-drag-avatar--${dragState.orb} orb-vfx`}
-      style={{ left: dragState.x, position: "fixed", top: dragState.y }}
+      className={`orb-drag-avatar orb-drag-avatar--${currentDrag.orb} orb-vfx`}
+      style={{ left: currentDrag.x, position: "fixed", top: currentDrag.y }}
     >
-      <OrbVisual kind={dragState.orb} />
-      {particlesFor(dragState.orb)}
+      <OrbVisual kind={currentDrag.orb} />
+      {particlesFor(currentDrag.orb)}
     </div>}
     <span className="orb-announcement" aria-atomic="true" aria-live="polite" role="status">{announcement}</span>
   </OrbInteractionContext.Provider>;

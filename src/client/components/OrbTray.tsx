@@ -26,19 +26,23 @@ export function OrbTray({ assistance, disabled }: OrbTrayProps) {
 
         return <div className="orb-tray__slot" data-orb-slot={orb} key={orb}>
           <div className={`orb-tray__well${dragging ? " orb-tray__well--dragging" : ""}`}>
-            {available && !dragging
-              ? <button
-                {...buttonProps}
-                disabled={disabled || buttonProps.disabled}
-                style={{ ...buttonProps.style, minHeight: 48, minWidth: 48 }}
-              >
-                <OrbVisual kind={orb} />
-              </button>
-              : available
-                ? <span className="orb-tray__empty" aria-hidden="true" />
-                : <span className="orb-remnant" aria-label={`${ORB_LABELS[orb]} Orb, used`}>
-                  <OrbVisual compact kind={orb} />
-                </span>}
+            {available
+              ? <>
+                <button
+                  {...buttonProps}
+                  aria-hidden={dragging || undefined}
+                  className={`${buttonProps.className ?? ""}${dragging ? " orb-button--drag-source" : ""}`}
+                  disabled={disabled || buttonProps.disabled}
+                  style={{ ...buttonProps.style, minHeight: 48, minWidth: 48 }}
+                  tabIndex={dragging ? -1 : buttonProps.tabIndex}
+                >
+                  <OrbVisual kind={orb} />
+                </button>
+                {dragging && <span className="orb-tray__empty" aria-hidden="true" />}
+              </>
+              : <span className="orb-remnant" aria-label={`${ORB_LABELS[orb]} Orb, used`}>
+                <OrbVisual compact kind={orb} />
+              </span>}
           </div>
           <span className="orb-tray__label">{ORB_LABELS[orb]}</span>
         </div>;

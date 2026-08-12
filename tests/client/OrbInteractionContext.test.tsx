@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import React from "react";
+import React, { useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -72,10 +72,10 @@ function Target({
   >{label}</div>;
 }
 
-function InteractionSurface() {
+function InteractionSurface({ assistanceState = assistance }: { assistanceState?: AssistanceState }) {
   const { draggingOrb, poof, selectedOrb } = useOrbInteraction();
   return <>
-    <OrbTray assistance={assistance} disabled={false} />
+    <OrbTray assistance={assistanceState} disabled={false} />
     <Target descriptor={headerDescriptor} validFor={["reveal"]} label="Mana header" testId="header" />
     <Target descriptor={greenDescriptor} validFor={["filter"]} label="Green mana tile" testId="green" />
     <Target descriptor={redDescriptor} validFor={["negation"]} label="Red rarity tile" testId="red" />
@@ -84,6 +84,34 @@ function InteractionSurface() {
     <div data-testid="interaction-state">{selectedOrb ?? "none"}|{draggingOrb ?? "none"}</div>
     {poof && <div data-testid="poof-state">{poof.orb}|{poof.x}|{poof.y}|{poof.id}</div>}
   </>;
+}
+
+function SettleOnLayout({
+  element,
+  enabled,
+  event,
+  pointerId = 0,
+}: {
+  element: HTMLElement | null;
+  enabled: boolean;
+  event: "click" | "pointerup" | "pointerup-click";
+  pointerId?: number;
+}) {
+  useLayoutEffect(() => {
+    if (!enabled || !element) return;
+    if (event === "click") {
+      element.click();
+      return;
+    }
+    element.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      clientX: 80,
+      clientY: 80,
+      pointerId,
+    }));
+    if (event === "pointerup-click") element.click();
+  }, [element, enabled, event, pointerId]);
+  return null;
 }
 
 function defaultHitTest(x: number) {
@@ -180,6 +208,8 @@ describe("OrbInteractionProvider", () => {
     fireEvent.pointerMove(filter, { pointerId: 4, clientX: 16, clientY: 10 });
 
     expect(screen.getByTestId("interaction-state")).toHaveTextContent("none|filter");
+    expect(filter).toBeInTheDocument();
+    expect(filter).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByRole("button", { name: "Filter Orb, available" })).not.toBeInTheDocument();
     const avatar = dragAvatar();
     expect(avatar).toBeInTheDocument();
@@ -330,6 +360,176 @@ describe("OrbInteractionProvider", () => {
     expect(screen.getByTestId("interaction-state")).toHaveTextContent("none|none");
     expect(screen.queryByTestId("poof-state")).not.toBeInTheDocument();
     expect(dragAvatar()).not.toBeInTheDocument();
+  });
+
+  test("rejects a drag settlement from the prior round during the new commit layout phase", () => {
+    const oldOnUse = accepted("Old round consumed.");
+    const newOnUse = accepted("New round consumed.");
+    const view = render(<OrbInteractionProvider
+      assistance={assistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={oldOnUse}
+      roundKey="round-one"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={null} enabled={false} event="pointerup" pointerId={21} />
+    </OrbInteractionProvider>);
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    fireEvent.pointerDown(filter, { pointerId: 21, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(filter, { pointerId: 21, clientX: 30, clientY: 30 });
+
+    view.rerender(<OrbInteractionProvider
+      assistance={assistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={newOnUse}
+      roundKey="round-two"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={filter} enabled event="pointerup" pointerId={21} />
+    </OrbInteractionProvider>);
+
+    expect(oldOnUse).not.toHaveBeenCalled();
+    expect(newOnUse).not.toHaveBeenCalled();
+    expect(screen.getByTestId("interaction-state")).toHaveTextContent("none|none");
+    expect(screen.getByRole("button", { name: "Filter Orb, available" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("suppresses the compatibility click from a prior-round pointer gesture", () => {
+    const oldOnUse = accepted("Old round consumed.");
+    const newOnUse = accepted("New round consumed.");
+    const view = render(<OrbInteractionProvider
+      assistance={assistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={oldOnUse}
+      roundKey="round-one"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={null} enabled={false} event="pointerup" pointerId={23} />
+    </OrbInteractionProvider>);
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    fireEvent.pointerDown(filter, { pointerId: 23, clientX: 10, clientY: 10 });
+
+    view.rerender(<OrbInteractionProvider
+      assistance={assistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={newOnUse}
+      roundKey="round-two"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={filter} enabled event="pointerup-click" pointerId={23} />
+    </OrbInteractionProvider>);
+
+    expect(oldOnUse).not.toHaveBeenCalled();
+    expect(newOnUse).not.toHaveBeenCalled();
+    expect(screen.getByTestId("interaction-state")).toHaveTextContent("none|none");
+    expect(filter).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("rejects selected-target activation from the prior round during the new commit layout phase", () => {
+    const oldOnUse = accepted("Old round consumed.");
+    const newOnUse = accepted("New round consumed.");
+    const view = render(<OrbInteractionProvider
+      assistance={assistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={oldOnUse}
+      roundKey="round-one"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={null} enabled={false} event="click" />
+    </OrbInteractionProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Filter Orb, available" }));
+    const target = screen.getByTestId("green");
+
+    view.rerender(<OrbInteractionProvider
+      assistance={assistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={newOnUse}
+      roundKey="round-two"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={target} enabled event="click" />
+    </OrbInteractionProvider>);
+
+    expect(oldOnUse).not.toHaveBeenCalled();
+    expect(newOnUse).not.toHaveBeenCalled();
+    expect(screen.getByTestId("interaction-state")).toHaveTextContent("none|none");
+    expect(screen.getByRole("button", { name: "Filter Orb, available" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("rejects an old drag settlement when assistance consumes that orb during commit", () => {
+    const oldOnUse = accepted("Old assistance consumed.");
+    const newOnUse = accepted("New assistance consumed.");
+    const consumedAssistance: AssistanceState = {
+      ...assistance,
+      filter: { guessIndex: 0, cardId: "green-card", feature: "mana" },
+    };
+    const view = render(<OrbInteractionProvider
+      assistance={assistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={oldOnUse}
+      roundKey="round-one"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={null} enabled={false} event="pointerup" pointerId={22} />
+    </OrbInteractionProvider>);
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    fireEvent.pointerDown(filter, { pointerId: 22, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(filter, { pointerId: 22, clientX: 30, clientY: 30 });
+
+    view.rerender(<OrbInteractionProvider
+      assistance={consumedAssistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={newOnUse}
+      roundKey="round-one"
+    >
+      <InteractionSurface assistanceState={consumedAssistance} />
+      <SettleOnLayout element={filter} enabled event="pointerup" pointerId={22} />
+    </OrbInteractionProvider>);
+
+    expect(oldOnUse).not.toHaveBeenCalled();
+    expect(newOnUse).not.toHaveBeenCalled();
+    expect(screen.getByTestId("interaction-state")).toHaveTextContent("none|none");
+  });
+
+  test("rejects an old drag settlement when controls become disabled during commit", () => {
+    const oldOnUse = accepted("Old controls consumed.");
+    const newOnUse = accepted("Disabled controls consumed.");
+    const view = render(<OrbInteractionProvider
+      assistance={assistance}
+      disabled={false}
+      hitTest={defaultHitTest}
+      onUse={oldOnUse}
+      roundKey="round-one"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={null} enabled={false} event="pointerup" pointerId={24} />
+    </OrbInteractionProvider>);
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    fireEvent.pointerDown(filter, { pointerId: 24, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(filter, { pointerId: 24, clientX: 30, clientY: 30 });
+
+    view.rerender(<OrbInteractionProvider
+      assistance={assistance}
+      disabled
+      hitTest={defaultHitTest}
+      onUse={newOnUse}
+      roundKey="round-one"
+    >
+      <InteractionSurface />
+      <SettleOnLayout element={filter} enabled event="pointerup" pointerId={24} />
+    </OrbInteractionProvider>);
+
+    expect(oldOnUse).not.toHaveBeenCalled();
+    expect(newOnUse).not.toHaveBeenCalled();
+    expect(screen.getByTestId("interaction-state")).toHaveTextContent("none|none");
   });
 
   test("cancels pending interaction when disabled and releases capture on unmount", () => {
