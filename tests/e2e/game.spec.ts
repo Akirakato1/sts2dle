@@ -24,7 +24,7 @@ interface FixtureModel {
 
 interface AtlasReadiness {
   urls: { candidate: string; guess: string };
-  responses: Map<string, Promise<Response>>;
+  responses: Map<string, Response>;
 }
 
 interface FullCardFailureGate {
@@ -122,14 +122,15 @@ async function expectAccessibleTarget(locator: Locator): Promise<void> {
 }
 
 function watchAtlasResponses(page: Page): AtlasReadiness {
+  const appOrigin = process.env.STSDLE_E2E_ORIGIN ?? "http://127.0.0.1:3000";
   const urls = {
-    candidate: new URL("/runtime/candidate.webp", "http://127.0.0.1:3000").href,
-    guess: new URL("/runtime/guess.webp", "http://127.0.0.1:3000").href,
+    candidate: new URL("/runtime/candidate.webp", appOrigin).href,
+    guess: new URL("/runtime/guess.webp", appOrigin).href,
   };
-  const responses = new Map<string, Promise<Response>>();
+  const responses = new Map<string, Response>();
   page.on("response", (response) => {
     if (Object.values(urls).includes(response.url())) {
-      responses.set(response.url(), response.finished().then(() => response));
+      responses.set(response.url(), response);
     }
   });
   return { urls, responses };
@@ -137,18 +138,35 @@ function watchAtlasResponses(page: Page): AtlasReadiness {
 
 async function expectAtlasesReady(page: Page, readiness: AtlasReadiness): Promise<void> {
   for (const url of Object.values(readiness.urls)) {
-    const response = await readiness.responses.get(url);
+    const response = readiness.responses.get(url);
     expect(response, `${url} should finish before gameplay`).toBeDefined();
+    expect(await response!.finished(), `${url} should finish without a transfer error`).toBeNull();
     expect(response!.ok()).toBe(true);
+    await expect.poll(() => page.evaluate((exactUrl) => performance.getEntriesByName(exactUrl, "resource")
+      .map((entry) => ({
+        name: entry.name,
+        responseEnd: (entry as PerformanceResourceTiming).responseEnd,
+      })), url)).toHaveLength(1);
+    const [timing] = await page.evaluate((exactUrl) => performance.getEntriesByName(exactUrl, "resource")
+      .map((entry) => ({
+        name: entry.name,
+        responseEnd: (entry as PerformanceResourceTiming).responseEnd,
+      })), url);
+    expect(timing?.name).toBe(url);
+    expect(timing?.responseEnd).toBeGreaterThan(0);
   }
-  await expect.poll(() => page.evaluate((urls) => performance.getEntriesByType("resource")
-    .filter((entry) => urls.includes(entry.name))
-    .map((entry) => ({ name: entry.name, responseEnd: (entry as PerformanceResourceTiming).responseEnd })), Object.values(readiness.urls)))
-    .toHaveLength(2);
-  const completedTimings = await page.evaluate((urls) => performance.getEntriesByType("resource")
-    .filter((entry) => urls.includes(entry.name))
-    .map((entry) => ({ name: entry.name, responseEnd: (entry as PerformanceResourceTiming).responseEnd })), Object.values(readiness.urls));
-  expect(completedTimings.every((entry) => entry.responseEnd > 0)).toBe(true);
+}
+
+async function expectKeywordIconOrder(
+  cell: Locator,
+  expectedIcons: readonly ["x" | "check", "x" | "check"],
+): Promise<void> {
+  const icons = cell.locator("svg");
+  expect(await icons.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-icon"))))
+    .toEqual(expectedIcons);
+  expect(await icons.evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-hidden"))))
+    .toEqual(["true", "true"]);
+  await expect(cell.getByRole("img")).toHaveCount(0);
 }
 
 test("Daily and Practice complete the full paired-card experience without leaking the answer", async ({ context, page, request }) => {
@@ -226,8 +244,7 @@ test("Daily and Practice complete the full paired-card experience without leakin
   await expect(wrongRow).not.toContainText(/Direction:/);
   await expect(wrongRow.locator(".feature-tile__result-mark, .feature-tile__hint")).toHaveCount(0);
   const risingCell = wrongRow.getByRole("cell", { name: /absent to present/ });
-  await expect(risingCell.locator("svg[data-icon='x']")).toHaveCount(1);
-  await expect(risingCell.locator("svg[data-icon='check']")).toHaveCount(1);
+  await expectKeywordIconOrder(risingCell, ["x", "check"]);
   await expect(wrongRow.locator(".sprite-art--guess")).toHaveCSS("background-image", /guess\.webp/);
   await expect(search).toBeEnabled({ timeout: 5_000 });
 
@@ -242,8 +259,7 @@ test("Daily and Practice complete the full paired-card experience without leakin
   await chooseCard(page, secondWrongGuess.name);
   const secondWrongRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(secondWrongGuess.name) }) });
   const fallingCell = secondWrongRow.getByRole("cell", { name: /present to absent/ });
-  await expect(fallingCell.locator("svg[data-icon='check']")).toHaveCount(1);
-  await expect(fallingCell.locator("svg[data-icon='x']")).toHaveCount(1);
+  await expectKeywordIconOrder(fallingCell, ["check", "x"]);
   await expect(search).toBeEnabled({ timeout: 5_000 });
   const visibleRowHeaders = await page.getByRole("rowheader").allTextContents();
   expect(visibleRowHeaders).toEqual([
