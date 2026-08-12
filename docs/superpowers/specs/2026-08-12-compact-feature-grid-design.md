@@ -29,12 +29,12 @@ Make the classic STS-dle comparison grid fit comfortably on desktop without disc
 
 `FeatureVector` and its runtime validator will contain exactly those ten fields. `Unplayable` is not retained as a hidden grouping field.
 
-Both grouping modes must be rebuilt from the ten-field vector:
+Both grouping modes are generated directly from the revised ten-field vector:
 
 - Base groups use the ten base-card values.
 - Pair groups use the ten base values paired with the ten effective upgraded values.
 
-Cards that previously differed only by `Unplayable` will therefore merge into the same feature set and share the same accepted-answer pool. Daily answer selection remains uniform over the newly recomputed base feature sets, followed by uniform card selection within the selected set.
+There is no separate merge or migration pass. The feature-set key algorithm simply forgets `Unplayable`; cards whose remaining values are identical naturally receive the same key and share the same accepted-answer pool when the startup snapshot is generated. Daily answer selection remains uniform over those generated base feature sets, followed by uniform card selection within the selected set.
 
 All 577 current source cards remain in `cards.json`, search candidates, sprite atlases, and possible answer pools. The exact count may naturally change on later Spiral Codex patches.
 
@@ -90,7 +90,7 @@ Implementation will be test-driven and cover:
 
 - Exact ten-field feature order and schema rejection of `Unplayable` or dash mana values.
 - Normalization of `0`, fixed numbers, `X`, and `None`.
-- Two otherwise identical cards with different raw Unplayable state merging into one base group and one pair group.
+- Two otherwise identical cards with different raw Unplayable state receiving identical base and pair keys from the normal feature-set algorithm.
 - Retention of Unplayable cards in runtime cards, sprites, search, and answer selection.
 - Renderer-only Unplayable keyword behavior for base and upgraded fallback cards.
 - Ten comparison results with no hint field and ten-symbol share rows.
