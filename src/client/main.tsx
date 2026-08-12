@@ -5,6 +5,7 @@ import "./styles/grid.css";
 import "./styles/reveal.css";
 import "./styles/search.css";
 import "./styles/shell.css";
+import "./styles/assistance.css";
 import "./styles/global.css";
 
 const root = document.getElementById("root");
