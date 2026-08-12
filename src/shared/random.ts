@@ -14,8 +14,12 @@ export function nextIndex(source: RandomSource, maxExclusive: number): number {
   return value % maxExclusive;
 }
 
-export async function createDailyRandom(date: string, revision: string): Promise<RandomSource> {
-  const seed = new TextEncoder().encode(["stsdle", "v1", date, revision].join(":"));
+export async function createDailyRandom(
+  date: string,
+  revision: string,
+  namespace: "daily" | "hardcore-daily" = "daily",
+): Promise<RandomSource> {
+  const seed = new TextEncoder().encode(["stsdle", "v2", namespace, date, revision].join(":"));
   const digest = await crypto.subtle.digest("SHA-256", seed);
   const words = new DataView(digest);
   let a = words.getUint32(0, false);

@@ -8,7 +8,7 @@ export interface FeatureResult {
   displayValue: string;
 }
 
-function displayValue(base: unknown, upgraded: unknown): string {
+export function formatFeatureValue(base: unknown, upgraded: unknown): string {
   return base === upgraded ? String(base) : `${String(base)} \u2192 ${String(upgraded)}`;
 }
 
@@ -19,7 +19,7 @@ export function compareFeature(feature: FeatureName, guess: CardIdentity, answer
   return {
     feature,
     color,
-    displayValue: displayValue(guess.base[feature], guess.upgraded[feature]),
+    displayValue: formatFeatureValue(guess.base[feature], guess.upgraded[feature]),
   };
 }
 

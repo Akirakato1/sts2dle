@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
-import { compareFeature, compareGuess } from "../../src/shared/comparison.js";
+import { compareFeature, compareGuess, formatFeatureValue } from "../../src/shared/comparison.js";
 
 const vector: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
@@ -36,5 +36,10 @@ describe("paired feature comparison", () => {
 
   it("returns one ordered result for every feature", () => {
     expect(compareGuess(card("guess"), answer)).toHaveLength(10);
+  });
+
+  it("formats equal paired values once and changed values with an arrow", () => {
+    expect(formatFeatureValue("Basic", "Basic")).toBe("Basic");
+    expect(formatFeatureValue(false, true)).toBe("false → true");
   });
 });
