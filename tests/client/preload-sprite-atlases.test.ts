@@ -20,13 +20,23 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: (rea
 }
 
 class FakeImage {
-  src = "";
+  private currentSrc = "";
   decode: (() => Promise<void>) | undefined;
   private readonly listeners = new Map<string, Set<EventListener>>();
   private readonly decoding = deferred();
 
-  constructor(canDecode = true) {
+  constructor(
+    canDecode = true,
+    private readonly throwOnClear = false,
+    private readonly throwOnRemove = false,
+  ) {
     if (canDecode) this.decode = () => this.decoding.promise;
+  }
+
+  get src(): string { return this.currentSrc; }
+  set src(value: string) {
+    if (value === "" && this.throwOnClear) throw new Error("source clear failed");
+    this.currentSrc = value;
   }
 
   addEventListener(type: string, listener: EventListener): void {
@@ -36,6 +46,7 @@ class FakeImage {
   }
 
   removeEventListener(type: string, listener: EventListener): void {
+    if (this.throwOnRemove) throw new Error("listener cleanup failed");
     this.listeners.get(type)?.delete(listener);
   }
 
@@ -66,6 +77,18 @@ async function rejectedError(promise: Promise<void>): Promise<Error> {
     throw caught;
   }
   throw new Error("expected preload failure");
+}
+
+async function expectAbortError(promise: Promise<void>): Promise<void> {
+  let outcome: "pending" | "resolved" | "rejected" = "pending";
+  let rejection: unknown;
+  void promise.then(
+    () => { outcome = "resolved"; },
+    (caught: unknown) => { outcome = "rejected"; rejection = caught; },
+  );
+  for (let count = 0; count < 6; count += 1) await Promise.resolve();
+  expect(outcome).toBe("rejected");
+  expect(rejection).toEqual(new DOMException("Sprite preload aborted", "AbortError"));
 }
 
 describe("preloadSpriteAtlases", () => {
@@ -148,6 +171,30 @@ describe("preloadSpriteAtlases", () => {
     await expect(loading).rejects.toEqual(new DOMException("Sprite preload aborted", "AbortError"));
     expect(image.src).toBe("");
     expect(image.listenerCount()).toBe(0);
+  });
+
+  test("rejects AbortError when source clearing throws and ignores late image events", async () => {
+    const controller = new AbortController();
+    const image = new FakeImage(true, true);
+    const loading = preloadSpriteAtlases({ ...spriteMap, guess: { ...spriteMap.guess, url: "/candidate.webp" } }, controller.signal, () => image as unknown as HTMLImageElement);
+
+    expect(() => controller.abort()).not.toThrow();
+    image.resolveLoad();
+    image.resolveError();
+    image.resolveDecode();
+    await expectAbortError(loading);
+  });
+
+  test("rejects AbortError when listener cleanup throws and ignores late image events", async () => {
+    const controller = new AbortController();
+    const image = new FakeImage(true, false, true);
+    const loading = preloadSpriteAtlases({ ...spriteMap, guess: { ...spriteMap.guess, url: "/candidate.webp" } }, controller.signal, () => image as unknown as HTMLImageElement);
+
+    expect(() => controller.abort()).not.toThrow();
+    image.resolveLoad();
+    image.resolveError();
+    image.resolveDecode();
+    await expectAbortError(loading);
   });
 
   test("removes every listener after readiness", async () => {

@@ -8,9 +8,9 @@ function preloadOne(url: string, signal: AbortSignal | undefined, createImage: S
     let settled = false;
 
     const cleanup = (): void => {
-      image.removeEventListener("load", onLoad);
-      image.removeEventListener("error", onError);
-      signal?.removeEventListener("abort", onAbort);
+      try { image.removeEventListener("load", onLoad); } catch { /* Best-effort cleanup. */ }
+      try { image.removeEventListener("error", onError); } catch { /* Best-effort cleanup. */ }
+      try { signal?.removeEventListener("abort", onAbort); } catch { /* Best-effort cleanup. */ }
     };
 
     const settle = (error?: Error): void => {
@@ -33,7 +33,7 @@ function preloadOne(url: string, signal: AbortSignal | undefined, createImage: S
     };
     const onError = (): void => settle(new Error("Unable to prepare card artwork"));
     const onAbort = (): void => {
-      image.src = "";
+      try { image.src = ""; } catch { /* Abort settlement takes priority. */ }
       settle(new DOMException("Sprite preload aborted", "AbortError"));
     };
 
