@@ -251,17 +251,20 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await page.goto("/");
     await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
-    const dimensions = await page.evaluate(() => {
+    const scroller = page.locator(".guess-grid-scroll");
+    await expect(scroller).toBeVisible();
+    const dimensions = await scroller.evaluate((element) => {
       const root = document.documentElement;
-      const scroller = document.querySelector<HTMLElement>(".guess-grid-scroll")!;
       return {
         pageClientWidth: root.clientWidth,
         pageScrollWidth: root.scrollWidth,
-        scrollerClientWidth: scroller.clientWidth,
-        scrollerScrollWidth: scroller.scrollWidth,
+        scrollerClientWidth: element.clientWidth,
+        scrollerScrollWidth: element.scrollWidth,
       };
     });
     expect(dimensions.pageScrollWidth).toBeLessThanOrEqual(dimensions.pageClientWidth);
+    expect(dimensions.scrollerClientWidth).toBeGreaterThan(0);
+    expect(dimensions.scrollerScrollWidth).toBeGreaterThan(0);
     if (viewport.scrollerOverflows) {
       expect(dimensions.scrollerScrollWidth).toBeGreaterThan(dimensions.scrollerClientWidth);
     } else {
