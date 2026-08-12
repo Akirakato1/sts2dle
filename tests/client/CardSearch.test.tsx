@@ -191,6 +191,55 @@ describe("CardSearch", () => {
     expect(screen.getByRole("status")).toHaveTextContent("No visible candidates");
   });
 
+  test("clears a stale active option when visibility removes it", () => {
+    const onSelect = vi.fn();
+    const { input, view } = renderSearch({ assistance: assisted, onSelect });
+
+    fireEvent.change(input, { target: { value: "a" } });
+    fireEvent.keyDown(input, { key: "End" });
+    expect(input).toHaveAttribute("aria-activedescendant", expect.stringContaining("apparition"));
+
+    expect(() => view.rerender(<CardSearch
+      cards={cards}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      guessedCardIds={new Set()}
+      assistance={{ ...assisted, visibility: { ...assisted.visibility, green: false } }}
+      roundKey="round-1"
+      onVisibilityChange={vi.fn()}
+      onSelect={onSelect}
+    />)).not.toThrow();
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  test("keeps the candidate list open through a pointer interaction on a visibility label", () => {
+    const onVisibilityChange = vi.fn();
+    const { input, view } = renderSearch({ assistance: assisted, onVisibilityChange });
+    fireEvent.focus(input);
+    const redLabel = screen.getByText("Red").closest("label")!;
+
+    fireEvent.pointerDown(redLabel);
+    fireEvent.mouseDown(redLabel);
+    fireEvent.blur(input);
+    fireEvent.click(redLabel);
+    expect(onVisibilityChange).toHaveBeenCalledWith("red", false);
+
+    view.rerender(<CardSearch
+      cards={cards}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      guessedCardIds={new Set()}
+      assistance={{ ...assisted, visibility: { ...assisted.visibility, red: false } }}
+      roundKey="round-1"
+      onVisibilityChange={onVisibilityChange}
+      onSelect={vi.fn()}
+    />);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /excluded by Negation Orb/ })).not.toBeInTheDocument();
+  });
+
   test("omits orb controls and slots in Hardcore mode", () => {
     renderSearch({
       assistance: null,

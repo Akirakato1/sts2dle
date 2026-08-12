@@ -63,10 +63,11 @@ export function CardSearch({
 }: CardSearchProps) {
   const listboxId = useId();
   const pointerSelecting = useRef(false);
+  const visibilityPointerDown = useRef(false);
   const optionRefs = useRef(new Map<string, HTMLLIElement>());
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(-1);
+  const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
   const results = useMemo(
     () => searchCards(cards, query, guessedCardIds, assistance, cardsById),
@@ -78,40 +79,48 @@ export function CardSearch({
     return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
   }, [cards]);
   const menuOpen = !disabled && isOpen;
-  const canNavigate = menuOpen && results.length > 0;
+  const activeIndex = activeCardId === null ? -1 : results.findIndex(({ card }) => card.id === activeCardId);
+  const activeCandidate = activeIndex < 0 ? undefined : results[activeIndex];
+  const hasResults = menuOpen && results.length > 0;
+  const canNavigate = menuOpen && activeCandidate !== undefined;
   const optionId = (cardId: string) => `${listboxId}-option-${encodeURIComponent(cardId)}`;
 
   useEffect(() => {
     if (!disabled) return;
     pointerSelecting.current = false;
+    visibilityPointerDown.current = false;
     setQuery("");
-    setActiveIndex(-1);
+    setActiveCardId(null);
     setIsOpen(false);
   }, [disabled]);
 
   useEffect(() => {
     pointerSelecting.current = false;
+    visibilityPointerDown.current = false;
     setQuery("");
-    setActiveIndex(-1);
+    setActiveCardId(null);
     setIsOpen(false);
   }, [roundKey]);
 
   useEffect(() => {
-    if (!menuOpen || activeIndex < 0 || scrollRequest === 0) return;
-    const card = results[activeIndex];
-    if (!card) return;
-    const option = optionRefs.current.get(card.card.id);
+    if (!menuOpen || activeCandidate === undefined || scrollRequest === 0) return;
+    const option = optionRefs.current.get(activeCandidate.card.id);
     if (typeof option?.scrollIntoView === "function") {
       option.scrollIntoView({ block: "nearest" });
     }
-  }, [activeIndex, menuOpen, results, scrollRequest]);
+  }, [activeCandidate, menuOpen, scrollRequest]);
+
+  useEffect(() => {
+    setActiveCardId((current) => current !== null && !results.some(({ card }) => card.id === current) ? null : current);
+  }, [results]);
 
   function choose(candidate: ClassifiedCandidate) {
     if (disabled) return;
     pointerSelecting.current = false;
+    visibilityPointerDown.current = false;
     onSelect(candidate.card.id);
     setQuery("");
-    setActiveIndex(-1);
+    setActiveCardId(null);
     setIsOpen(false);
   }
 
@@ -119,9 +128,12 @@ export function CardSearch({
     if (disabled || results.length === 0) return;
     setIsOpen(true);
     setScrollRequest((current) => current + 1);
-    setActiveIndex((current) => {
-      if (current < 0) return direction === 1 ? 0 : results.length - 1;
-      return (current + direction + results.length) % results.length;
+    setActiveCardId((current) => {
+      const currentIndex = current === null ? -1 : results.findIndex(({ card }) => card.id === current);
+      const nextIndex = currentIndex < 0
+        ? (direction === 1 ? 0 : results.length - 1)
+        : (currentIndex + direction + results.length) % results.length;
+      return results[nextIndex]!.card.id;
     });
   }
 
@@ -136,24 +148,25 @@ export function CardSearch({
       aria-autocomplete="list"
       aria-controls={listboxId}
       aria-expanded={menuOpen}
-      aria-activedescendant={canNavigate && activeIndex >= 0 ? optionId(results[activeIndex]!.card.id) : undefined}
+      aria-activedescendant={canNavigate ? optionId(activeCandidate.card.id) : undefined}
       value={query}
       disabled={disabled}
       onChange={(event) => {
         if (disabled) return;
         const nextQuery = event.currentTarget.value;
         setQuery(nextQuery);
-        setActiveIndex(-1);
+        setActiveCardId(null);
         setIsOpen(true);
       }}
       onFocus={() => { if (!disabled) setIsOpen(true); }}
       onBlur={() => {
-        if (pointerSelecting.current) {
+        if (pointerSelecting.current || visibilityPointerDown.current) {
           pointerSelecting.current = false;
+          visibilityPointerDown.current = false;
           return;
         }
         setIsOpen(false);
-        setActiveIndex(-1);
+        setActiveCardId(null);
       }}
       onKeyDown={(event) => {
         if (disabled) return;
@@ -163,27 +176,35 @@ export function CardSearch({
         } else if (event.key === "ArrowUp") {
           event.preventDefault();
           moveActive(-1);
-        } else if (event.key === "Home" && canNavigate) {
+        } else if (event.key === "Home" && hasResults) {
           event.preventDefault();
-          setActiveIndex(0);
+          setActiveCardId(results[0]!.card.id);
           setScrollRequest((current) => current + 1);
-        } else if (event.key === "End" && canNavigate) {
+        } else if (event.key === "End" && hasResults) {
           event.preventDefault();
-          setActiveIndex(results.length - 1);
+          setActiveCardId(results.at(-1)!.card.id);
           setScrollRequest((current) => current + 1);
-        } else if (event.key === "Enter" && canNavigate && activeIndex >= 0) {
+        } else if (event.key === "Enter" && activeCandidate !== undefined) {
           event.preventDefault();
-          choose(results[activeIndex]!);
+          choose(activeCandidate);
         } else if (event.key === "Escape") {
           event.preventDefault();
           setIsOpen(false);
-          setActiveIndex(-1);
+          setActiveCardId(null);
         }
       }}
     />
     {assistance !== null && assistanceSlot}
     {assistance !== null && <fieldset className="candidate-visibility" aria-label="Candidate visibility">
-      {(["neutral", "green", "red"] as const).map((category) => <label key={category} className="candidate-visibility__label">
+      {(["neutral", "green", "red"] as const).map((category) => <label
+        key={category}
+        className="candidate-visibility__label"
+        onPointerDown={() => { visibilityPointerDown.current = true; }}
+        onMouseDown={() => { visibilityPointerDown.current = true; }}
+        onPointerUp={() => { visibilityPointerDown.current = false; }}
+        onPointerCancel={() => { visibilityPointerDown.current = false; }}
+        onMouseUp={() => { visibilityPointerDown.current = false; }}
+      >
         <input
           type="checkbox"
           checked={assistance.visibility[category]}
@@ -195,7 +216,7 @@ export function CardSearch({
     </fieldset>}
     {assistance !== null && nameHintSlot}
     {menuOpen && (results.length > 0 ? <ul id={listboxId} className="card-search__options" role="listbox">
-      {results.map(({ card, category }, index) => <li
+      {results.map(({ card, category }) => <li
         id={optionId(card.id)}
         key={card.id}
         ref={(element) => {
@@ -204,13 +225,13 @@ export function CardSearch({
         }}
         className={`card-search__option card-search__option--${category}`}
         role="option"
-        aria-selected={index === activeIndex}
+        aria-selected={card.id === activeCardId}
         onPointerDown={() => { pointerSelecting.current = true; }}
         onMouseDown={(event) => { event.preventDefault(); pointerSelecting.current = true; }}
         onPointerUp={() => { pointerSelecting.current = false; }}
         onPointerCancel={() => { pointerSelecting.current = false; }}
         onMouseUp={() => { pointerSelecting.current = false; }}
-        onMouseEnter={() => setActiveIndex(index)}
+        onMouseEnter={() => setActiveCardId(card.id)}
         onClick={() => choose({ card, category })}
       >
         <SpriteArt cardId={card.id} spriteMap={spriteMap} kind="candidate" label={`${card.name} artwork`} />
