@@ -160,7 +160,7 @@ describe("App snapshot cleanup", () => {
     render(<App />);
     const input = await screen.findByRole("combobox");
     fireEvent.change(input, { target: { value: "ap" } });
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Apotheosis"]);
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Apotheosisunhighlighted candidate"]);
     fireEvent.click(screen.getByRole("option"));
     expect(submit).toHaveBeenCalledOnce();
     expect(submit).toHaveBeenCalledWith("apotheosis");

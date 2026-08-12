@@ -1,13 +1,30 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { CardIdentity, SpriteMap } from "../../shared/domain.js";
+import {
+  classifyCandidate,
+  isCandidateCategoryVisible,
+  type AssistanceState,
+  type CandidateCategory,
+} from "../game/assistance.js";
 import { SpriteArt } from "./SpriteArt.js";
+
+export interface ClassifiedCandidate {
+  card: CardIdentity;
+  category: CandidateCategory;
+}
 
 export interface CardSearchProps {
   cards: readonly CardIdentity[];
+  cardsById: ReadonlyMap<string, CardIdentity>;
   spriteMap: SpriteMap;
   guessedCardIds: ReadonlySet<string>;
+  assistance: AssistanceState | null;
+  roundKey: string | number;
   disabled?: boolean;
+  assistanceSlot?: React.ReactNode;
+  nameHintSlot?: React.ReactNode;
+  onVisibilityChange(category: CandidateCategory, visible: boolean): void;
   onSelect(cardId: string): void;
 }
 
@@ -18,17 +35,32 @@ function compareCodeUnits(left: string, right: string): number {
 export function searchCards(
   cards: readonly CardIdentity[],
   query: string,
-  excluded: ReadonlySet<string>,
-): CardIdentity[] {
+  guessedCardIds: ReadonlySet<string>,
+  assistance: AssistanceState | null,
+  cardsById: ReadonlyMap<string, CardIdentity>,
+): ClassifiedCandidate[] {
   const prefix = query.trim().toLocaleLowerCase("en-US");
-  if (!prefix) return [];
   return cards
-    .filter((card) => !excluded.has(card.id))
-    .filter((card) => card.name.toLocaleLowerCase("en-US").startsWith(prefix))
-    .sort((left, right) => left.name.localeCompare(right.name, "en-US") || compareCodeUnits(left.id, right.id));
+    .filter((card) => !guessedCardIds.has(card.id))
+    .sort((left, right) => left.name.localeCompare(right.name, "en-US") || compareCodeUnits(left.id, right.id))
+    .map((card) => ({ card, category: assistance ? classifyCandidate(card, assistance, cardsById) : "neutral" }))
+    .filter(({ category }) => assistance === null || isCandidateCategoryVisible(category, assistance.visibility))
+    .filter(({ card }) => !prefix || card.name.toLocaleLowerCase("en-US").startsWith(prefix));
 }
 
-export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false, onSelect }: CardSearchProps) {
+export function CardSearch({
+  cards,
+  cardsById,
+  spriteMap,
+  guessedCardIds,
+  assistance = null,
+  roundKey,
+  disabled = false,
+  assistanceSlot,
+  nameHintSlot,
+  onVisibilityChange,
+  onSelect,
+}: CardSearchProps) {
   const listboxId = useId();
   const pointerSelecting = useRef(false);
   const optionRefs = useRef(new Map<string, HTMLLIElement>());
@@ -36,13 +68,17 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [scrollRequest, setScrollRequest] = useState(0);
-  const results = useMemo(() => searchCards(cards, query, guessedCardIds), [cards, guessedCardIds, query]);
+  const results = useMemo(
+    () => searchCards(cards, query, guessedCardIds, assistance, cardsById),
+    [assistance, cards, cardsById, guessedCardIds, query],
+  );
   const duplicateNames = useMemo(() => {
     const counts = new Map<string, number>();
     for (const card of cards) counts.set(card.name, (counts.get(card.name) ?? 0) + 1);
     return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
   }, [cards]);
-  const menuOpen = !disabled && isOpen && results.length > 0;
+  const menuOpen = !disabled && isOpen;
+  const canNavigate = menuOpen && results.length > 0;
   const optionId = (cardId: string) => `${listboxId}-option-${encodeURIComponent(cardId)}`;
 
   useEffect(() => {
@@ -54,19 +90,26 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
   }, [disabled]);
 
   useEffect(() => {
+    pointerSelecting.current = false;
+    setQuery("");
+    setActiveIndex(-1);
+    setIsOpen(false);
+  }, [roundKey]);
+
+  useEffect(() => {
     if (!menuOpen || activeIndex < 0 || scrollRequest === 0) return;
     const card = results[activeIndex];
     if (!card) return;
-    const option = optionRefs.current.get(card.id);
+    const option = optionRefs.current.get(card.card.id);
     if (typeof option?.scrollIntoView === "function") {
       option.scrollIntoView({ block: "nearest" });
     }
   }, [activeIndex, menuOpen, results, scrollRequest]);
 
-  function choose(card: CardIdentity) {
+  function choose(candidate: ClassifiedCandidate) {
     if (disabled) return;
     pointerSelecting.current = false;
-    onSelect(card.id);
+    onSelect(candidate.card.id);
     setQuery("");
     setActiveIndex(-1);
     setIsOpen(false);
@@ -93,7 +136,7 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
       aria-autocomplete="list"
       aria-controls={listboxId}
       aria-expanded={menuOpen}
-      aria-activedescendant={menuOpen && activeIndex >= 0 ? optionId(results[activeIndex]!.id) : undefined}
+      aria-activedescendant={canNavigate && activeIndex >= 0 ? optionId(results[activeIndex]!.card.id) : undefined}
       value={query}
       disabled={disabled}
       onChange={(event) => {
@@ -101,9 +144,9 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
         const nextQuery = event.currentTarget.value;
         setQuery(nextQuery);
         setActiveIndex(-1);
-        setIsOpen(nextQuery.trim().length > 0);
+        setIsOpen(true);
       }}
-      onFocus={() => { if (!disabled && results.length > 0) setIsOpen(true); }}
+      onFocus={() => { if (!disabled) setIsOpen(true); }}
       onBlur={() => {
         if (pointerSelecting.current) {
           pointerSelecting.current = false;
@@ -120,15 +163,15 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
         } else if (event.key === "ArrowUp") {
           event.preventDefault();
           moveActive(-1);
-        } else if (event.key === "Home" && menuOpen) {
+        } else if (event.key === "Home" && canNavigate) {
           event.preventDefault();
           setActiveIndex(0);
           setScrollRequest((current) => current + 1);
-        } else if (event.key === "End" && menuOpen) {
+        } else if (event.key === "End" && canNavigate) {
           event.preventDefault();
           setActiveIndex(results.length - 1);
           setScrollRequest((current) => current + 1);
-        } else if (event.key === "Enter" && menuOpen && activeIndex >= 0) {
+        } else if (event.key === "Enter" && canNavigate && activeIndex >= 0) {
           event.preventDefault();
           choose(results[activeIndex]!);
         } else if (event.key === "Escape") {
@@ -138,15 +181,28 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
         }
       }}
     />
-    {menuOpen && <ul id={listboxId} className="card-search__options" role="listbox">
-      {results.map((card, index) => <li
+    {assistance !== null && assistanceSlot}
+    {assistance !== null && <fieldset className="candidate-visibility" aria-label="Candidate visibility">
+      {(["neutral", "green", "red"] as const).map((category) => <label key={category} className="candidate-visibility__label">
+        <input
+          type="checkbox"
+          checked={assistance.visibility[category]}
+          onMouseDown={(event) => event.preventDefault()}
+          onChange={(event) => onVisibilityChange(category, event.currentTarget.checked)}
+        />
+        <span>{category[0]!.toUpperCase() + category.slice(1)}</span>
+      </label>)}
+    </fieldset>}
+    {assistance !== null && nameHintSlot}
+    {menuOpen && (results.length > 0 ? <ul id={listboxId} className="card-search__options" role="listbox">
+      {results.map(({ card, category }, index) => <li
         id={optionId(card.id)}
         key={card.id}
         ref={(element) => {
           if (element) optionRefs.current.set(card.id, element);
           else optionRefs.current.delete(card.id);
         }}
-        className="card-search__option"
+        className={`card-search__option card-search__option--${category}`}
         role="option"
         aria-selected={index === activeIndex}
         onPointerDown={() => { pointerSelecting.current = true; }}
@@ -155,12 +211,17 @@ export function CardSearch({ cards, spriteMap, guessedCardIds, disabled = false,
         onPointerCancel={() => { pointerSelecting.current = false; }}
         onMouseUp={() => { pointerSelecting.current = false; }}
         onMouseEnter={() => setActiveIndex(index)}
-        onClick={() => choose(card)}
+        onClick={() => choose({ card, category })}
       >
         <SpriteArt cardId={card.id} spriteMap={spriteMap} kind="candidate" label={`${card.name} artwork`} />
         <span className="card-search__name">{card.name}</span>
         {(card.duplicateName || duplicateNames.has(card.name)) && <span className="card-search__class">{card.base.cardClass}</span>}
+        <span className="card-search__sr-only">{category === "neutral"
+          ? "unhighlighted candidate"
+          : category === "green"
+            ? "matches Filter Orb"
+            : "excluded by Negation Orb"}</span>
       </li>)}
-    </ul>}
+    </ul> : <p className="card-search__empty" role="status">No visible candidates</p>)}
   </section>;
 }

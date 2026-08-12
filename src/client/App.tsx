@@ -9,6 +9,8 @@ import { SharePanel } from "./components/SharePanel.js";
 import { useGame } from "./game/use-game.js";
 import type { RoundState } from "./game/game-reducer.js";
 
+function ignoreCandidateVisibility(): void {}
+
 interface RoundGameProps {
   round: RoundState;
   roundKey: number;
@@ -25,9 +27,13 @@ function RoundGame({ round, roundKey, snapshot, utcDate, onSubmit, onNextRound }
   return <main className="game-board" aria-label="Card guessing game">
     <CardSearch
       cards={snapshot.cards}
+      cardsById={snapshot.cardsById}
       spriteMap={snapshot.spriteMap}
       guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}
+      assistance={null}
+      roundKey={roundKey}
       disabled={isRevealing || round.status === "won"}
+      onVisibilityChange={ignoreCandidateVisibility}
       onSelect={onSubmit}
     />
     <GuessGrid
