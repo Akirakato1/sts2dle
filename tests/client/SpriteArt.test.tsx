@@ -10,7 +10,7 @@ afterEach(cleanup);
 
 const spriteMap: SpriteMap = {
   candidate: { url: "/runtime/candidates.webp", width: 512, height: 256, displayScale: 0.5 },
-  guess: { url: "/runtime/guesses.webp", width: 640, height: 480, displayScale: 0.5 },
+  guess: { url: "/runtime/guesses.webp", width: 640, height: 480, displayScale: 0.45 },
   cards: {
     apotheosis: {
       candidate: { x: 128, y: 64, width: 64, height: 64 },
@@ -34,13 +34,13 @@ describe("SpriteArt", () => {
     expect(container.querySelector("img")).not.toBeInTheDocument();
   });
 
-  test("uses the guess atlas and renders 160-pixel source art at 80 pixels", () => {
+  test("uses the guess atlas and renders 160-pixel source art at 72 pixels", () => {
     render(<SpriteArt cardId="apotheosis" spriteMap={spriteMap} kind="guess" label="Apotheosis guess artwork" />);
     expect(screen.getByRole("img", { name: "Apotheosis guess artwork" })).toHaveStyle({
-      width: "80px",
-      height: "80px",
-      backgroundPosition: "-80px -160px",
-      backgroundSize: "320px 240px",
+      width: "72px",
+      height: "72px",
+      backgroundPosition: "-72px -144px",
+      backgroundSize: "288px 216px",
     });
   });
 

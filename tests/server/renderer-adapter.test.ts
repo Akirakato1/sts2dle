@@ -49,6 +49,21 @@ describe("buildRendererConfig", () => {
     );
   });
 
+  it("keeps renderer-only Unplayable text for a raw unplayable card", () => {
+    expect(buildRendererConfig(card("DAZED"), false).description).toMatch(/^Unplayable\./);
+  });
+
+  it("applies raw upgrade keyword deltas in the fallback renderer", () => {
+    const raw = structuredClone(card("DAZED"));
+    raw.upgrade = { ...raw.upgrade, remove_unplayable: true };
+
+    expect(buildRendererConfig(raw, true).description).not.toMatch(/^Unplayable\./);
+  });
+
+  it("uses the card renderer's no-cost token instead of the UI mana label", () => {
+    expect(buildRendererConfig(card("DAZED"), false).cost).toBe("–");
+  });
+
   it("uses Mad Science's canonical Attack and Event variant", () => {
     expect(buildRendererConfig(card("MAD_SCIENCE"), false)).toMatchObject({
       card_type: "attack",

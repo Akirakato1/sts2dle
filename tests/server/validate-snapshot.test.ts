@@ -192,7 +192,7 @@ describe("validateSnapshot", () => {
     ["overlap", (map: Record<string, any>) => { map.cards.ALCHEMIZE.candidate = { ...map.cards.AFTERIMAGE.candidate }; }, /candidate sprite rectangle.*ALCHEMIZE.*expected/i],
     ["atlas geometry", (map: Record<string, any>) => { map.candidate.width += 64; }, /candidate atlas geometry/i],
     ["guess cell width", (map: Record<string, any>) => { map.cards.AFTERIMAGE.guess.width = 159; }, /guess sprite rectangle.*AFTERIMAGE.*expected/i],
-    ["guess display scale", (map: Record<string, any>) => { map.guess.displayScale = 1; }, /guess display scale.*0\.5/i],
+    ["guess display scale", (map: Record<string, any>) => { map.guess.displayScale = 1; }, /guess display scale.*0\.45/i],
     ["guess overlap", (map: Record<string, any>) => { map.cards.ALCHEMIZE.guess = { ...map.cards.AFTERIMAGE.guess }; }, /guess sprite rectangle.*ALCHEMIZE.*expected/i],
     ["guess atlas geometry", (map: Record<string, any>) => { map.guess.height += 160; }, /guess atlas geometry/i],
   ] as const)("rejects wrong sprite %s", async (_label, mutate, pattern) => {
@@ -401,6 +401,19 @@ describe("validateSnapshot", () => {
     const path = await createValidSnapshot();
     const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
     cards.find(({ id }) => id === "AFTERIMAGE")!.base[field] = value;
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [pattern]);
+  });
+
+  it.each([
+    ["base", "unplayable", true, /invalid base feature keys.*DAZED.*unplayable/i],
+    ["upgraded", "unplayable", false, /invalid upgraded feature keys.*DAZED.*unplayable/i],
+    ["base", "mana", "–", /unknown mana value.*DAZED/i],
+  ] as const)("rejects rehashed legacy %s feature %s", async (variant, field, value, pattern) => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    cards.find(({ id }) => id === "DAZED")![variant][field] = value;
     await writeJsonAndRehash(path, "cards.json", cards);
 
     await expectIssues(path, [pattern]);

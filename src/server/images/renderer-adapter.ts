@@ -1,5 +1,4 @@
 import type { RawSpireCard } from "../spire-codex/schema.js";
-import { normalizeCard } from "../sync/normalize-card.js";
 
 export interface RendererConfig {
   card_name: string;
@@ -16,6 +15,7 @@ export interface RendererConfig {
 
 const PREFIX_KEYWORDS = ["unplayable", "innate"] as const;
 const SUFFIX_KEYWORDS = ["ethereal", "retain", "sly", "exhaust", "eternal"] as const;
+type RendererKeyword = (typeof PREFIX_KEYWORDS)[number] | (typeof SUFFIX_KEYWORDS)[number];
 
 function keywordLine(keyword: string): string {
   return keyword[0]!.toUpperCase() + keyword.slice(1) + ".";
@@ -29,21 +29,35 @@ function effectiveStarCost(raw: RawSpireCard, upgraded: boolean): string | numbe
   return raw.star_cost ?? null;
 }
 
+function effectiveRawKeyword(raw: RawSpireCard, keyword: RendererKeyword, upgraded: boolean): boolean {
+  const base = new Set(raw.keywords_key?.map((value) => value.toLowerCase()) ?? []);
+  let present = base.has(keyword);
+  if (upgraded && raw.upgrade?.[`add_${keyword}`]) present = true;
+  if (upgraded && raw.upgrade?.[`remove_${keyword}`]) present = false;
+  return present;
+}
+
+function rendererCost(raw: RawSpireCard, upgraded: boolean): string {
+  const upgradedCost = raw.upgrade?.cost;
+  const cost = upgraded && typeof upgradedCost === "number" ? upgradedCost : raw.cost;
+  if (raw.is_x_cost || cost === -1) return "X";
+  if (!Number.isInteger(cost) || cost === null || cost < 0) return "–";
+  return String(cost);
+}
+
 export function buildRendererConfig(raw: RawSpireCard, upgraded: boolean): RendererConfig {
   if (!raw.image_url) throw new Error(`Card portrait URL is required: ${raw.id}`);
 
-  const normalized = normalizeCard(raw, "https://stsdle.local/");
-  const features = upgraded ? normalized.upgraded : normalized.base;
   const description = upgraded
     ? (raw.upgrade_description || raw.description)
     : raw.description;
   const lines: string[] = [];
   for (const keyword of PREFIX_KEYWORDS) {
-    if (features[keyword]) lines.push(keywordLine(keyword));
+    if (effectiveRawKeyword(raw, keyword, upgraded)) lines.push(keywordLine(keyword));
   }
   if (description) lines.push(description);
   for (const keyword of SUFFIX_KEYWORDS) {
-    if (features[keyword]) lines.push(keywordLine(keyword));
+    if (effectiveRawKeyword(raw, keyword, upgraded)) lines.push(keywordLine(keyword));
   }
 
   return {
@@ -52,7 +66,7 @@ export function buildRendererConfig(raw: RawSpireCard, upgraded: boolean): Rende
     card_type: raw.type.toLowerCase(),
     character: raw.color.toLowerCase(),
     rarity: (raw.rarity ?? "").toLowerCase(),
-    cost: String(features.mana),
+    cost: rendererCost(raw, upgraded),
     star_cost: effectiveStarCost(raw, upgraded),
     upgraded,
     cost_green: false,

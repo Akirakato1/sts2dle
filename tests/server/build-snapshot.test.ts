@@ -288,6 +288,14 @@ describe("buildSnapshot", () => {
       baseCardUrl: `/runtime/fallback/${madScienceDigest}.webp`,
       upgradedCardUrl: `/runtime/fallback/${madScienceDigest}_upg.webp`,
     });
+    expect(cards.find(({ id }) => id === "DAZED")).toBeDefined();
+    const spriteMap = JSON.parse(await readFile(join(activated.path, "sprite-map.json"), "utf8")) as {
+      cards: Record<string, { candidate: unknown; guess: unknown }>;
+    };
+    expect(spriteMap.cards.DAZED).toMatchObject({
+      candidate: { width: 64, height: 64 },
+      guess: { width: 160, height: 160 },
+    });
     expect(Object.keys(activated.manifest.files)).not.toContain("manifest.json");
     expect(Object.keys(activated.manifest.files)).toEqual([...Object.keys(activated.manifest.files)].sort());
     expect((await readFile(join(activated.path, "manifest.json"), "utf8")).endsWith("\n")).toBe(true);

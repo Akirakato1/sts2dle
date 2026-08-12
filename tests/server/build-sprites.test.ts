@@ -142,7 +142,7 @@ describe("buildSprites", () => {
     expect(map.cards.CARD_A?.guess).toEqual({ x: 0, y: 0, width: 160, height: 160 });
     expect(map).toMatchObject({
       candidate: { url: "/runtime/candidate.webp", width: 128, height: 128, displayScale: 0.5 },
-      guess: { url: "/runtime/guess.webp", width: 320, height: 320, displayScale: 0.5 },
+      guess: { url: "/runtime/guess.webp", width: 320, height: 320, displayScale: 0.45 },
     });
     await expect(sharp(await readFile(join(outputDir, "candidate.webp"))).metadata()).resolves.toMatchObject({
       width: 128,

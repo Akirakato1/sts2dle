@@ -31,7 +31,7 @@ const REQUIRED_HASHED_FILES = [
 const CARD_CLASSES = new Set(["Ironclad", "Silent", "Defect", "Necrobinder", "Regent", "Neutral", "Event"]);
 const CARD_TYPES = new Set(["Attack", "Skill", "Power", "Quest", "Status", "Curse"]);
 const CARD_RARITIES = new Set(["Common", "Uncommon", "Rare", "None"]);
-const KEYWORDS = ["eternal", "ethereal", "exhaust", "innate", "retain", "sly", "unplayable"] as const;
+const KEYWORDS = ["eternal", "ethereal", "exhaust", "innate", "retain", "sly"] as const;
 const MAX_ATLAS_DIMENSION = 8192;
 const FALLBACK_WIDTH = 400;
 const FALLBACK_HEIGHT = 520;
@@ -480,7 +480,10 @@ function validateSpriteMap(
       if (contract.width > MAX_ATLAS_DIMENSION || contract.height > MAX_ATLAS_DIMENSION) {
         issues.push(`${name} atlas exceeds ${MAX_ATLAS_DIMENSION}px dimension limit`);
       }
-      if (meta.displayScale !== 0.5) issues.push(`${name} display scale must be 0.5`);
+      const expectedDisplayScale = name === "candidate" ? 0.5 : 0.45;
+      if (meta.displayScale !== expectedDisplayScale) {
+        issues.push(`${name} display scale must be ${expectedDisplayScale}`);
+      }
     }
   }
   for (const cardId of Object.keys(value.cards)) {
@@ -680,13 +683,15 @@ function histogram(groups: readonly { cardIds: readonly string[] }[]): Record<st
 
 function isFeatureVector(value: unknown): value is FeatureVector {
   if (!isRecord(value)) return false;
-  return CARD_CLASSES.has(String(value.cardClass)) && CARD_TYPES.has(String(value.cardType)) &&
+  return Object.keys(value).length === FEATURE_ORDER.length &&
+    FEATURE_ORDER.every((feature) => Object.hasOwn(value, feature)) &&
+    CARD_CLASSES.has(String(value.cardClass)) && CARD_TYPES.has(String(value.cardType)) &&
     CARD_RARITIES.has(String(value.rarity)) && isMana(value.mana) &&
     KEYWORDS.every((keyword) => typeof value[keyword] === "boolean");
 }
 
 function isMana(value: unknown): boolean {
-  return (Number.isInteger(value) && typeof value === "number" && value >= 0) || value === "X" || value === "\u2013";
+  return (Number.isInteger(value) && typeof value === "number" && value >= 0) || value === "X" || value === "None";
 }
 
 function isFallbackUrl(value: unknown): value is string {

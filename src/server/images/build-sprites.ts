@@ -239,7 +239,7 @@ function createSpriteMap(
       url: "/runtime/guess.webp",
       width: columns * 160,
       height: rows * 160,
-      displayScale: 0.5,
+      displayScale: 0.45,
     },
     cards: cardMap,
   };
