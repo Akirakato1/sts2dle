@@ -144,6 +144,49 @@ describe("createApp", () => {
     }
   });
 
+  it("bounds recursive path decoding independently of input nesting depth", async () => {
+    const roots = await createStaticRoots();
+    const app = await createApp({ ...roots, logger: false });
+    const deeplyEncodedDot = `/cards/%${"25".repeat(64)}2e`;
+    const decode = vi.spyOn(globalThis, "decodeURIComponent");
+
+    try {
+      const response = await app.inject({ url: deeplyEncodedDot });
+      expect(response.statusCode).toBe(404);
+      expect(decode.mock.calls.length).toBeLessThanOrEqual(8);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed over real HTTP for deeply and malformed encoded paths while preserving Unicode routes", async () => {
+    const roots = await createStaticRoots();
+    const app = await createApp({ ...roots, logger: false });
+
+    try {
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const port = (app.server.address() as AddressInfo).port;
+      const deeplyEncodedDot = `/cards/%${"25".repeat(7_000)}2e`;
+
+      const deeplyEncoded = await rawHttpRequest(port, "GET", deeplyEncodedDot);
+      expect(deeplyEncoded.statusCode).toBe(404);
+      expect(deeplyEncoded.headers["content-type"] ?? "").not.toContain("text/html");
+      expect(deeplyEncoded.body).not.toContain("STS-dle");
+
+      const malformed = await rawHttpRequest(port, "GET", "/cards/%E0%A4%A");
+      expect([400, 404]).toContain(malformed.statusCode);
+      expect(malformed.headers["content-type"] ?? "").not.toContain("text/html");
+      expect(malformed.body).not.toContain("STS-dle");
+
+      const unicodeRoute = await rawHttpRequest(port, "GET", "/cards/%E6%97%A5%E6%9C%AC");
+      expect(unicodeRoute.statusCode).toBe(200);
+      expect(unicodeRoute.headers["content-type"]).toContain("text/html");
+      expect(unicodeRoute.body).toContain("STS-dle");
+    } finally {
+      await app.close();
+    }
+  });
+
   it.each(["GET", "HEAD"] as const)(
     "keeps canonical, encoded, and malformed runtime namespace forms out of the SPA for %s",
     async (method) => {

@@ -16,6 +16,8 @@ interface HealthManifest {
   generatedAt: string;
 }
 
+const MAX_PATH_DECODE_PASSES = 4;
+
 export async function createApp(options: CreateAppOptions): Promise<FastifyInstance> {
   const snapshotRoot = resolve(options.snapshotRoot);
   const clientRoot = resolve(options.clientRoot ?? "dist/client");
@@ -56,28 +58,15 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 }
 
 function hasUnsafeStaticPath(rawUrl: string): boolean {
-  let pathname = rawUrl.split("?", 1)[0] ?? rawUrl;
-  const maxDecodePasses = pathname.length;
-
-  for (let pass = 0; pass < maxDecodePasses; pass += 1) {
-    if (
-      pathname.includes("\\") ||
-      pathname.includes("//") ||
-      /%2f|%5c/i.test(pathname) ||
-      pathname.split("/").some((segment) => segment.startsWith("."))
-    ) {
-      return true;
-    }
-    try {
-      const decoded = decodeURIComponent(pathname);
-      if (decoded === pathname) return false;
-      pathname = decoded;
-    } catch {
-      return false;
-    }
-  }
-
-  return true;
+  const pathname = rawUrl.split("?", 1)[0] ?? rawUrl;
+  const decoded = decodePathLayers(pathname);
+  if (!decoded.complete) return true;
+  return decoded.layers.some((layer) => (
+    layer.includes("\\") ||
+    layer.includes("//") ||
+    /%2f|%5c/i.test(layer) ||
+    layer.split("/").some((segment) => segment.startsWith("."))
+  ));
 }
 
 function isRuntimeNamespace(rawUrl: string): boolean {
@@ -87,19 +76,28 @@ function isRuntimeNamespace(rawUrl: string): boolean {
   } catch {
     return rawUrl === "/runtime" || rawUrl.startsWith("/runtime/") || rawUrl.startsWith("/runtime%");
   }
-  const maxDecodePasses = pathname.length;
-  for (let pass = 0; pass < maxDecodePasses; pass += 1) {
-    const normalized = pathname.replaceAll("\\", "/");
-    if (normalized === "/runtime" || normalized.startsWith("/runtime/")) return true;
+  const decoded = decodePathLayers(pathname);
+  if (!decoded.complete) return true;
+  return decoded.layers.some((layer) => {
+    const normalized = layer.replaceAll("\\", "/");
+    return normalized === "/runtime" || normalized.startsWith("/runtime/");
+  });
+}
+
+function decodePathLayers(pathname: string): { layers: string[]; complete: boolean } {
+  const layers = [pathname];
+  let current = pathname;
+  for (let pass = 0; pass < MAX_PATH_DECODE_PASSES; pass += 1) {
     try {
-      const decoded = decodeURIComponent(pathname);
-      if (decoded === pathname) return false;
-      pathname = decoded;
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) return { layers, complete: true };
+      layers.push(decoded);
+      current = decoded;
     } catch {
-      return pathname.startsWith("/runtime%");
+      return { layers, complete: false };
     }
   }
-  return pathname === "/runtime" || pathname.startsWith("/runtime/") || pathname.startsWith("/runtime%");
+  return { layers, complete: false };
 }
 
 async function readHealthManifest(path: string): Promise<HealthManifest> {
