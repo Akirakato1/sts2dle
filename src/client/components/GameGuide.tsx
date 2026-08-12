@@ -24,9 +24,12 @@ export function GameGuide() {
       <p>Each orb is a one-use aid and is permanently consumed for that round. Use an orb by drag and drop, or with click, tap, or keyboard controls.</p>
       <p>Reveal Orb targets a feature header and shows the answer&apos;s full base and upgraded pair. Filter Orb targets a green result and marks candidates with that exact pair in green. Negation Orb targets a red result to exclude that pair; red exclusion takes priority over green.</p>
       <p>Candidate controls are advisory and can show or hide neutral, green, and red candidates without changing which names are accepted. If filtering produces an empty candidate list, focus remains on the search field and the empty candidate list is announced.</p>
-      <p>After five wrong guesses, the name appears as blank boxes. At seven wrong guesses, the first word&apos;s initial appears. Subsequent guesses reveal the remaining word initials, then other letters progressively.</p>
+      <p>The name-hint mask uses the deterministically selected answer name. Equivalent answers with the same complete paired-feature set remain accepted.</p>
+      <p>After five wrong guesses, the selected answer name appears as blank continuous word boxes. After six wrong guesses, the mask is unchanged. At seven wrong guesses, the first character of the first word appears.</p>
+      <p>Each subsequent wrong guess reveals the first character of one later word until all word initials are shown. After that, each wrong guess reveals exactly one deterministic seeded unrevealed Unicode code-point position until none remain.</p>
       <p>Hardcore Daily is a separate daily round with no orbs or name hints.</p>
-      <p>Practice remembers the current random round in this browser. Its Hardcore choice is locked after the first guess or orb. Use End game to forfeit and reveal the answers, then choose New Practice Round; the next-round choice persists locally.</p>
+      <p>The current Practice round persists locally in this browser. Its Hardcore choice is locked after the first guess or orb. Use End game to forfeit and reveal the answers, then choose New Practice Round.</p>
+      <p>After a win or forfeit, the terminal toggle selects the setting used when New Practice Round is activated and does not mutate the completed round.</p>
     </details>
   </section>;
 }
