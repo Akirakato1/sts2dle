@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 import {
@@ -46,6 +46,22 @@ function practice(hardcore = false): RoundState {
 }
 
 describe("gameReducer", () => {
+  test("RoundState requires every durable field and rejects deterministic mode contradictions", () => {
+    expectTypeOf<RoundState>().toMatchTypeOf<{
+      hardcore: boolean;
+      roundId: string;
+      hintSeed: string;
+      terminalGuessCount: number | null;
+      assistance: ReturnType<typeof createDefaultAssistance> | null;
+    }>();
+    expect(() => createRoundState({
+      mode: "daily", hardcore: true, roundId: "daily:date:revision", hintSeed: "seed", answer: selectedAnswer,
+    })).toThrow(/hardcore/i);
+    expect(() => createRoundState({
+      mode: "hardcore-daily", hardcore: false, roundId: "hardcore-daily:date:revision", hintSeed: "seed", answer: selectedAnswer,
+    })).toThrow(/hardcore/i);
+  });
+
   test("submits canonical results and wins only for an accepted card ID", () => {
     const round = practice();
     const played = gameReducer(round, { type: "submit", cardId: guessCard.id, cardsById });

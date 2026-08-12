@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
+import React, { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../../src/shared/random.js", async (importOriginal) => ({
@@ -23,6 +24,7 @@ import {
 } from "../../src/client/game/storage.js";
 import { useGame } from "../../src/client/game/use-game.js";
 import { pairKey } from "../../src/shared/feature-keys.js";
+import { baseKey } from "../../src/shared/feature-keys.js";
 import { createDailyRandom, createPracticeRandom } from "../../src/shared/random.js";
 
 const base = { cardClass: "Silent" as const, cardType: "Skill" as const, mana: 1, rarity: "Rare" as const, eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false };
@@ -30,10 +32,12 @@ const first = { id: "FIRST", name: "FIRST", hasUpgrade: false, artUrl: "https://
 const secondVector = { ...base, mana: 2 };
 const second = { id: "SECOND", name: "SECOND", hasUpgrade: false, artUrl: "https://art.example/second.png", baseCardUrl: null, upgradedCardUrl: null, base: secondVector, upgraded: secondVector };
 const cards = [first, second];
+const firstBaseKey = baseKey(first.base);
+const secondBaseKey = baseKey(second.base);
 const snapshot: LoadedSnapshot = {
-  manifest: { schemaVersion: 1, sourceRevision: "revision", sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00Z", generatedAt: "2026-08-12T00:00:00Z", cardCount: 2, upgradeCount: 0, baseGroupCount: 1, pairGroupCount: 2, files: {} },
+  manifest: { schemaVersion: 1, sourceRevision: "revision", sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00Z", generatedAt: "2026-08-12T00:00:00Z", cardCount: 2, upgradeCount: 0, baseGroupCount: 2, pairGroupCount: 2, files: {} },
   cards,
-  baseGroups: [{ key: "base", cardIds: [first.id, second.id] }],
+  baseGroups: [{ key: firstBaseKey, cardIds: [first.id] }, { key: secondBaseKey, cardIds: [second.id] }],
   pairGroups: [
     { key: pairKey(first), cardIds: [first.id] },
     { key: pairKey(second), cardIds: [second.id] },
@@ -45,7 +49,7 @@ const snapshot: LoadedSnapshot = {
     [pairKey(second), { key: pairKey(second), cardIds: [second.id] }],
   ]),
 };
-const firstAnswer = { baseGroupKey: "base", selectedCardId: first.id, pairKey: pairKey(first), acceptedCardIds: [first.id] };
+const firstAnswer = { baseGroupKey: firstBaseKey, selectedCardId: first.id, pairKey: pairKey(first), acceptedCardIds: [first.id] };
 
 let uuidIndex = 0;
 const uuids = [
@@ -53,6 +57,13 @@ const uuids = [
   "123e4567-e89b-42d3-a456-426614174001",
   "123e4567-e89b-42d3-a456-426614174002",
 ] as const;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
 
 describe("useGame", () => {
   beforeEach(() => {
@@ -75,7 +86,9 @@ describe("useGame", () => {
 
   test("initializes independent deterministic Daily modes and a persisted Practice round", async () => {
     const game = renderHook(() => useGame(snapshot));
+    expect(game.result.current.status).toBe("loading");
     await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    expect(game.result.current.status).toBe("ready");
     expect(createDailyRandom).toHaveBeenCalledWith("2026-08-12", "revision", "daily");
     expect(createDailyRandom).toHaveBeenCalledWith("2026-08-12", "revision", "hardcore-daily");
     expect(game.result.current.round?.answer.selectedCardId).toBe(first.id);
@@ -99,7 +112,7 @@ describe("useGame", () => {
       hardcore: mode === "hardcore-daily",
       roundId: daily ? `${mode}:${utcDate}:revision` : `practice:${uuids[0]}`,
       hintSeed: daily ? `${mode}:${utcDate}:revision` : uuids[0],
-      answer: mode === "hardcore-daily" ? { baseGroupKey: "base", selectedCardId: second.id, pairKey: pairKey(second), acceptedCardIds: [second.id] } : firstAnswer,
+      answer: mode === "hardcore-daily" ? { baseGroupKey: secondBaseKey, selectedCardId: second.id, pairKey: pairKey(second), acceptedCardIds: [second.id] } : firstAnswer,
       guesses: [],
     });
     saveCurrentRound(localStorage, { mode, sourceRevision: "revision", ruleset, utcDate }, restored);
@@ -206,7 +219,7 @@ describe("useGame", () => {
       hardcore: true,
       roundId: "hardcore-daily:2026-08-12:revision",
       hintSeed: "hardcore-daily:2026-08-12:revision",
-      answer: { baseGroupKey: "base", selectedCardId: second.id, pairKey: pairKey(second), acceptedCardIds: [second.id] },
+      answer: { baseGroupKey: secondBaseKey, selectedCardId: second.id, pairKey: pairKey(second), acceptedCardIds: [second.id] },
       guesses: [{ cardId: second.id, results: [
         { feature: "cardClass", color: "green", displayValue: "Silent" },
         { feature: "cardType", color: "green", displayValue: "Skill" },
@@ -238,5 +251,98 @@ describe("useGame", () => {
     expect(game.result.current.round?.roundId).toBe("daily:2026-08-12:revision");
     expect(localStorage.getItem("unrelated:key")).toBe("keep");
     expect(localStorage.getItem(CURRENT_ROUND_KEYS["hardcore-daily"])).not.toBeNull();
+  });
+
+  test("StrictMode allocates one UUID only for the committed initial Practice round", async () => {
+    const firstSource = deferred<{ nextUint32(): number }>();
+    const secondSource = deferred<{ nextUint32(): number }>();
+    vi.mocked(createPracticeRandom)
+      .mockImplementationOnce(() => firstSource.promise as never)
+      .mockImplementationOnce(() => secondSource.promise as never);
+    const wrapper = ({ children }: { children: React.ReactNode }) => <StrictMode>{children}</StrictMode>;
+    renderHook(() => useGame(snapshot), { wrapper });
+    expect(crypto.randomUUID).not.toHaveBeenCalled();
+    await act(async () => firstSource.resolve({ nextUint32: () => 0 }));
+    await act(async () => secondSource.resolve({ nextUint32: () => 0 }));
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(1);
+  });
+
+  test("rapid next-Practice requests allocate one UUID only for the committed generation", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    act(() => game.result.current.setMode("practice"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
+    const initialAllocations = vi.mocked(crypto.randomUUID).mock.calls.length;
+    const staleSource = deferred<{ nextUint32(): number }>();
+    const latestSource = deferred<{ nextUint32(): number }>();
+    vi.mocked(createPracticeRandom)
+      .mockImplementationOnce(() => staleSource.promise as never)
+      .mockImplementationOnce(() => latestSource.promise as never);
+    act(() => { void game.result.current.nextPracticeRound(); void game.result.current.nextPracticeRound(); });
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(initialAllocations);
+    await act(async () => staleSource.resolve({ nextUint32: () => 0 }));
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(initialAllocations);
+    await act(async () => latestSource.resolve({ nextUint32: () => 1 }));
+    expect(crypto.randomUUID).toHaveBeenCalledTimes(initialAllocations + 1);
+    expect(game.result.current.round?.roundId).toBe(`practice:${uuids[initialAllocations]}`);
+  });
+
+  test("StrictMode reducer replay persists one transition and records one completion", async () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => <StrictMode>{children}</StrictMode>;
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const game = renderHook(() => useGame(snapshot), { wrapper });
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    setItem.mockClear();
+    act(() => game.result.current.submit(first.id));
+    await waitFor(() => expect(game.result.current.round?.status).toBe("won"));
+    expect(setItem.mock.calls.filter(([key]) => key === CURRENT_ROUND_KEYS.daily)).toHaveLength(1);
+    expect(setItem.mock.calls.filter(([key]) => key === DAILY_STATS_KEY)).toHaveLength(1);
+  });
+
+  test("resolving a mode selected while missing does not increment its switch token twice", async () => {
+    const hardcoreSource = deferred<{ nextUint32(): number }>();
+    vi.mocked(createDailyRandom).mockImplementation(async (_date, _revision, mode) => {
+      if (mode === "hardcore-daily") return hardcoreSource.promise;
+      return { nextUint32: () => 0 };
+    });
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    const dailyToken = game.result.current.roundToken;
+    act(() => game.result.current.setMode("hardcore-daily"));
+    expect(game.result.current.roundToken).toBe(dailyToken + 1);
+    await act(async () => hardcoreSource.resolve({ nextUint32: () => 1 }));
+    expect(game.result.current.round?.mode).toBe("hardcore-daily");
+    expect(game.result.current.roundToken).toBe(dailyToken + 1);
+  });
+
+  test("inactive initialization cannot clear the active mode error", async () => {
+    const dailySource = deferred<{ nextUint32(): number }>();
+    const hardcoreSource = deferred<{ nextUint32(): number }>();
+    vi.mocked(createDailyRandom).mockImplementation((_date, _revision, mode) => (
+      mode === "daily" ? dailySource.promise : hardcoreSource.promise
+    ));
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => dailySource.reject(new Error("daily failed")));
+    expect(game.result.current.error).toBe("daily failed");
+    await act(async () => hardcoreSource.resolve({ nextUint32: () => 1 }));
+    expect(game.result.current.error).toBe("daily failed");
+  });
+
+  test("switching to an inactive failed mode exposes its error and retries it", async () => {
+    let hardcoreCalls = 0;
+    vi.mocked(createDailyRandom).mockImplementation(async (_date, _revision, mode) => {
+      if (mode === "daily") return { nextUint32: () => 0 };
+      hardcoreCalls += 1;
+      if (hardcoreCalls === 1) throw new Error("hardcore failed");
+      return { nextUint32: () => 1 };
+    });
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    await waitFor(() => expect(hardcoreCalls).toBe(1));
+    act(() => game.result.current.setMode("hardcore-daily"));
+    expect(game.result.current.error).toBe("hardcore failed");
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("hardcore-daily"));
+    expect(hardcoreCalls).toBe(2);
+    expect(game.result.current.error).toBeNull();
   });
 });

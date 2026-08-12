@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { compareGuess, type FeatureResult } from "../../shared/comparison.js";
 import { FEATURE_ORDER, type CardIdentity, type PairGroup } from "../../shared/domain.js";
-import { pairKey } from "../../shared/feature-keys.js";
+import { baseKey, pairKey } from "../../shared/feature-keys.js";
 import type { SelectedAnswer } from "../../shared/selection.js";
 import type { AssistanceState, ConstraintOrbTarget } from "./assistance.js";
 import type { PlayMode, RoundState, SubmittedGuess } from "./game-reducer.js";
@@ -125,12 +125,10 @@ function validRoundIdentity(round: RoundState, identity: RoundStorageIdentity): 
   if (round.mode !== identity.mode) return false;
   if (round.mode === "daily" && round.hardcore !== false) return false;
   if (round.mode === "hardcore-daily" && round.hardcore !== true) return false;
-  if (round.mode === "practice" && round.hardcore !== true && round.hardcore !== false) return false;
   if (round.mode !== "practice") {
     const expectedId = `${round.mode}:${identity.utcDate}:${identity.sourceRevision}`;
     return round.roundId === expectedId && round.hintSeed === expectedId;
   }
-  if (round.roundId === undefined) return false;
   const match = /^practice:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.exec(round.roundId);
   return match !== null && round.hintSeed === match[1];
 }
@@ -143,6 +141,7 @@ function canonicalAnswer(
   const selected = cardsById.get(answer.selectedCardId);
   const group = pairGroupsByKey.get(answer.pairKey);
   return selected !== undefined
+    && answer.baseGroupKey === baseKey(selected.base)
     && pairKey(selected) === answer.pairKey
     && group !== undefined
     && group.key === answer.pairKey
@@ -243,7 +242,7 @@ export function loadCurrentRound(
     const guesses = canonicalGuesses(parsedRound.guesses, parsedRound.answer, cardsById);
     if (guesses === null) throw new Error("Invalid stored guesses");
     const round = { ...parsedRound, guesses, error: null };
-    if (!validStatus(round) || !validAssistance(round.assistance ?? null, round.hardcore === true, guesses)) throw new Error("Invalid stored round state");
+    if (!validStatus(round) || !validAssistance(round.assistance, round.hardcore, guesses)) throw new Error("Invalid stored round state");
     return round;
   } catch {
     removeItem(storage, key);

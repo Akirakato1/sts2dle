@@ -4,6 +4,7 @@ import React from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { SharePanel } from "../../src/client/components/SharePanel.js";
+import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 import { FEATURE_ORDER } from "../../src/shared/domain.js";
 import type { RoundState } from "../../src/client/game/game-reducer.js";
 
@@ -14,13 +15,18 @@ afterEach(() => {
 
 const round: RoundState = {
   mode: "daily",
+  hardcore: false,
+  roundId: "daily:2026-08-12:revision",
+  hintSeed: "daily:2026-08-12:revision",
   answer: { baseGroupKey: "base", selectedCardId: "answer", pairKey: "pair", acceptedCardIds: ["answer"] },
   guesses: [{
     cardId: "SECRET_GUESS_ID",
     results: FEATURE_ORDER.map((feature) => ({ feature, color: "green" as const, displayValue: "SECRET_VALUE" })),
   }],
   status: "won",
+  terminalGuessCount: 1,
   error: null,
+  assistance: createDefaultAssistance(),
 };
 
 function deferred() {

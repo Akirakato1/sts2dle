@@ -19,16 +19,15 @@ export interface SubmittedGuess {
 
 export interface RoundState {
   mode: PlayMode;
-  /** Present on every reducer-created round; optional only for legacy render-only callers. */
-  hardcore?: boolean;
-  roundId?: string;
-  hintSeed?: string;
+  hardcore: boolean;
+  roundId: string;
+  hintSeed: string;
   answer: SelectedAnswer;
   guesses: SubmittedGuess[];
   status: RoundStatus;
-  terminalGuessCount?: number | null;
+  terminalGuessCount: number | null;
   error: string | null;
-  assistance?: AssistanceState | null;
+  assistance: AssistanceState | null;
 }
 
 export type GameAction =
@@ -52,6 +51,10 @@ export function createRoundState(options: {
   terminalGuessCount?: number | null;
   assistance?: AssistanceState | null;
 }): RoundState {
+  if ((options.mode === "daily" && options.hardcore)
+    || (options.mode === "hardcore-daily" && !options.hardcore)) {
+    throw new RangeError(`Hardcore setting is inconsistent with ${options.mode} mode.`);
+  }
   const guesses = options.guesses ?? [];
   const status = options.status ?? "playing";
   return {
@@ -72,7 +75,7 @@ export function isPracticeSettingsEditable(round: RoundState): boolean {
   return round.mode === "practice"
     && round.status === "playing"
     && round.guesses.length === 0
-    && (round.assistance == null
+    && (round.assistance === null
       || (round.assistance.reveal === null
         && round.assistance.filter === null
         && round.assistance.negation === null));
@@ -114,19 +117,19 @@ export function gameReducer(state: RoundState, action: GameAction): RoundState {
       };
     }
     case "consume-reveal":
-      if (state.status !== "playing" || state.assistance == null || state.assistance.reveal !== null
+      if (state.status !== "playing" || state.assistance === null || state.assistance.reveal !== null
         || !validFeature(action.target.feature)) return state;
       return { ...state, assistance: { ...state.assistance, reveal: action.target } };
     case "consume-filter":
-      if (state.status !== "playing" || state.assistance == null || state.assistance.filter !== null
+      if (state.status !== "playing" || state.assistance === null || state.assistance.filter !== null
         || !validConstraintTarget(state, action.target, "green")) return state;
       return { ...state, assistance: { ...state.assistance, filter: action.target } };
     case "consume-negation":
-      if (state.status !== "playing" || state.assistance == null || state.assistance.negation !== null
+      if (state.status !== "playing" || state.assistance === null || state.assistance.negation !== null
         || !validConstraintTarget(state, action.target, "red")) return state;
       return { ...state, assistance: { ...state.assistance, negation: action.target } };
     case "set-candidate-visibility":
-      if (state.status !== "playing" || state.assistance == null
+      if (state.status !== "playing" || state.assistance === null
         || state.assistance.visibility[action.category] === action.visible) return state;
       return {
         ...state,

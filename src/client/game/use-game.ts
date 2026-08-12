@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import type { LoadedSnapshot } from "../api/load-snapshot.js";
 import { createDailyRandom, createPracticeRandom } from "../../shared/random.js";
@@ -37,6 +37,73 @@ export interface UseGameResult {
   nextPracticeRound(): void;
 }
 
+interface LegacyNextRound {
+  nextRound(): void;
+}
+
+export type UseGameState =
+  | (UseGameResult & LegacyNextRound & { status: "ready" })
+  | (Omit<UseGameResult, "round"> & LegacyNextRound & { status: "loading"; round: null });
+
+interface HookState {
+  activeMode: PlayMode;
+  rounds: ReadonlyMap<PlayMode, RoundState>;
+  errors: Readonly<Record<PlayMode, string | null>>;
+  roundToken: number;
+  practiceHardcoreChoice: boolean;
+}
+
+type HookAction =
+  | { type: "switch-mode"; mode: PlayMode }
+  | { type: "round-ready"; mode: PlayMode; round: RoundState }
+  | { type: "round-failed"; mode: PlayMode; error: string }
+  | { type: "transition"; mode: PlayMode; previous: RoundState; round: RoundState }
+  | { type: "set-practice-choice"; hardcore: boolean };
+
+const INITIAL_ERRORS: Readonly<Record<PlayMode, string | null>> = {
+  daily: null,
+  "hardcore-daily": null,
+  practice: null,
+};
+
+function hookReducer(state: HookState, action: HookAction): HookState {
+  switch (action.type) {
+    case "switch-mode":
+      if (action.mode === state.activeMode) return state;
+      return { ...state, activeMode: action.mode, roundToken: state.roundToken + 1 };
+    case "round-ready": {
+      const previous = state.rounds.get(action.mode);
+      if (previous === action.round && state.errors[action.mode] === null) return state;
+      const rounds = new Map(state.rounds).set(action.mode, action.round);
+      const errors = { ...state.errors, [action.mode]: null };
+      const replacesActiveRound = action.mode === state.activeMode
+        && previous !== undefined
+        && previous.roundId !== action.round.roundId;
+      const completesInitialLoad = action.mode === state.activeMode
+        && previous === undefined
+        && state.roundToken === 0;
+      return {
+        ...state,
+        rounds,
+        errors,
+        roundToken: state.roundToken + (replacesActiveRound || completesInitialLoad ? 1 : 0),
+        practiceHardcoreChoice: action.mode === "practice" && previous === undefined
+          ? action.round.hardcore
+          : state.practiceHardcoreChoice,
+      };
+    }
+    case "round-failed":
+      if (state.errors[action.mode] === action.error) return state;
+      return { ...state, errors: { ...state.errors, [action.mode]: action.error } };
+    case "transition":
+      if (state.rounds.get(action.mode) !== action.previous || action.previous === action.round) return state;
+      return { ...state, rounds: new Map(state.rounds).set(action.mode, action.round) };
+    case "set-practice-choice":
+      if (state.practiceHardcoreChoice === action.hardcore) return state;
+      return { ...state, practiceHardcoreChoice: action.hardcore };
+  }
+}
+
 function utcDate(now = new Date()): string { return now.toISOString().slice(0, 10); }
 
 function browserStorage(): Storage | null {
@@ -56,15 +123,29 @@ function identityFor(mode: PlayMode, sourceRevision: string, date: string): Roun
   };
 }
 
-export function useGame(snapshot: LoadedSnapshot) {
-  const [rounds, setRounds] = useState(() => new Map<PlayMode, RoundState>());
-  const [activeMode, setActiveMode] = useState<PlayMode>("daily");
-  const [roundToken, setRoundToken] = useState(0);
+function errorMessage(caught: unknown): string {
+  return caught instanceof Error ? caught.message : "Unable to start a round.";
+}
+
+export function useGame(snapshot: LoadedSnapshot): UseGameState {
+  const [state, reactDispatch] = useReducer(hookReducer, {
+    activeMode: "daily",
+    rounds: new Map<PlayMode, RoundState>(),
+    errors: INITIAL_ERRORS,
+    roundToken: 0,
+    practiceHardcoreChoice: false,
+  });
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const dispatch = useCallback((action: HookAction) => {
+    stateRef.current = hookReducer(stateRef.current, action);
+    reactDispatch(action);
+  }, []);
   const [activeUtcDate, setActiveUtcDate] = useState(() => utcDate());
-  const [error, setError] = useState<string | null>(null);
-  const [practiceHardcoreChoice, setPracticeHardcoreChoiceState] = useState(false);
-  const activeModeRef = useRef<PlayMode>("daily");
   const generations = useRef<Record<PlayMode, number>>({ daily: 0, "hardcore-daily": 0, practice: 0 });
+  const pending = useRef<Record<PlayMode, boolean>>({ daily: false, "hardcore-daily": false, practice: false });
+  const persistedRounds = useRef(new Map<PlayMode, RoundState>());
+  const recordedCompletions = useRef(new Set<string>());
   const groups = useMemo(() => ({
     baseGroups: snapshot.baseGroups,
     pairGroups: snapshot.pairGroups,
@@ -74,86 +155,83 @@ export function useGame(snapshot: LoadedSnapshot) {
   const storage = browserStorage();
   const revision = snapshot.manifest.sourceRevision;
 
-  const storeRound = useCallback((round: RoundState, date: string) => {
-    if (!storage) return;
-    saveCurrentRound(storage, identityFor(round.mode, revision, date), round);
-  }, [revision, storage]);
-
   const startDaily = useCallback(async (mode: "daily" | "hardcore-daily", date: string) => {
     const generation = ++generations.current[mode];
+    pending.current[mode] = true;
     try {
-      const answer = selectAnswer(groups, snapshot.cardsById, await createDailyRandom(date, revision, mode));
+      const source = await createDailyRandom(date, revision, mode);
+      const answer = selectAnswer(groups, snapshot.cardsById, source);
       if (generation !== generations.current[mode]) return;
       const identity = identityFor(mode, revision, date);
       const restored = storage
         ? loadCurrentRound(storage, identity, snapshot.cardsById, snapshot.pairGroupsByKey, answer)
         : null;
       const roundId = `${mode}:${date}:${revision}`;
-      const next = restored ?? createRoundState({
+      dispatch({
+        type: "round-ready",
         mode,
-        hardcore: mode === "hardcore-daily",
-        roundId,
-        hintSeed: roundId,
-        answer,
+        round: restored ?? createRoundState({
+          mode,
+          hardcore: mode === "hardcore-daily",
+          roundId,
+          hintSeed: roundId,
+          answer,
+        }),
       });
-      setRounds((current) => {
-        const previous = current.get(mode);
-        if (previous?.roundId === next.roundId && previous === next) return current;
-        const updated = new Map(current);
-        updated.set(mode, next);
-        if (activeModeRef.current === mode && previous?.roundId !== next.roundId) setRoundToken((value) => value + 1);
-        return updated;
-      });
-      storeRound(next, date);
-      if (storage && next.status === "won") {
-        recordDailyCompletion(storage, date, mode === "daily" ? DAILY_STATS_KEY : HARDCORE_DAILY_STATS_KEY);
-      }
-      if (activeModeRef.current === mode) void preloadAnswerImages(next.answer, snapshot.cardsById);
-      setError(null);
     } catch (caught) {
-      if (generation === generations.current[mode] && activeModeRef.current === mode) {
-        setError(caught instanceof Error ? caught.message : "Unable to start a round.");
-      }
+      if (generation === generations.current[mode]) dispatch({ type: "round-failed", mode, error: errorMessage(caught) });
+    } finally {
+      if (generation === generations.current[mode]) pending.current[mode] = false;
     }
-  }, [groups, revision, snapshot.cardsById, snapshot.pairGroupsByKey, storage, storeRound]);
+  }, [dispatch, groups, revision, snapshot.cardsById, snapshot.pairGroupsByKey, storage]);
 
-  const startInitialPractice = useCallback(async () => {
+  const startPractice = useCallback(async (forceNew: boolean, hardcore: boolean) => {
     const mode = "practice" as const;
     const generation = ++generations.current.practice;
-    const identity = identityFor(mode, revision, "");
+    pending.current.practice = true;
     try {
-      const restored = storage
-        ? loadCurrentRound(storage, identity, snapshot.cardsById, snapshot.pairGroupsByKey)
-        : null;
-      let next = restored;
-      if (!next) {
-        const uuid = crypto.randomUUID();
-        const answer = selectAnswer(groups, snapshot.cardsById, await Promise.resolve(createPracticeRandom()));
-        next = createRoundState({
+      if (!forceNew && storage) {
+        const restored = loadCurrentRound(
+          storage,
+          identityFor(mode, revision, ""),
+          snapshot.cardsById,
+          snapshot.pairGroupsByKey,
+        );
+        if (restored) {
+          if (generation === generations.current.practice) dispatch({ type: "round-ready", mode, round: restored });
+          return;
+        }
+      }
+      const source = await Promise.resolve(createPracticeRandom());
+      const answer = selectAnswer(groups, snapshot.cardsById, source);
+      if (generation !== generations.current.practice) return;
+      const uuid = crypto.randomUUID();
+      dispatch({
+        type: "round-ready",
+        mode,
+        round: createRoundState({
           mode,
-          hardcore: false,
+          hardcore,
           roundId: `practice:${uuid}`,
           hintSeed: uuid,
           answer,
-        });
-      }
-      if (generation !== generations.current.practice) return;
-      setRounds((current) => new Map(current).set(mode, next));
-      setPracticeHardcoreChoiceState(next.hardcore === true);
-      storeRound(next, "");
-      if (activeModeRef.current === mode) void preloadAnswerImages(next.answer, snapshot.cardsById);
+        }),
+      });
     } catch (caught) {
-      if (generation === generations.current.practice && activeModeRef.current === mode) {
-        setError(caught instanceof Error ? caught.message : "Unable to start a round.");
-      }
+      if (generation === generations.current.practice) dispatch({ type: "round-failed", mode, error: errorMessage(caught) });
+    } finally {
+      if (generation === generations.current.practice) pending.current.practice = false;
     }
-  }, [groups, revision, snapshot.cardsById, snapshot.pairGroupsByKey, storage, storeRound]);
+  }, [dispatch, groups, revision, snapshot.cardsById, snapshot.pairGroupsByKey, storage]);
 
   useEffect(() => {
     if (storage) removeLegacyCurrentRoundKeys(storage);
-    void startInitialPractice();
-    return () => { generations.current.practice += 1; };
-  }, [startInitialPractice, storage]);
+    void startPractice(false, false);
+    return () => {
+      generations.current.practice += 1;
+      pending.current.practice = false;
+    };
+  }, [startPractice, storage]);
 
   useEffect(() => {
     void startDaily("daily", activeUtcDate);
@@ -161,8 +239,34 @@ export function useGame(snapshot: LoadedSnapshot) {
     return () => {
       generations.current.daily += 1;
       generations.current["hardcore-daily"] += 1;
+      pending.current.daily = false;
+      pending.current["hardcore-daily"] = false;
     };
   }, [activeUtcDate, startDaily]);
+
+  useEffect(() => {
+    if (!storage) return;
+    for (const mode of ["daily", "hardcore-daily", "practice"] as const) {
+      const round = state.rounds.get(mode);
+      if (!round || persistedRounds.current.get(mode) === round) continue;
+      saveCurrentRound(storage, identityFor(mode, revision, activeUtcDate), round);
+      persistedRounds.current.set(mode, round);
+      if (mode === "practice" || round.status !== "won") continue;
+      const completionKey = `${mode}:${round.roundId}`;
+      if (recordedCompletions.current.has(completionKey)) continue;
+      recordDailyCompletion(
+        storage,
+        round.roundId.split(":")[1] ?? activeUtcDate,
+        mode === "daily" ? DAILY_STATS_KEY : HARDCORE_DAILY_STATS_KEY,
+      );
+      recordedCompletions.current.add(completionKey);
+    }
+  }, [activeUtcDate, revision, state.rounds, storage]);
+
+  const activeRound = state.rounds.get(state.activeMode) ?? null;
+  useEffect(() => {
+    if (activeRound) void preloadAnswerImages(activeRound.answer, snapshot.cardsById);
+  }, [activeRound, snapshot.cardsById]);
 
   useEffect(() => {
     let disposed = false;
@@ -199,77 +303,45 @@ export function useGame(snapshot: LoadedSnapshot) {
   }, []);
 
   const applyToActive = useCallback((action: GameAction) => {
-    const mode = activeModeRef.current;
-    setRounds((current) => {
-      const previous = current.get(mode);
-      if (!previous) return current;
-      const next = gameReducer(previous, action);
-      if (next === previous) return current;
-      const updated = new Map(current).set(mode, next);
-      storeRound(next, activeUtcDate);
-      if (previous.status === "playing" && next.status === "won" && storage && mode !== "practice") {
-        recordDailyCompletion(storage, activeUtcDate, mode === "daily" ? DAILY_STATS_KEY : HARDCORE_DAILY_STATS_KEY);
-      }
-      return updated;
-    });
-  }, [activeUtcDate, storage, storeRound]);
+    const current = stateRef.current;
+    const previous = current.rounds.get(current.activeMode);
+    if (!previous) return;
+    const round = gameReducer(previous, action);
+    if (round !== previous) dispatch({ type: "transition", mode: current.activeMode, previous, round });
+  }, [dispatch]);
 
   const submit = useCallback((cardId: string) => {
     applyToActive({ type: "submit", cardId, cardsById: snapshot.cardsById });
   }, [applyToActive, snapshot.cardsById]);
 
   const setMode = useCallback((mode: PlayMode) => {
-    if (mode === activeModeRef.current) return;
-    activeModeRef.current = mode;
-    setActiveMode(mode);
-    setRoundToken((value) => value + 1);
-    const selected = rounds.get(mode);
-    if (selected) void preloadAnswerImages(selected.answer, snapshot.cardsById);
-  }, [rounds, snapshot.cardsById]);
+    const before = stateRef.current;
+    dispatch({ type: "switch-mode", mode });
+    if (before.rounds.has(mode) && before.errors[mode] === null) return;
+    if (pending.current[mode] && before.errors[mode] === null) return;
+    if (mode === "practice") void startPractice(false, before.practiceHardcoreChoice);
+    else void startDaily(mode, activeUtcDate);
+  }, [activeUtcDate, dispatch, startDaily, startPractice]);
 
   const setPracticeHardcoreChoice = useCallback((hardcore: boolean) => {
-    setPracticeHardcoreChoiceState(hardcore);
-    setRounds((current) => {
-      const previous = current.get("practice");
-      if (!previous) return current;
-      const next = gameReducer(previous, { type: "set-practice-hardcore", hardcore });
-      if (next === previous) return current;
-      storeRound(next, activeUtcDate);
-      return new Map(current).set("practice", next);
-    });
-  }, [activeUtcDate, storeRound]);
+    const current = stateRef.current;
+    dispatch({ type: "set-practice-choice", hardcore });
+    const previous = current.rounds.get("practice");
+    if (!previous) return;
+    const round = gameReducer(previous, { type: "set-practice-hardcore", hardcore });
+    if (round !== previous) dispatch({ type: "transition", mode: "practice", previous, round });
+  }, [dispatch]);
 
-  const nextPracticeRound = useCallback(async () => {
-    if (activeModeRef.current !== "practice") return;
-    const generation = ++generations.current.practice;
-    try {
-      const uuid = crypto.randomUUID();
-      const answer = selectAnswer(groups, snapshot.cardsById, await Promise.resolve(createPracticeRandom()));
-      if (generation !== generations.current.practice) return;
-      const next = createRoundState({
-        mode: "practice",
-        hardcore: practiceHardcoreChoice,
-        roundId: `practice:${uuid}`,
-        hintSeed: uuid,
-        answer,
-      });
-      setRounds((current) => new Map(current).set("practice", next));
-      storeRound(next, activeUtcDate);
-      setRoundToken((value) => value + 1);
-      setError(null);
-      void preloadAnswerImages(next.answer, snapshot.cardsById);
-    } catch (caught) {
-      if (generation === generations.current.practice) setError(caught instanceof Error ? caught.message : "Unable to start a round.");
-    }
-  }, [activeUtcDate, groups, practiceHardcoreChoice, snapshot.cardsById, storeRound]);
+  const nextPracticeRound = useCallback(() => {
+    if (stateRef.current.activeMode !== "practice") return;
+    return startPractice(true, stateRef.current.practiceHardcoreChoice);
+  }, [startPractice]);
 
-  const round = rounds.get(activeMode) ?? null;
-  return {
-    round,
-    roundToken,
+  const controls = {
+    roundToken: state.roundToken,
     dailyUtcDate: activeUtcDate,
-    error,
-    practiceHardcoreChoice,
+    error: state.errors[state.activeMode],
+    practiceHardcoreChoice: state.practiceHardcoreChoice,
     submit,
     setMode,
     consumeReveal: (target: RevealOrbTarget) => applyToActive({ type: "consume-reveal", target }),
@@ -281,4 +353,7 @@ export function useGame(snapshot: LoadedSnapshot) {
     nextPracticeRound,
     nextRound: nextPracticeRound,
   };
+  return activeRound
+    ? { ...controls, status: "ready", round: activeRound }
+    : { ...controls, status: "loading", round: null };
 }

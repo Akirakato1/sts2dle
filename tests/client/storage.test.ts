@@ -20,7 +20,7 @@ import {
 } from "../../src/client/game/storage.js";
 import { compareGuess } from "../../src/shared/comparison.js";
 import type { CardIdentity, FeatureVector, PairGroup } from "../../src/shared/domain.js";
-import { pairKey } from "../../src/shared/feature-keys.js";
+import { baseKey, pairKey } from "../../src/shared/feature-keys.js";
 
 class MemoryStorage implements Storage {
   readonly values = new Map<string, string>();
@@ -50,7 +50,7 @@ const guessCard = card("GUESS", { ...base, cardClass: "Ironclad", cardType: "Att
 const laterGuessCard = card("LATER", { ...base, cardClass: "Defect", cardType: "Power", mana: 3, rarity: "Uncommon", ethereal: true });
 const cardsById = new Map([answerCard, equivalentCard, guessCard, laterGuessCard].map((value) => [value.id, value]));
 const answer = {
-  baseGroupKey: "base-key",
+  baseGroupKey: baseKey(answerCard.base),
   selectedCardId: answerCard.id,
   pairKey: pairKey(answerCard),
   acceptedCardIds: [answerCard.id, equivalentCard.id],
@@ -156,6 +156,16 @@ describe("current round storage", () => {
     assertRejected("daily", (value) => { value.round.answer.pairKey = "wrong"; });
     assertRejected("daily", (value) => { value.round.answer.acceptedCardIds = [answerCard.id]; });
     assertRejected("daily", (value) => { value.round.answer.extra = true; });
+  });
+
+  test("rejects a tampered Practice base-group key without an expected answer", () => {
+    const storage = new MemoryStorage();
+    saveCurrentRound(storage, identities.practice, round("practice"));
+    const value = stored(storage, "practice");
+    value.round.answer.baseGroupKey = "tampered-base-group";
+    storage.setItem(CURRENT_ROUND_KEYS.practice, JSON.stringify(value));
+    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey)).toBeNull();
+    expect(storage.getItem(CURRENT_ROUND_KEYS.practice)).toBeNull();
   });
 
   test("rejects tampered canonical results, duplicate guesses, and post-win guesses", () => {
