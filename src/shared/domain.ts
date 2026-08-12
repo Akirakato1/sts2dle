@@ -1,7 +1,7 @@
 export const FEATURE_ORDER = [
   "cardClass", "cardType", "mana", "rarity",
   "eternal", "ethereal", "exhaust", "innate",
-  "retain", "sly", "unplayable",
+  "retain", "sly",
 ] as const;
 
 export type FeatureName = (typeof FEATURE_ORDER)[number];
@@ -10,7 +10,7 @@ export type CardClass =
   | "Regent" | "Neutral" | "Event";
 export type CardType = "Attack" | "Skill" | "Power" | "Quest" | "Status" | "Curse";
 export type CardRarity = "Common" | "Uncommon" | "Rare" | "None";
-export type ManaValue = number | "X" | "–";
+export type ManaValue = number | "X" | "None";
 
 export interface FeatureVector {
   cardClass: CardClass;
@@ -23,7 +23,6 @@ export interface FeatureVector {
   innate: boolean;
   retain: boolean;
   sly: boolean;
-  unplayable: boolean;
 }
 
 export interface CardIdentity {

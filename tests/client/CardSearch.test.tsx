@@ -20,7 +20,6 @@ function card(id: string, name: string, cardClass: CardClass = "Silent", duplica
     innate: false,
     retain: false,
     sly: false,
-    unplayable: false,
   };
   return {
     id,

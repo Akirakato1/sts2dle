@@ -18,7 +18,7 @@ import { preloadAnswerImages } from "../../src/client/game/preload-images.js";
 import { DAILY_STATS_KEY, dailyStorageKey } from "../../src/client/game/storage.js";
 import type { LoadedSnapshot } from "../../src/client/api/load-snapshot.js";
 
-const base = { cardClass: "Silent" as const, cardType: "Skill" as const, mana: 1, rarity: "Rare" as const, eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false, unplayable: false };
+const base = { cardClass: "Silent" as const, cardType: "Skill" as const, mana: 1, rarity: "Rare" as const, eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false };
 const cards = ["FIRST", "SECOND"].map((id) => ({ id, name: id, hasUpgrade: false, artUrl: "https://art.example/card.png", baseCardUrl: null, upgradedCardUrl: null, base, upgraded: base }));
 const snapshot: LoadedSnapshot = {
   manifest: { schemaVersion: 1, sourceRevision: "revision", sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00Z", generatedAt: "2026-08-12T00:00:00Z", cardCount: 2, upgradeCount: 0, baseGroupCount: 1, pairGroupCount: 1, files: {} },

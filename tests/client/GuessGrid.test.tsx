@@ -18,7 +18,7 @@ afterEach(() => {
 const features = {
   cardClass: "Ironclad", cardType: "Attack", mana: 2, rarity: "Common",
   eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false, unplayable: false,
+  retain: false, sly: false,
 } as const;
 
 const cards: CardIdentity[] = [
@@ -37,7 +37,6 @@ const results: FeatureResult[] = [
   { feature: "innate", color: "green", displayValue: "false", hint: "none" },
   { feature: "retain", color: "green", displayValue: "false", hint: "none" },
   { feature: "sly", color: "green", displayValue: "false", hint: "none" },
-  { feature: "unplayable", color: "green", displayValue: "false", hint: "none" },
 ];
 
 const guesses: SubmittedGuess[] = [
@@ -66,21 +65,21 @@ function dispatchTransitionEnd(target: Element, propertyName: string): void {
 }
 
 describe("GuessGrid", () => {
-  test("renders a sticky artwork column followed by exactly the eleven canonical feature columns", () => {
+  test("renders a sticky artwork column followed by exactly the ten canonical feature columns", () => {
     render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} />);
 
     const headers = screen.getAllByRole("columnheader");
-    expect(headers).toHaveLength(12);
+    expect(headers).toHaveLength(11);
     expect(headers.slice(1).map((header) => header.getAttribute("data-feature"))).toEqual([
       "cardClass", "cardType", "mana", "rarity", "eternal", "ethereal",
-      "exhaust", "innate", "retain", "sly", "unplayable",
+      "exhaust", "innate", "retain", "sly",
     ]);
     expect(headers.slice(1).map((header) => header.getAttribute("data-feature"))).toEqual([...FEATURE_ORDER]);
     expect(screen.queryByText(/version/i)).not.toBeInTheDocument();
 
     const guessRow = screen.getAllByRole("row")[1]!;
     expect(within(guessRow).getAllByRole("rowheader")).toHaveLength(1);
-    expect(within(guessRow).getAllByRole("cell")).toHaveLength(11);
+    expect(within(guessRow).getAllByRole("cell")).toHaveLength(10);
   });
 
   test("keeps the earliest guess above later guesses and displays 160px source art at 80px", () => {
@@ -98,10 +97,10 @@ describe("GuessGrid", () => {
     const { container } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
 
     const tiles = screen.getAllByRole("cell");
-    expect(tiles.map((tile) => tile.style.getPropertyValue("--reveal-index"))).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
-    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[9]!, "transform");
+    expect(tiles.map((tile) => tile.style.getPropertyValue("--reveal-index"))).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[8]!, "transform");
     expect(onRevealComplete).not.toHaveBeenCalled();
-    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[10]!, "transform");
+    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[9]!, "transform");
     expect(onRevealComplete).toHaveBeenCalledOnce();
     act(() => vi.advanceTimersByTime(10_000));
     expect(onRevealComplete).toHaveBeenCalledOnce();
@@ -109,7 +108,7 @@ describe("GuessGrid", () => {
 
   test("renders restored guesses in their final state without replaying animation", () => {
     render(<GuessGrid guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={guesses.length} />);
-    expect(screen.getAllByRole("cell")).toHaveLength(22);
+    expect(screen.getAllByRole("cell")).toHaveLength(20);
     expect(screen.getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
   });
 
@@ -138,7 +137,7 @@ describe("GuessGrid", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
     const view = render(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
-    const firstSurface = view.container.querySelectorAll(".feature-tile__surface")[10]!;
+    const firstSurface = view.container.querySelectorAll(".feature-tile__surface")[9]!;
     dispatchTransitionEnd(firstSurface, "transform");
     dispatchTransitionEnd(firstSurface, "transform");
     expect(onRevealComplete).toHaveBeenCalledOnce();
@@ -146,7 +145,7 @@ describe("GuessGrid", () => {
     view.rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} /></StrictMode>);
     expect(onRevealComplete).toHaveBeenCalledOnce();
     view.rerender(<StrictMode><GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
-    const secondSurface = view.container.querySelectorAll(".feature-tile__surface")[10]!;
+    const secondSurface = view.container.querySelectorAll(".feature-tile__surface")[9]!;
     dispatchTransitionEnd(secondSurface, "transform");
     dispatchTransitionEnd(secondSurface, "transform");
     expect(onRevealComplete).toHaveBeenCalledTimes(2);
@@ -171,7 +170,7 @@ describe("GuessGrid", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
     const { container } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
-    const finalSurface = container.querySelectorAll(".feature-tile__surface")[10]!;
+    const finalSurface = container.querySelectorAll(".feature-tile__surface")[9]!;
 
     dispatchTransitionEnd(finalSurface.querySelector(".feature-tile__back")!, "transform");
     expect(onRevealComplete).not.toHaveBeenCalled();
@@ -184,7 +183,7 @@ describe("GuessGrid", () => {
     const onRevealComplete = vi.fn();
     const { container } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
 
-    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[10]!, "opacity");
+    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[9]!, "opacity");
     expect(onRevealComplete).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(revealFallbackMs));
     expect(onRevealComplete).toHaveBeenCalledOnce();
@@ -194,7 +193,7 @@ describe("GuessGrid", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
     const { container } = render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
-    const finalSurface = container.querySelectorAll(".feature-tile__surface")[10]!;
+    const finalSurface = container.querySelectorAll(".feature-tile__surface")[9]!;
 
     act(() => vi.advanceTimersByTime(20));
     dispatchTransitionEnd(finalSurface, "transform");

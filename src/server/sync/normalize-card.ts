@@ -28,14 +28,14 @@ const OFFICIAL_ARTWORK_CDN_ORIGIN = "https://cdn.spire-codex.com";
 
 const KEYWORDS = [
   "eternal", "ethereal", "exhaust", "innate",
-  "retain", "sly", "unplayable",
+  "retain", "sly",
 ] as const;
 
 type Keyword = (typeof KEYWORDS)[number];
 
 function normalizeMana(cost: number | null, isX: boolean | null | undefined): ManaValue {
   if (isX || cost === -1) return "X";
-  if (!Number.isInteger(cost) || cost === null || cost < 0) return "–";
+  if (!Number.isInteger(cost) || cost === null || cost < 0) return "None";
   return cost;
 }
 
@@ -75,7 +75,6 @@ function buildFeatures(raw: RawSpireCard, mana: ManaValue): FeatureVector {
     innate: flags.innate,
     retain: flags.retain,
     sly: flags.sly,
-    unplayable: flags.unplayable,
   };
 }
 

@@ -13,10 +13,10 @@ const canonicalTimestampSchema = z.string().refine(isCanonicalIsoTimestamp);
 const featureVectorSchema = z.object({
   cardClass: z.enum(["Ironclad", "Silent", "Defect", "Necrobinder", "Regent", "Neutral", "Event"]),
   cardType: z.enum(["Attack", "Skill", "Power", "Quest", "Status", "Curse"]),
-  mana: z.union([z.number(), z.literal("X"), z.literal("\u2013")]),
+  mana: z.union([z.number(), z.literal("X"), z.literal("None")]),
   rarity: z.enum(["Common", "Uncommon", "Rare", "None"]),
-  eternal: z.boolean(), ethereal: z.boolean(), exhaust: z.boolean(), innate: z.boolean(), retain: z.boolean(), sly: z.boolean(), unplayable: z.boolean(),
-});
+  eternal: z.boolean(), ethereal: z.boolean(), exhaust: z.boolean(), innate: z.boolean(), retain: z.boolean(), sly: z.boolean(),
+}).strict();
 
 export const cardIdentitySchema = z.object({
   id: z.string(), name: z.string(), duplicateName: z.boolean().optional(), hasUpgrade: z.boolean(), artUrl: z.string(),

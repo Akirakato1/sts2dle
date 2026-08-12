@@ -32,7 +32,6 @@ function card(id: string): CardIdentity {
     innate: false,
     retain: false,
     sly: false,
-    unplayable: false,
   } as const;
   return {
     id,

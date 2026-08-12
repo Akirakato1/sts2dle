@@ -7,7 +7,7 @@ import { selectAnswer } from "../../src/shared/selection.js";
 const base: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
   eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false, unplayable: false,
+  retain: false, sly: false,
 };
 function card(id: string, changes: Partial<FeatureVector>): CardIdentity {
   const identity = { ...base, ...changes };

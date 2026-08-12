@@ -6,7 +6,7 @@ import { buildGroups } from "../../src/shared/groups.js";
 const base: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
   eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false, unplayable: false,
+  retain: false, sly: false,
 };
 
 function card(id: string, overrides: Partial<CardIdentity> = {}): CardIdentity {
@@ -19,7 +19,7 @@ function card(id: string, overrides: Partial<CardIdentity> = {}): CardIdentity {
 describe("feature keys and groups", () => {
   it("serializes feature vectors in canonical order rather than object property order", () => {
     const reordered = {
-      unplayable: false, sly: false, retain: false, innate: false, exhaust: false,
+      sly: false, retain: false, innate: false, exhaust: false,
       ethereal: false, eternal: false, rarity: "Common" as const, mana: 1,
       cardType: "Attack" as const, cardClass: "Ironclad" as const,
     };

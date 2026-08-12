@@ -19,7 +19,6 @@ const features = {
   innate: false,
   retain: false,
   sly: false,
-  unplayable: false,
 };
 
 function card(id: string, name: string, hasUpgrade = true): CardIdentity {

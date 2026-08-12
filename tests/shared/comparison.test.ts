@@ -5,7 +5,7 @@ import { compareFeature, compareGuess } from "../../src/shared/comparison.js";
 const vector: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
   eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false, unplayable: false,
+  retain: false, sly: false,
 };
 function card(id: string, baseChanges: Partial<FeatureVector> = {}, upgradeChanges: Partial<FeatureVector> = {}): CardIdentity {
   return {
@@ -54,6 +54,6 @@ describe("paired feature comparison", () => {
   });
 
   it("returns one ordered result for every feature", () => {
-    expect(compareGuess(card("guess"), answer)).toHaveLength(11);
+    expect(compareGuess(card("guess"), answer)).toHaveLength(10);
   });
 });

@@ -34,7 +34,6 @@ const base = {
   innate: false,
   retain: false,
   sly: false,
-  unplayable: false,
 };
 
 function card(id: string, vector: FeatureVector = base): CardIdentity {

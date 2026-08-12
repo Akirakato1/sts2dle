@@ -7,8 +7,8 @@ import { gameReducer, type RoundState } from "../../src/client/game/game-reducer
 function card(id: string, mana: number): CardIdentity {
   return {
     id, name: id, hasUpgrade: true, artUrl: "https://art.example/card.png", baseCardUrl: null, upgradedCardUrl: null,
-    base: { cardClass: "Silent", cardType: "Skill", mana, rarity: "Rare", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false, unplayable: false },
-    upgraded: { cardClass: "Silent", cardType: "Skill", mana: mana - 1, rarity: "Rare", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false, unplayable: false },
+    base: { cardClass: "Silent", cardType: "Skill", mana, rarity: "Rare", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false },
+    upgraded: { cardClass: "Silent", cardType: "Skill", mana: mana - 1, rarity: "Rare", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false },
   };
 }
 
@@ -20,7 +20,7 @@ const round: RoundState = { mode: "daily", answer: { baseGroupKey: "base", selec
 describe("gameReducer", () => {
   test("records comparison results for a valid card without ending the round", () => {
     const next = gameReducer(round, { type: "submit", card: guess, answerCard: answer });
-    expect(next.guesses[0]?.results).toHaveLength(11);
+    expect(next.guesses[0]?.results).toHaveLength(10);
     expect(next.status).toBe("playing");
   });
 

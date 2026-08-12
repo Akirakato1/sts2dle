@@ -5,8 +5,8 @@ import { loadSnapshot } from "../../src/client/api/load-snapshot.js";
 const card = {
   id: "ALCHEMIZE", name: "Alchemize", hasUpgrade: true, artUrl: "https://art.example/a.png",
   baseCardUrl: "https://cards.example/a.png", upgradedCardUrl: "https://cards.example/a-plus.png",
-  base: { cardClass: "Silent", cardType: "Skill", mana: 1, rarity: "Rare", eternal: false, ethereal: false, exhaust: true, innate: false, retain: false, sly: false, unplayable: false },
-  upgraded: { cardClass: "Silent", cardType: "Skill", mana: 0, rarity: "Rare", eternal: false, ethereal: false, exhaust: true, innate: false, retain: false, sly: false, unplayable: false },
+  base: { cardClass: "Silent", cardType: "Skill", mana: 1, rarity: "Rare", eternal: false, ethereal: false, exhaust: true, innate: false, retain: false, sly: false },
+  upgraded: { cardClass: "Silent", cardType: "Skill", mana: 0, rarity: "Rare", eternal: false, ethereal: false, exhaust: true, innate: false, retain: false, sly: false },
 };
 
 const REVISION = "ab".repeat(32);
@@ -34,21 +34,35 @@ describe("loadSnapshot", () => {
     expect(snapshot.pairGroupsByKey.get("pair")?.cardIds).toContain("ALCHEMIZE");
   });
 
-  test("accepts the canonical en dash mana value emitted for unplayable cards", async () => {
-    const dashCard = {
+  test("accepts None as the unavailable mana value", async () => {
+    const noCostCard = {
       ...card,
-      base: { ...card.base, mana: "\u2013" },
-      upgraded: { ...card.upgraded, mana: "\u2013" },
+      base: { ...card.base, mana: "None" },
+      upgraded: { ...card.upgraded, mana: "None" },
     };
     const snapshot = await loadSnapshot(jsonFetch({
       "/runtime/manifest.json": manifest,
-      "/runtime/cards.json": [dashCard],
+      "/runtime/cards.json": [noCostCard],
       "/runtime/base-groups.json": baseGroups,
       "/runtime/pair-groups.json": pairGroups,
       "/runtime/sprite-map.json": spriteMap,
     }));
 
-    expect(snapshot.cards[0]?.base.mana).toBe("\u2013");
+    expect(snapshot.cards[0]?.base.mana).toBe("None");
+  });
+
+  test.each([
+    ["unplayable feature", { ...card.base, unplayable: true }],
+    ["en dash mana", { ...card.base, mana: "\u2013" }],
+  ])("rejects a feature vector with %s", async (_label, base) => {
+    const invalidCard = { ...card, base, upgraded: base };
+    await expect(loadSnapshot(jsonFetch({
+      "/runtime/manifest.json": manifest,
+      "/runtime/cards.json": [invalidCard],
+      "/runtime/base-groups.json": baseGroups,
+      "/runtime/pair-groups.json": pairGroups,
+      "/runtime/sprite-map.json": spriteMap,
+    }))).rejects.toThrow("/runtime/cards.json");
   });
 
   test("includes a failed runtime URL in a non-success response error", async () => {
