@@ -20,8 +20,13 @@ describe("GameGuide", () => {
     expect(disclosure).not.toHaveAttribute("open");
     fireEvent.click(screen.getByText("How to play"));
     expect(disclosure).toHaveAttribute("open");
-    expect(disclosure).toHaveTextContent(/multiple cards may be accepted/i);
-    expect(disclosure).toHaveTextContent(/UTC/i);
-    expect(disclosure).toHaveTextContent(/Practice/i);
+    expect(disclosure).toHaveTextContent(/Guess a base card name/i);
+    expect(disclosure).toHaveTextContent(/base-to-base/i);
+    expect(disclosure).toHaveTextContent(/upgraded-to-upgraded/i);
+    expect(disclosure).toHaveTextContent(/X.*keyword absent/i);
+    expect(disclosure).toHaveTextContent(/checkmark.*keyword present/i);
+    expect(disclosure).toHaveTextContent(/identical complete paired feature sets.*equivalent answers/i);
+    expect(disclosure).toHaveTextContent(/UTC date.*restores your progress.*share result after a win/i);
+    expect(disclosure).toHaveTextContent(/Practice.*unlimited random rounds.*no share result/i);
   });
 });

@@ -16,9 +16,11 @@ export function GameGuide() {
     </ul>
     <details className="game-rules">
       <summary>How to play</summary>
-      <p>Each guess compares its base card and upgrade together. Match every trait to find today&apos;s card.</p>
-      <p>Multiple cards may be accepted when they share the same base card.</p>
-      <p>Daily puzzles use the UTC date. Practice lets you play a random card anytime.</p>
+      <p>Guess a base card name. Each guess compares the guessed base to the answer base and the guessed upgraded card to the answer upgraded card: base-to-base and upgraded-to-upgraded.</p>
+      <p>An X means keyword absent; a checkmark means keyword present.</p>
+      <p>Cards with identical complete paired feature sets are accepted as equivalent answers.</p>
+      <p>Daily uses the UTC date, restores your progress, and produces a share result after a win.</p>
+      <p>Practice provides unlimited random rounds and no share result.</p>
     </details>
   </section>;
 }
