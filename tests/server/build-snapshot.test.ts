@@ -5,6 +5,7 @@ import { join } from "node:path";
 import sharp from "sharp";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import fixture from "../fixtures/spire-cards.json";
+import { FEATURE_ORDER, type CardIdentity } from "../../src/shared/domain.js";
 import { buildSnapshot, writeStableJson } from "../../src/server/sync/build-snapshot.js";
 import { SnapshotStore } from "../../src/server/sync/snapshot-store.js";
 import type { RawSpireCard } from "../../src/server/spire-codex/schema.js";
@@ -277,18 +278,20 @@ describe("buildSnapshot", () => {
       ["MAD_SCIENCE", true],
     ]);
 
-    const cards = JSON.parse(await readFile(join(activated.path, "cards.json"), "utf8")) as Array<{
-      id: string;
-      baseCardUrl: string;
-      upgradedCardUrl: string | null;
-    }>;
+    const cards = JSON.parse(
+      await readFile(join(activated.path, "cards.json"), "utf8"),
+    ) as CardIdentity[];
     expect(cards.map(({ id }) => id)).toEqual([...cards.map(({ id }) => id)].sort());
     const madScienceDigest = createHash("sha256").update("MAD_SCIENCE", "utf8").digest("hex");
     expect(cards.find(({ id }) => id === "MAD_SCIENCE")).toMatchObject({
       baseCardUrl: `/runtime/fallback/${madScienceDigest}.webp`,
       upgradedCardUrl: `/runtime/fallback/${madScienceDigest}_upg.webp`,
     });
-    expect(cards.find(({ id }) => id === "DAZED")).toBeDefined();
+    const dazed = cards.find(({ id }) => id === "DAZED");
+    expect(dazed).toBeDefined();
+    expect(Object.keys(dazed!.base)).toHaveLength(10);
+    expect(Object.keys(dazed!.base)).toEqual([...FEATURE_ORDER].sort());
+    expect(dazed!.base).not.toHaveProperty("unplayable");
     const spriteMap = JSON.parse(await readFile(join(activated.path, "sprite-map.json"), "utf8")) as {
       cards: Record<string, { candidate: unknown; guess: unknown }>;
     };

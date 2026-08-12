@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 
+import type { CardIdentity } from "../../../src/shared/domain.js";
+import { baseKey, pairKey } from "../../../src/shared/feature-keys.js";
 import { RawSpireCardsSchema, type RawSpireCard } from "../../../src/server/spire-codex/schema.js";
 import { buildSnapshot } from "../../../src/server/sync/build-snapshot.js";
 import { SnapshotStore } from "../../../src/server/sync/snapshot-store.js";
@@ -23,7 +25,7 @@ function withE2eUpgrade(card: RawSpireCard): RawSpireCard {
 }
 
 function pairedCopy(card: RawSpireCard): RawSpireCard {
-  return {
+  const copy = {
     ...structuredClone(card),
     id: `${card.id}_PAIR`,
     name: `${card.name} Pair`,
@@ -31,6 +33,12 @@ function pairedCopy(card: RawSpireCard): RawSpireCard {
     image_url_card: `${FULL_CARD_ORIGIN}/${card.id.toLowerCase()}_pair.webp`,
     image_url_card_upg: `${FULL_CARD_ORIGIN}/${card.id.toLowerCase()}_pair_upg.webp`,
   };
+  if (card.id === "DAZED") {
+    copy.keywords_key = copy.keywords_key?.filter(
+      (keyword) => keyword.toLowerCase() !== "unplayable",
+    ) ?? [];
+  }
+  return copy;
 }
 
 async function main(): Promise<void> {
@@ -92,6 +100,18 @@ async function main(): Promise<void> {
       allowedFullCardOrigins: [FULL_CARD_ORIGIN],
       now: () => new Date(FIXED_TIME),
     });
+    const builtCards = JSON.parse(
+      await readFile(resolve(built.path, "cards.json"), "utf8"),
+    ) as CardIdentity[];
+    const dazed = builtCards.find((card) => card.id === "DAZED");
+    const dazedPair = builtCards.find((card) => card.id === "DAZED_PAIR");
+    if (!dazed || !dazedPair) throw new Error("Dazed E2E pair was not retained");
+    if (baseKey(dazed.base) !== baseKey(dazedPair.base)) {
+      throw new Error("Raw Unplayable state changed the generated base feature key");
+    }
+    if (pairKey(dazed) !== pairKey(dazedPair)) {
+      throw new Error("Raw Unplayable state changed the generated pair feature key");
+    }
     await pruneSupersededFixtureSnapshots(lockedDataDir, built, {
       allowedArtworkOrigins: [ART_ORIGIN],
       allowedFullCardOrigins: [FULL_CARD_ORIGIN],

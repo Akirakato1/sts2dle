@@ -1,6 +1,6 @@
 # STS-dle
 
-STS-dle is an unofficial Slay the Spire 2 card-deduction game. Daily and Practice rounds compare the base and upgraded forms of every card across eleven traits.
+STS-dle is an unofficial Slay the Spire 2 card-deduction game. Daily and Practice rounds compare the base and upgraded forms of every card across ten traits.
 
 ## Prerequisites and installation
 

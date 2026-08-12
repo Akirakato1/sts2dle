@@ -62,7 +62,9 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
   const answerCard = cardsById.get(answer.selectedCardId)!;
   const wrongGuess = cards.find((card) => !answer.acceptedCardIds.includes(card.id)
     && compareGuess(card, answerCard).some((result) => result.color === "yellow")
-    && compareGuess(card, answerCard).some((result) => result.feature === "mana" && result.color !== "green"));
+    && compareGuess(card, answerCard).some(
+      (result) => result.feature === "mana" && result.color !== "green",
+    ));
   if (!wrongGuess) throw new Error("Fixture does not contain a yellow-plus-mana mismatch");
   return { cards, answer, wrongGuess };
 }
@@ -111,9 +113,12 @@ test("Daily and Practice complete the full paired-card experience without leakin
     .find((card) => card.baseCardUrl?.startsWith("https://cdn.test/"))!;
   const fullCardFailure = { allow: false, url: retryCard.baseCardUrl! };
   const codexGuard = await prepareOfflinePage(page, fullCardFailure);
-  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:3000" });
 
   await page.goto("/");
+  await context.grantPermissions(
+    ["clipboard-read", "clipboard-write"],
+    { origin: new URL(page.url()).origin },
+  );
   const attribution = page.getByRole("contentinfo");
   await expect(attribution.getByRole("link", { name: "Spire Codex" })).toHaveAttribute(
     "href",
@@ -142,15 +147,23 @@ test("Daily and Practice complete the full paired-card experience without leakin
 
   await chooseCard(page, model.wrongGuess.name);
   const wrongRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(model.wrongGuess.name) }) });
-  await expect(wrongRow.getByRole("cell")).toHaveCount(11);
+  await expect(wrongRow.getByRole("cell")).toHaveCount(10);
+  const guessArtworkBox = await wrongRow.getByRole("img", {
+    name: `${model.wrongGuess.name} guess artwork`,
+  }).boundingBox();
+  expect(guessArtworkBox).toMatchObject({ width: 72, height: 72 });
   await expect(wrongRow.getByRole("cell", { name: /Result: yellow/ }).first()).toBeVisible();
-  await expect(wrongRow.getByRole("cell", { name: /Mana: .*Direction: (up|down|dash|both)/ })).toBeVisible();
+  await expect(wrongRow.getByRole("cell", { name: /Mana: .*Result: (red|yellow)\./ })).toBeVisible();
+  await expect(wrongRow).not.toContainText(/Direction:/);
+  await expect(wrongRow.locator(".feature-tile__result-mark, .feature-tile__hint")).toHaveCount(0);
   await expect(search).toBeEnabled({ timeout: 5_000 });
 
   await page.reload();
   const restoredRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(model.wrongGuess.name) }) });
-  await expect(restoredRow.getByRole("cell")).toHaveCount(11);
-  await expect(restoredRow.locator(".feature-tile--immediate")).toHaveCount(11);
+  await expect(restoredRow.getByRole("cell")).toHaveCount(10);
+  await expect(restoredRow.locator(".feature-tile--immediate")).toHaveCount(10);
+  await expect(restoredRow).not.toContainText(/Direction:/);
+  await expect(restoredRow.locator(".feature-tile__result-mark, .feature-tile__hint")).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled();
 
   const equivalentId = model.answer.acceptedCardIds.find((id) => id !== model.answer.selectedCardId)!;
@@ -196,11 +209,24 @@ test("Daily and Practice complete the full paired-card experience without leakin
   expect(shareText).toContain("STS-dle");
   expect(shareText).toContain(FIXED_UTC_DATE);
   for (const card of model.cards) expect(shareText).not.toContain(card.name);
+  const shareRows = shareText.split(/\r?\n/).filter((line) => /^[🟩🟨🟥]+$/u.test(line));
+  expect(shareRows).toHaveLength(2);
+  for (const row of shareRows) expect([...row]).toHaveLength(10);
   const dailyStorage = await page.evaluate(() => Object.fromEntries(Object.entries(localStorage)
     .filter(([key]) => key.startsWith("stsdle:daily:") || key === "stsdle:stats:v1")));
 
   await page.getByRole("button", { name: "Practice" }).click();
   const firstPair = (await request.get("/runtime/pair-groups.json").then((response) => response.json() as Promise<PairGroup[]>))[0]!;
+  const rawUnplayable = model.cards.find((card) => card.id === "DAZED")!;
+  expect(firstPair.cardIds).not.toContain(rawUnplayable.id);
+  await search.fill(rawUnplayable.name);
+  const rawUnplayableOption = page.getByRole("option", {
+    name: new RegExp(`^${rawUnplayable.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} artwork ${rawUnplayable.name}`),
+  });
+  await expect(rawUnplayableOption).toBeVisible();
+  await rawUnplayableOption.click();
+  await expect(page.getByRole("rowheader", { name: rawUnplayable.name })).toBeVisible();
+  await expect(search).toBeEnabled({ timeout: 5_000 });
   const practiceCard = model.cards.find((card) => card.id === firstPair.cardIds[1])!;
   await chooseCard(page, practiceCard.name);
   await expect(page.getByRole("button", { name: "Next random card" })).toBeVisible({ timeout: 5_000 });
@@ -216,9 +242,9 @@ test("Daily and Practice complete the full paired-card experience without leakin
 });
 
 for (const viewport of [
-  { width: 390, height: 844 },
-  { width: 768, height: 1024 },
-  { width: 1440, height: 900 },
+  { width: 390, height: 844, scrollerOverflows: true },
+  { width: 768, height: 1024, scrollerOverflows: true },
+  { width: 1440, height: 900, scrollerOverflows: false },
 ]) {
   test(`keeps ${viewport.width}x${viewport.height} page contained while the guess grid owns overflow`, async ({ page }) => {
     const codexGuard = await prepareOfflinePage(page);
@@ -236,7 +262,11 @@ for (const viewport of [
       };
     });
     expect(dimensions.pageScrollWidth).toBeLessThanOrEqual(dimensions.pageClientWidth);
-    expect(dimensions.scrollerScrollWidth).toBeGreaterThan(dimensions.scrollerClientWidth);
+    if (viewport.scrollerOverflows) {
+      expect(dimensions.scrollerScrollWidth).toBeGreaterThan(dimensions.scrollerClientWidth);
+    } else {
+      expect(dimensions.scrollerScrollWidth).toBeLessThanOrEqual(dimensions.scrollerClientWidth);
+    }
     expect(codexGuard.attemptedRequests).toEqual([]);
     expect(codexGuard.blockedRequests).toEqual([]);
   });
