@@ -34,7 +34,7 @@ const KEYWORDS = [
 type Keyword = (typeof KEYWORDS)[number];
 
 function normalizeMana(cost: number | null, isX: boolean | null | undefined): ManaValue {
-  if (isX || cost === -1) return "X";
+  if (isX) return "X";
   if (!Number.isInteger(cost) || cost === null || cost < 0) return "None";
   return cost;
 }

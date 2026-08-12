@@ -61,7 +61,19 @@ describe("buildRendererConfig", () => {
   });
 
   it("uses the card renderer's no-cost token instead of the UI mana label", () => {
-    expect(buildRendererConfig(card("DAZED"), false).cost).toBe("–");
+    const raw = structuredClone(card("DAZED"));
+    raw.cost = -1;
+    raw.is_x_cost = null;
+
+    expect(buildRendererConfig(raw, false).cost).toBe("\u2013");
+  });
+
+  it("uses X for a true X-cost card even when its numeric cost is zero", () => {
+    const raw = structuredClone(card("MALAISE"));
+    raw.cost = 0;
+    raw.is_x_cost = true;
+
+    expect(buildRendererConfig(raw, false).cost).toBe("X");
   });
 
   it("uses Mad Science's canonical Attack and Event variant", () => {

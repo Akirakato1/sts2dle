@@ -40,7 +40,7 @@ function effectiveRawKeyword(raw: RawSpireCard, keyword: RendererKeyword, upgrad
 function rendererCost(raw: RawSpireCard, upgraded: boolean): string {
   const upgradedCost = raw.upgrade?.cost;
   const cost = upgraded && typeof upgradedCost === "number" ? upgradedCost : raw.cost;
-  if (raw.is_x_cost || cost === -1) return "X";
+  if (raw.is_x_cost) return "X";
   if (!Number.isInteger(cost) || cost === null || cost < 0) return "–";
   return String(cost);
 }

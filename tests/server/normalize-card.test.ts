@@ -44,8 +44,12 @@ describe("normalizeCard", () => {
     expect(normalizeCard(card("ALCHEMIZE"), BASE_URL).upgraded.mana).toBe(0);
   });
 
-  it("maps an absent cost to None", () => {
-    expect(normalizeCard(card("DAZED"), BASE_URL).base.mana).toBe("None");
+  it("maps cost -1 without the X-cost flag to None", () => {
+    const raw = structuredClone(card("DAZED"));
+    raw.cost = -1;
+    raw.is_x_cost = null;
+
+    expect(normalizeCard(raw, BASE_URL).base.mana).toBe("None");
   });
 
   it("maps status cards to the neutral class", () => {
@@ -59,8 +63,12 @@ describe("normalizeCard", () => {
     expect(normalized.upgradedCardUrl).toBeNull();
   });
 
-  it("normalizes X-cost cards", () => {
-    expect(normalizeCard(card("MALAISE"), BASE_URL).base.mana).toBe("X");
+  it("uses the X-cost flag even when the numeric cost is zero", () => {
+    const raw = structuredClone(card("MALAISE"));
+    raw.cost = 0;
+    raw.is_x_cost = true;
+
+    expect(normalizeCard(raw, BASE_URL).base.mana).toBe("X");
   });
 
   it("does not include unplayable in the normalized feature vector", () => {
