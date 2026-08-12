@@ -227,18 +227,26 @@ describe("UTC rollover", () => {
 });
 
 describe("global Daily streak storage", () => {
-  test("keeps v1 stats while deleting an incompatible v2 round before restoring or recording streaks", () => {
+  test("removes the matching legacy v2 round while restoring v3 and preserving v1 stats", () => {
     const storage = new MemoryStorage();
-    const key = dailyStorageKey(identity);
-    storage.setItem(key, JSON.stringify({ version: 2, answer: round.answer, guesses: round.guesses, status: round.status }));
+    const currentKey = dailyStorageKey(identity);
+    const legacyKey = dailyStorageKey({ ...identity, ruleset: "v2" });
+    const siblingKey = dailyStorageKey({ ...identity, utcDate: "2026-08-11", ruleset: "v2" });
+    saveDailyRound(storage, identity, round);
+    storage.setItem(legacyKey, JSON.stringify({ version: 2, answer: round.answer, guesses: round.guesses, status: round.status }));
+    storage.setItem(siblingKey, "keep sibling");
+    storage.setItem("unrelated", "keep unrelated");
     storage.setItem(DAILY_STATS_KEY, JSON.stringify({
       lastCompletedUtcDate: "2026-08-11",
       currentStreak: 2,
       maxStreak: 4,
     }));
 
-    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toBeNull();
-    expect(storage.getItem(key)).toBeNull();
+    expect(loadDailyRound(storage, identity, cardsById, round.answer)).toEqual({ ...round, error: null });
+    expect(storage.getItem(currentKey)).not.toBeNull();
+    expect(storage.getItem(legacyKey)).toBeNull();
+    expect(storage.getItem(siblingKey)).toBe("keep sibling");
+    expect(storage.getItem("unrelated")).toBe("keep unrelated");
     expect(loadDailyStats(storage)).toEqual({
       lastCompletedUtcDate: "2026-08-11",
       currentStreak: 2,

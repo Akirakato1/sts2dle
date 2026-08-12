@@ -161,6 +161,9 @@ export function loadDailyRound(
   cardsById: ReadonlyMap<string, CardIdentity>,
   expectedAnswer?: SelectedAnswer,
 ): RoundState | null {
+  if (identity.ruleset === DAILY_RULESET_VERSION) {
+    removeItem(storage, dailyStorageKey({ ...identity, ruleset: "v2" }));
+  }
   const key = dailyStorageKey(identity);
   let raw: string | null;
   try { raw = storage.getItem(key); } catch { return null; }
