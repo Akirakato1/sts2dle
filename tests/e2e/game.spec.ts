@@ -21,6 +21,12 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 const FIXED_NOW = new Date("2026-08-12T12:00:00.000Z");
 const FIXED_UTC_DATE = FIXED_NOW.toISOString().slice(0, 10);
+const APP_ROOT = "http://127.0.0.1:3000/";
+const PRACTICE_ROUND_IDS = [
+  "practice:00000000-0000-4000-8000-000000000001",
+  "practice:00000000-0000-4000-8000-000000000002",
+  "practice:00000000-0000-4000-8000-000000000003",
+] as const;
 const FEATURE_LABELS: Readonly<Record<FeatureName, string>> = {
   cardClass: "Class",
   cardType: "Type",
@@ -273,6 +279,36 @@ async function expectPoof(page: Page, orb: "reveal" | "filter" | "negation"): Pr
   return poof;
 }
 
+async function expectAnimatedPoof(page: Page, orb: "reveal" | "filter" | "negation"): Promise<Locator> {
+  const poof = await expectPoof(page, orb);
+  await expect.poll(async () => poof.evaluate((element) => {
+    const effects = [...element.querySelectorAll<HTMLElement>(".orb-poof__burst, .orb-poof__particle")];
+    const positiveDuration = (value: string) => value.split(",").some((duration) => {
+      const parsed = Number.parseFloat(duration);
+      return parsed > 0;
+    });
+    return {
+      hasAnimatedEffect: effects.some((effect) => {
+        const style = getComputedStyle(effect);
+        return style.animationName !== "none" && positiveDuration(style.animationDuration);
+      }),
+      hasRunningAnimation: element.getAnimations({ subtree: true })
+        .some((animation) => animation.playState === "running"),
+      hasVisibleEffect: effects.some((effect) => {
+        const style = getComputedStyle(effect);
+        const rect = effect.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0"
+          && rect.width > 0 && rect.height > 0;
+      }),
+    };
+  }), { intervals: [0, 10, 20], timeout: 350 }).toEqual({
+    hasAnimatedEffect: true,
+    hasRunningAnimation: true,
+    hasVisibleEffect: true,
+  });
+  return poof;
+}
+
 function hintRandom(seed: string): () => number {
   let state = 0x811c9dc5;
   for (const byte of new TextEncoder().encode(seed)) {
@@ -335,14 +371,26 @@ async function storedRound(page: Page, key: string): Promise<{
   }, key);
 }
 
-function expectNoCardSecrets(shareText: string, model: FixtureModel): void {
-  for (const card of model.cards) {
-    expect(shareText).not.toContain(card.name);
-    expect(shareText).not.toContain(card.id);
+function expectNoCardSecrets(
+  shareText: string,
+  model: FixtureModel,
+  additionalSecrets: readonly string[] = [],
+): void {
+  const normalizedShare = shareText.toLocaleLowerCase("en-US");
+  const answerSecrets = [model.dailyAnswer, model.hardcoreAnswer, model.practiceAnswer]
+    .flatMap((answer) => [answer.selectedCardId, answer.pairKey, answer.baseGroupKey]);
+  const secrets = [
+    ...model.cards.flatMap((card) => [card.name, card.id]),
+    ...answerSecrets,
+    ...additionalSecrets,
+    "Answer:",
+    "Card name hint:",
+    "blank",
+  ];
+  for (const secret of new Set(secrets.filter((value) => value.length > 0))) {
+    expect(normalizedShare, `share must not contain secret ${JSON.stringify(secret)}`)
+      .not.toContain(secret.toLocaleLowerCase("en-US"));
   }
-  expect(shareText).not.toContain("Answer:");
-  expect(shareText).not.toContain("Card name hint:");
-  expect(shareText).not.toContain("blank");
 }
 
 function expectedShareRow(guess: CardIdentity, answer: CardIdentity): string {
@@ -375,6 +423,16 @@ async function prepareOfflinePage(
       value: (values: Uint32Array) => {
         values.fill(0);
         return values;
+      },
+    });
+    Object.defineProperty(window.crypto, "randomUUID", {
+      configurable: true,
+      value: () => {
+        const counterKey = "stsdle:e2e:practice-uuid-counter";
+        const previous = Number.parseInt(sessionStorage.getItem(counterKey) ?? "0", 10);
+        const next = Number.isSafeInteger(previous) && previous >= 0 ? previous + 1 : 1;
+        sessionStorage.setItem(counterKey, String(next));
+        return `00000000-0000-4000-8000-${next.toString(16).padStart(12, "0")}`;
       },
     });
   }, FIXED_NOW.valueOf());
@@ -455,7 +513,7 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
   const revealFeature: FeatureName = "mana";
   const revealHeader = page.locator(`.guess-grid__header[data-feature="${revealFeature}"]`);
   await dragOrbTo(page, "Reveal", revealHeader);
-  await expectPoof(page, "reveal");
+  await expectAnimatedPoof(page, "reveal");
   await expect(page.getByRole("status")).toContainText(`Reveal Orb showed ${FEATURE_LABELS[revealFeature]}.`);
   await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
   await expect(page.getByLabel("Reveal Orb, used")).toBeVisible();
@@ -472,7 +530,7 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
   });
   await greenTarget.focus();
   await greenTarget.press("Enter");
-  await expectPoof(page, "filter");
+  await expectAnimatedPoof(page, "filter");
   await expect(page.getByRole("status")).toContainText(`Filter Orb now marks candidates matching ${FEATURE_LABELS[greenFeature]}.`);
   await expect(row.getByRole("img", { name: "Filter Orb used here" })).toBeVisible();
   await expect(page.getByLabel("Filter Orb, used")).toBeVisible();
@@ -484,7 +542,7 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
     name: `${FEATURE_LABELS[redFeature]} red result tile. Use Negation Orb.`,
   });
   await redTarget.click();
-  await expectPoof(page, "negation");
+  await expectAnimatedPoof(page, "negation");
   await expect(page.getByRole("status")).toContainText(`Negation Orb now marks candidates excluded by ${FEATURE_LABELS[redFeature]}.`);
   await expect(row.getByRole("img", { name: "Negation Orb used here" })).toBeVisible();
   await expect(page.getByLabel("Negation Orb, used")).toBeVisible();
@@ -508,12 +566,17 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
   await greenToggle.check();
   await redToggle.uncheck();
   await expect(cardOption(page, dualCandidate)).toHaveCount(0);
+  await redToggle.check();
+  await submitGuessAndWait(page, dualCandidate);
+  await expect(guessRow(page, dualCandidate)).toBeVisible();
+  await expect(search).toBeEnabled();
+  await redToggle.uncheck();
   await neutralToggle.uncheck();
 
   await expect.poll(async () => (await storedRound(page, "stsdle:round:daily:v1")).round.assistance?.visibility)
     .toEqual({ neutral: false, green: true, red: false });
   const beforeReload = await storedRound(page, "stsdle:round:daily:v1");
-  expect(beforeReload.round.guesses.map(({ cardId }) => cardId)).toEqual([guess.id]);
+  expect(beforeReload.round.guesses.map(({ cardId }) => cardId)).toEqual([guess.id, dualCandidate.id]);
   expect(beforeReload.round.assistance).toMatchObject({
     reveal: { feature: revealFeature },
     filter: { guessIndex: 0, cardId: guess.id, feature: greenFeature },
@@ -528,6 +591,7 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
   await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
   await expect(guessRow(page, guess).getByRole("img", { name: "Filter Orb used here" })).toBeVisible();
   await expect(guessRow(page, guess).getByRole("img", { name: "Negation Orb used here" })).toBeVisible();
+  await expect(guessRow(page, dualCandidate)).toBeVisible();
   await expect(neutralToggle).not.toBeChecked();
   await expect(greenToggle).toBeChecked();
   await expect(redToggle).not.toBeChecked();
@@ -539,13 +603,23 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
   await expect(page.getByRole("region", { name: "Daily result" }).getByRole("status"))
     .toContainText("Daily result copied");
   const shareText = await page.evaluate(() => navigator.clipboard.readText());
-  expect(shareText.split(/\r?\n/)[0]).toBe(`STS-dle ${FIXED_UTC_DATE} 2/∞`);
-  expect(shareText.split(/\r?\n/).find((line) => line.startsWith("Orbs:"))).toBe("Orbs: ⚫ ⚫ ⚫");
-  for (const target of [revealFeature, greenFeature, redFeature]) {
-    expect(shareText).not.toContain(target);
-    expect(shareText).not.toContain(FEATURE_LABELS[target]);
-  }
-  expectNoCardSecrets(shareText, model);
+  const shareLines = shareText.split(/\r?\n/);
+  const submittedCards = [guess, dualCandidate, model.dailyEquivalent];
+  const expectedLines = [
+    `STS-dle ${FIXED_UTC_DATE} ${submittedCards.length}/\u221e`,
+    ...submittedCards.map((card) => expectedShareRow(card, answerCard)),
+    "Orbs: \u26ab \u26ab \u26ab",
+    APP_ROOT,
+  ];
+  expect(shareLines).toEqual(expectedLines);
+  expectNoCardSecrets(shareText, model, [
+    revealFeature,
+    greenFeature,
+    redFeature,
+    FEATURE_LABELS[revealFeature],
+    FEATURE_LABELS[greenFeature],
+    FEATURE_LABELS[redFeature],
+  ]);
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
 });
@@ -647,8 +721,15 @@ test("Hardcore Daily keeps a separate answer, progress domain, and secret-free s
   await expect(page.getByRole("region", { name: "Hardcore Daily result" }).getByRole("status"))
     .toContainText("Hardcore Daily result copied");
   const shareText = await page.evaluate(() => navigator.clipboard.readText());
-  expect(shareText.split(/\r?\n/)[0]).toBe(`STS-dle Hardcore ${FIXED_UTC_DATE} 9/∞`);
-  expect(shareText).not.toContain("Orbs:");
+  const answerCard = model.cards.find((card) => card.id === model.hardcoreAnswer.selectedCardId)!;
+  const submittedCards = [...model.hardcoreWrongGuesses.slice(0, 8), model.hardcoreEquivalent];
+  const shareLines = shareText.split(/\r?\n/);
+  const expectedLines = [
+    `STS-dle Hardcore ${FIXED_UTC_DATE} ${submittedCards.length}/\u221e`,
+    ...submittedCards.map((card) => expectedShareRow(card, answerCard)),
+    APP_ROOT,
+  ];
+  expect(shareLines).toEqual(expectedLines);
   expectNoCardSecrets(shareText, model);
 
   await page.getByRole("button", { name: "Daily", exact: true }).click();
@@ -666,6 +747,7 @@ test("Practice locks its setting after a guess or orb, restores the round, and r
   await page.goto("/");
   await page.getByRole("button", { name: "Practice" }).click();
   await expect(page.getByRole("button", { name: "Practice" })).toHaveAttribute("aria-current", "page");
+  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(PRACTICE_ROUND_IDS[0]);
   const hardcoreToggle = page.getByRole("checkbox", { name: "Hardcore Practice" });
   await expect(hardcoreToggle).toBeEnabled();
   await expect(hardcoreToggle).not.toBeChecked();
@@ -688,6 +770,7 @@ test("Practice locks its setting after a guess or orb, restores the round, and r
   await expect(hardcoreToggle).not.toBeChecked();
   await expect(page.getByRole("region", { name: "Orb inventory" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled();
+  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(PRACTICE_ROUND_IDS[1]);
 
   const revealButton = page.getByRole("button", { name: "Reveal Orb, available" });
   await revealButton.click();
@@ -698,6 +781,7 @@ test("Practice locks its setting after a guess or orb, restores the round, and r
   await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
   await expect(hardcoreToggle).toBeDisabled();
   const persistedRound = await storedRound(page, "stsdle:round:practice:v1");
+  expect(persistedRound.round.roundId).toBe(PRACTICE_ROUND_IDS[1]);
 
   await page.reload();
   await page.getByRole("button", { name: "Practice" }).click();
@@ -706,15 +790,16 @@ test("Practice locks its setting after a guess or orb, restores the round, and r
   await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
   await expect(hardcoreToggle).toBeDisabled();
   expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId)
-    .toBe(persistedRound.round.roundId);
+    .toBe(PRACTICE_ROUND_IDS[1]);
 
   await page.getByRole("button", { name: "End game" }).click();
   await page.getByRole("button", { name: "New Practice Round" }).click();
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled();
   await expect(page.getByRole("rowheader")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reveal Orb, available" })).toBeVisible();
-  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId)
-    .not.toBe(persistedRound.round.roundId);
+  const replacementRoundId = (await storedRound(page, "stsdle:round:practice:v1")).round.roundId;
+  expect(replacementRoundId).toBe(PRACTICE_ROUND_IDS[2]);
+  expect(replacementRoundId).not.toBe(persistedRound.round.roundId);
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
 });
