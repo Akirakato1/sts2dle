@@ -85,6 +85,37 @@ describe("App snapshot cleanup", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  test("keeps loading visible while sprite readiness is pending", async () => {
+    let resolve!: (value: typeof searchSnapshot) => void;
+    loads.mockImplementation(() => new Promise<typeof searchSnapshot>((resolveLoad) => { resolve = resolveLoad; }));
+
+    render(<App />);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading card data");
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    resolve(searchSnapshot);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Preparing today's card"));
+  });
+
+  test("shows the existing retry panel when sprite readiness fails", async () => {
+    loads.mockRejectedValue(new Error("Unable to prepare card artwork"));
+
+    render(<App />);
+    const panel = await screen.findByRole("alert");
+    expect(panel).toHaveTextContent("We couldn't load the current card set.");
+    expect(panel).toHaveTextContent("Unable to prepare card artwork");
+    expect(panel).toHaveTextContent("Try again");
+  });
+
+  test("starts a fresh sprite readiness load when retrying", async () => {
+    loads.mockRejectedValueOnce(new Error("Unable to prepare card artwork"));
+    loads.mockImplementationOnce(() => new Promise(() => undefined));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(loads).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("status")).toHaveTextContent("Loading card data");
+  });
+
   test("wires base-card candidates to game submission and excludes prior guesses", async () => {
     const submit = vi.fn();
     loads.mockResolvedValue(searchSnapshot);

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { loadSnapshot } from "../../src/client/api/load-snapshot.js";
+import { loadSnapshot as sourceLoadSnapshot, type SpriteAtlasPreloader } from "../../src/client/api/load-snapshot.js";
 
 const card = {
   id: "ALCHEMIZE", name: "Alchemize", hasUpgrade: true, artUrl: "https://art.example/a.png",
@@ -14,6 +14,15 @@ const manifest = { schemaVersion: 1, sourceRevision: REVISION, sourceLastModifie
 const baseGroups = [{ key: "base", cardIds: ["ALCHEMIZE"] }];
 const pairGroups = [{ key: "pair", cardIds: ["ALCHEMIZE"] }];
 const spriteMap = { candidate: { url: "/candidate.png", width: 1, height: 1, displayScale: 1 }, guess: { url: "/guess.png", width: 1, height: 1, displayScale: 1 }, cards: { ALCHEMIZE: { candidate: { x: 0, y: 0, width: 1, height: 1 }, guess: { x: 0, y: 0, width: 1, height: 1 } } } };
+const noPreload: SpriteAtlasPreloader = async (): Promise<void> => undefined;
+
+function loadSnapshot(fetchImpl: typeof fetch, signal?: AbortSignal) {
+  return sourceLoadSnapshot(fetchImpl, signal, noPreload);
+}
+
+function loadSnapshotWithPreloader(fetchImpl: typeof fetch, signal: AbortSignal | undefined, preloader: SpriteAtlasPreloader) {
+  return sourceLoadSnapshot(fetchImpl, signal, preloader);
+}
 
 function jsonFetch(values: Record<string, unknown>): typeof fetch {
   return (async (input: string | URL | Request) => {
@@ -165,5 +174,48 @@ describe("loadSnapshot", () => {
     controller.abort();
     await expect(loading).rejects.toThrow("/runtime/manifest.json");
     await expect(loading).rejects.not.toThrow("secret abort detail");
+  });
+
+  test("awaits validated sprite readiness with the original signal", async () => {
+    let release!: () => void;
+    const readiness = new Promise<void>((resolve) => { release = resolve; });
+    const calls: Array<{ map: Parameters<SpriteAtlasPreloader>[0]; signal: AbortSignal | undefined }> = [];
+    const controller = new AbortController();
+    const preloader: SpriteAtlasPreloader = (map, signal): Promise<void> => {
+      calls.push({ map, signal });
+      return readiness;
+    };
+    const loading = loadSnapshotWithPreloader(jsonFetch({
+      "/runtime/manifest.json": manifest,
+      "/runtime/cards.json": [card],
+      "/runtime/base-groups.json": baseGroups,
+      "/runtime/pair-groups.json": pairGroups,
+      "/runtime/sprite-map.json": spriteMap,
+    }), controller.signal, preloader);
+
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls).toEqual([{ map: spriteMap, signal: controller.signal }]);
+    let settled = false;
+    void loading.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release();
+    await expect(loading).resolves.toMatchObject({ spriteMap });
+  });
+
+  test("does not preload when JSON, schema, or references are invalid", async () => {
+    const preloader = async (): Promise<void> => { throw new Error("preload must not run"); };
+    const invalidJson = (async (input: string | URL | Request) => new Response(
+      String(input).endsWith("cards.json") ? "{" : JSON.stringify(String(input).endsWith("manifest.json") ? manifest : String(input).endsWith("base-groups.json") ? baseGroups : String(input).endsWith("pair-groups.json") ? pairGroups : spriteMap),
+      { status: 200 },
+    )) as typeof fetch;
+    await expect(loadSnapshotWithPreloader(invalidJson, undefined, preloader)).rejects.toThrow("/runtime/cards.json");
+    await expect(loadSnapshotWithPreloader(jsonFetch({
+      "/runtime/manifest.json": manifest,
+      "/runtime/cards.json": [card],
+      "/runtime/base-groups.json": [{ key: "base", cardIds: ["MISSING"] }],
+      "/runtime/pair-groups.json": pairGroups,
+      "/runtime/sprite-map.json": spriteMap,
+    }), undefined, preloader)).rejects.toThrow("MISSING");
   });
 });

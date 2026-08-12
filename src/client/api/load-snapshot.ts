@@ -1,5 +1,6 @@
 import type { BaseGroup, CardIdentity, PairGroup, SnapshotManifest, SpriteMap } from "../../shared/domain.js";
 import { cardIdentitySchema, groupSchema, snapshotManifestSchema, spriteMapSchema } from "../../shared/snapshot-schema.js";
+import { preloadSpriteAtlases } from "./preload-sprite-atlases.js";
 
 export interface LoadedSnapshot {
   manifest: SnapshotManifest;
@@ -10,6 +11,8 @@ export interface LoadedSnapshot {
   cardsById: Map<string, CardIdentity>;
   pairGroupsByKey: Map<string, PairGroup>;
 }
+
+export type SpriteAtlasPreloader = (spriteMap: SpriteMap, signal?: AbortSignal) => Promise<void>;
 
 const runtimeUrls = ["/runtime/manifest.json", "/runtime/cards.json", "/runtime/base-groups.json", "/runtime/pair-groups.json", "/runtime/sprite-map.json"] as const;
 
@@ -38,7 +41,11 @@ function toCardIdentity(value: ReturnType<typeof cardIdentitySchema.parse>): Car
 
 function parseRuntime<T>(url: string, parse: () => T): T { try { return parse(); } catch { throw new Error(`Invalid snapshot data at ${url}`); } }
 
-export async function loadSnapshot(fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<LoadedSnapshot> {
+export async function loadSnapshot(
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+  preloadImpl: SpriteAtlasPreloader = preloadSpriteAtlases,
+): Promise<LoadedSnapshot> {
   const [manifestValue, cardsValue, baseGroupsValue, pairGroupsValue, spriteMapValue] = await Promise.all(runtimeUrls.map((url) => getJson(fetchImpl, url, signal)));
   const manifest = parseRuntime("/runtime/manifest.json", () => snapshotManifestSchema.parse(manifestValue));
   const cards = parseRuntime("/runtime/cards.json", () => cardIdentitySchema.array().parse(cardsValue).map(toCardIdentity));
@@ -55,5 +62,6 @@ export async function loadSnapshot(fetchImpl: typeof fetch = fetch, signal?: Abo
   assertGroupReferences(pairGroups, cardsById, "pair group");
   const pairGroupsByKey = new Map(pairGroups.map((group) => [group.key, group]));
   if (pairGroupsByKey.size !== pairGroups.length) throw new Error("pair groups contains duplicate keys");
+  await preloadImpl(spriteMap, signal);
   return { manifest, cards, baseGroups, pairGroups, spriteMap, cardsById, pairGroupsByKey };
 }
