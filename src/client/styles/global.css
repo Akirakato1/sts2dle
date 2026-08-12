@@ -59,7 +59,7 @@ button { touch-action: manipulation; }
 
 .app-shell {
   position: relative;
-  width: min(calc(100% - 2rem), 980px);
+  width: min(calc(100% - 2rem), 1280px);
   margin: 0 auto;
   padding: clamp(2rem, 7vw, 4.5rem) 0 5rem;
   text-align: center;
@@ -279,7 +279,7 @@ h1 {
 
 @media (max-width: 640px) {
   .app-shell {
-    width: min(calc(100% - 1rem), 980px);
+    width: min(calc(100% - 1rem), 1280px);
     padding-top: 1.8rem;
   }
 

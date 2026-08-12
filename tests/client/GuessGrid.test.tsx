@@ -46,7 +46,7 @@ const guesses: SubmittedGuess[] = [
 
 const spriteMap: SpriteMap = {
   candidate: { url: "/candidate.webp", width: 128, height: 64, displayScale: 0.5 },
-  guess: { url: "/guess.webp", width: 320, height: 160, displayScale: 0.5 },
+  guess: { url: "/guess.webp", width: 320, height: 160, displayScale: 0.45 },
   cards: {
     first: { candidate: { x: 0, y: 0, width: 64, height: 64 }, guess: { x: 0, y: 0, width: 160, height: 160 } },
     second: { candidate: { x: 64, y: 0, width: 64, height: 64 }, guess: { x: 160, y: 0, width: 160, height: 160 } },
@@ -68,6 +68,7 @@ describe("GuessGrid", () => {
   test("renders a sticky artwork column followed by exactly the ten canonical feature columns", () => {
     render(<GuessGrid guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} />);
 
+    expect(screen.getByRole("table")).toHaveAttribute("aria-colcount", "11");
     const headers = screen.getAllByRole("columnheader");
     expect(headers).toHaveLength(11);
     expect(headers.slice(1).map((header) => header.getAttribute("data-feature"))).toEqual([
@@ -76,19 +77,20 @@ describe("GuessGrid", () => {
     ]);
     expect(headers.slice(1).map((header) => header.getAttribute("data-feature"))).toEqual([...FEATURE_ORDER]);
     expect(screen.queryByText(/version/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Unplayable" })).not.toBeInTheDocument();
 
     const guessRow = screen.getAllByRole("row")[1]!;
     expect(within(guessRow).getAllByRole("rowheader")).toHaveLength(1);
     expect(within(guessRow).getAllByRole("cell")).toHaveLength(10);
   });
 
-  test("keeps the earliest guess above later guesses and displays 160px source art at 80px", () => {
+  test("keeps the earliest guess above later guesses and displays 160px source art at 72px", () => {
     render(<GuessGrid guesses={guesses} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={2} />);
 
     const rows = screen.getAllByRole("row");
     expect(within(rows[1]!).getByRole("rowheader")).toHaveAccessibleName("First Guess artwork and name");
     expect(within(rows[2]!).getByRole("rowheader")).toHaveAccessibleName("Second Guess artwork and name");
-    expect(screen.getByRole("img", { name: "First Guess guess artwork" })).toHaveStyle({ width: "80px", height: "80px" });
+    expect(screen.getByRole("img", { name: "First Guess guess artwork" })).toHaveStyle({ width: "72px", height: "72px" });
   });
 
   test("assigns sequential reveal indices and completes only after the final new tile flips", () => {

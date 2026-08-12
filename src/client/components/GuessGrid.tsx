@@ -90,7 +90,7 @@ export function GuessGrid({ guesses, cardsById, spriteMap, roundKey, animateFrom
   }, [completeReveal]);
 
   return <section className="guess-grid-scroll" aria-label="Guess results">
-    <div className="guess-grid" role="table" aria-label="Card feature comparisons" aria-colcount={12}>
+    <div className="guess-grid" role="table" aria-label="Card feature comparisons" aria-colcount={FEATURE_ORDER.length + 1}>
       <div className="guess-grid__row guess-grid__header-row" role="row">
         <div className="guess-grid__header guess-grid__art-header" role="columnheader">Card</div>
         {FEATURE_ORDER.map((feature) => <div

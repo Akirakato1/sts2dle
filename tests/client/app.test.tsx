@@ -24,7 +24,7 @@ const searchSnapshot = {
   cardsById: new Map(appCards.map((item) => [item.id, item])),
   spriteMap: {
     candidate: { url: "/candidate.webp", width: 128, height: 64, displayScale: 0.5 },
-    guess: { url: "/guess.webp", width: 320, height: 160, displayScale: 0.5 },
+    guess: { url: "/guess.webp", width: 320, height: 160, displayScale: 0.45 },
     cards: { apotheosis: appSprite, apparition: appSprite },
   },
 };
