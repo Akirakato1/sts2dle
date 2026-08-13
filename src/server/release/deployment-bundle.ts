@@ -46,6 +46,7 @@ export interface PublishedBundle {
   active: ActiveSnapshot;
   finalize(): Promise<void>;
   rollback(): Promise<void>;
+  recoveryArtifact?(): string | null;
 }
 
 interface ResolvedPublishOperations {
@@ -379,6 +380,7 @@ function createPublishedBundleTransaction(
     active,
     finalize: () => settle("finalize"),
     rollback: () => settle("rollback"),
+    recoveryArtifact: () => rollbackState.backup?.name ?? null,
   };
 }
 

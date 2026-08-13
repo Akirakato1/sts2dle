@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   createReleaseSnapshotDependencies,
   releaseSnapshot,
+  SnapshotPostCommitCleanupError,
   SnapshotPushError,
   type ReleaseSnapshotDependencies,
   type ReleaseSnapshotOptions,
@@ -19,6 +20,7 @@ interface ReleaseCliDependencies {
 export function parseReleaseOptions(args: readonly string[]): ReleaseSnapshotOptions {
   if (args.length === 0) return { force: false };
   if (args.length === 1 && args[0] === "--force") return { force: true };
+  if (args.length === 1 && args[0] === "--recover") return { recover: true };
   throw new Error("Unknown snapshot release option");
 }
 
@@ -39,10 +41,13 @@ export async function runReleaseCli(
   }
 
   try {
-    const result = await resolvedDependencies.release(
-      options,
-      resolvedDependencies.createDependencies(resolvedDependencies.repositoryRoot),
-    );
+    const releaseDependencies = resolvedDependencies.createDependencies(resolvedDependencies.repositoryRoot);
+    if (options.recover) {
+      await releaseDependencies.gitClient.recoverSnapshot(releaseDependencies.outputDir);
+      resolvedDependencies.writeOutput("Card snapshot recovery completed and pushed to main");
+      return 0;
+    }
+    const result = await resolvedDependencies.release(options, releaseDependencies);
     resolvedDependencies.writeOutput(
       result.status === "unchanged"
         ? "Card snapshot is already current"
@@ -50,7 +55,12 @@ export async function runReleaseCli(
     );
     return 0;
   } catch (error: unknown) {
-    resolvedDependencies.writeError("Card snapshot release failed");
+    if (error instanceof SnapshotPostCommitCleanupError) {
+      resolvedDependencies.writeError("Snapshot committed but local cleanup failed");
+      resolvedDependencies.writeError("Retry cleanup before pushing: npm run release:snapshot -- --recover");
+    } else {
+      resolvedDependencies.writeError("Card snapshot release failed");
+    }
     if (error instanceof SnapshotPushError) {
       resolvedDependencies.writeError("Retry: git push origin HEAD:main");
     }

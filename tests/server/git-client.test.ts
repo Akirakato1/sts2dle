@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   GitClient,
   GitPushError,
+  createBoundedProcessRunner,
   resolveNpmCliPath,
   runBoundedProcess,
   runNpmCheck,
@@ -281,6 +282,65 @@ describe("GitClient", () => {
     expect((await git(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("unrelated.txt");
   }, 15_000);
 
+  it("durably recovers an owned private index and publication backup before pushing", async () => {
+    const repository = await createGitRepository();
+    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+    await git(repository, ["add", ".gitignore"]);
+    await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
+    const originMain = (await git(repository, ["rev-parse", "HEAD"])).trim();
+    let removalBlocked = true;
+    let clock = 0;
+    let pushed = false;
+    const runner: ArgumentArrayRunner = async (command, args, options) => {
+      if (key(args) === key(["remote", "get-url", "origin"])) {
+        return { stdout: `${EXPECTED_ORIGIN}\n`, stderr: "" };
+      }
+      if (key(args) === key(["fetch", "origin", "main"])) return { stdout: "", stderr: "" };
+      if (key(args) === key(["rev-parse", "refs/remotes/origin/main"])) {
+        return { stdout: `${originMain}\n`, stderr: "" };
+      }
+      if (key(args) === key(["push", "origin", "HEAD:main"])) {
+        pushed = true;
+        return { stdout: "", stderr: "" };
+      }
+      return runBoundedProcess(command, args, options);
+    };
+    const client = new GitClient({
+      repositoryRoot: repository,
+      runner,
+      privateIndexOperations: {
+        removeDirectory: async (path: string) => {
+          if (removalBlocked) throw Object.assign(new Error(`secret ${path}`), { code: "EBUSY" });
+          await rm(path, { recursive: true, force: true });
+        },
+        wait: async () => { clock += 100; },
+        monotonicNow: () => clock,
+      },
+    });
+    await writeFile(join(repository, "deploy", "snapshot-data", "active.json"), "recovery snapshot\n");
+    await client.assertOnlySnapshotChanges();
+    await expect(client.commitSnapshot("b".repeat(64)))
+      .rejects.toThrow("Card snapshot committed but private index cleanup failed");
+    const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
+    const backupPath = join(repository, "deploy", backupName);
+    await mkdir(backupPath);
+
+    await client.writeRecoveryMarker(backupName);
+
+    const markerPath = join(repository, ".git", "stsdle-snapshot-recovery.json");
+    const marker = await readFile(markerPath, "utf8");
+    expect(marker).not.toContain(repository);
+    await expect(client.assertReady()).rejects.toThrow("Repository is not ready for snapshot release");
+
+    removalBlocked = false;
+    await client.recoverSnapshot(join(repository, "deploy", "snapshot-data"));
+
+    expect(await privateIndexDirectories(repository)).toEqual([]);
+    await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(backupPath, "anything"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(pushed).toBe(true);
+  }, 20_000);
+
   it("returns a fixed typed push error without preserving credential-bearing causes", async () => {
     const runner = new RecordingRunner();
     const secret = "ssh://fake-user:fake-password@github.com/private/repository.git";
@@ -296,6 +356,59 @@ describe("GitClient", () => {
 });
 
 describe("runBoundedProcess", () => {
+  it("rejects a supervisor that exits successfully without an authenticated result", async () => {
+    const root = await makeTemporaryRoot();
+    const supervisorPath = join(
+      process.cwd(),
+      "tests", "server", "fixtures", "supervisor-exit-no-result.mjs",
+    );
+    const runner = createBoundedProcessRunner({ supervisorPath });
+
+    const error = await captureError(runner(process.execPath, ["-e", "process.exit(0)"], {
+      cwd: root,
+      timeoutMs: 500,
+    }));
+
+    expect(stringifyErrorChain(error)).toBe("Child process failed");
+  }, 5_000);
+
+  it("bounds a stubborn taskkill dependency and lets the supervisor terminate its owned tree", async () => {
+    const root = await makeTemporaryRoot();
+    const pidFile = join(root, "stubborn-taskkill-grandchild.pid");
+    const fixture = join(process.cwd(), "tests", "server", "fixtures", "process-tree-child.mjs");
+    const sentinel = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    const beforeResources = countProcessResources();
+    const runner = createBoundedProcessRunner({
+      terminationTimeoutMs: 300,
+      taskkill: async () => new Promise<boolean>(() => undefined),
+    });
+    try {
+      const started = performance.now();
+      const error = await captureError(runner(process.execPath, [fixture, "timeout", pidFile], {
+        cwd: root,
+        timeoutMs: 100,
+      }));
+      const elapsed = performance.now() - started;
+      const descendantPid = Number((await readFile(pidFile, "utf8")).trim());
+      const supervisorPid = Number((await readFile(`${pidFile}.supervisor`, "utf8")).trim());
+
+      expect(stringifyErrorChain(error)).toBe("Child process failed");
+      expect(elapsed).toBeLessThan(2_000);
+      await expectProcessToExit(descendantPid);
+      await expectProcessToExit(supervisorPid);
+      expectProcessAlive(sentinel.pid!);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expectProcessResourcesNotIncreased(beforeResources);
+    } finally {
+      sentinel.kill("SIGKILL");
+      await new Promise<void>((resolveClose) => sentinel.once("close", () => resolveClose()));
+    }
+  }, 5_000);
+
   it.each(["timeout", "overflow"] as const)(
     "terminates the real child process tree and settles with a fixed error on %s",
     async (mode) => {

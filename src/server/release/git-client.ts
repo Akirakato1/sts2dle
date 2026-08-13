@@ -1,6 +1,14 @@
 import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
-import { mkdtemp as mkdtempAsync, rm as rmAsync } from "node:fs/promises";
+import {
+  lstat as lstatAsync,
+  mkdtemp as mkdtempAsync,
+  readFile as readFileAsync,
+  rm as rmAsync,
+  unlink as unlinkAsync,
+  writeFile as writeFileAsync,
+} from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -13,6 +21,7 @@ const FALLBACK_CLOSE_TIMEOUT_MS = 1_000;
 const PRIVATE_INDEX_CLEANUP_TIMEOUT_MS = 5_000;
 const PRIVATE_INDEX_CLEANUP_RETRY_MS = 50;
 const PRIVATE_INDEX_PREFIX = "stsdle-snapshot-index-";
+const RECOVERY_MARKER = "stsdle-snapshot-recovery.json";
 const APPROVED_ORIGINS = new Set([
   "git@github.com:Akirakato1/sts2dle.git",
   "ssh://git@github.com/Akirakato1/sts2dle.git",
@@ -35,6 +44,12 @@ export type ArgumentArrayRunner = (
   args: readonly string[],
   options: ProcessRunOptions,
 ) => Promise<ProcessResult>;
+
+export interface BoundedProcessDependencies {
+  supervisorPath?: string;
+  taskkill?: (pid: number) => Promise<boolean>;
+  terminationTimeoutMs?: number;
+}
 
 export class GitPushError extends Error {
   constructor() {
@@ -61,6 +76,7 @@ class BoundedProcessError extends Error {
 interface PrivateIndex {
   root: string;
   path: string;
+  name: string;
 }
 interface PrivateIndexOperations {
   removeDirectory(path: string): Promise<void>;
@@ -103,6 +119,7 @@ export class GitClient {
 
   async assertReady(): Promise<void> {
     try {
+      await this.#assertNoRecoveryMarker();
       await this.#discardPrivateIndex();
       const repository = await this.#git(["rev-parse", "--show-toplevel"]);
       if (!samePath(resolve(repository.stdout.trim()), this.#repositoryRoot)) throw new GitSafetyError();
@@ -192,6 +209,93 @@ export class GitClient {
     }
   }
 
+  async writeRecoveryMarker(
+    publicationBackupName?: string | null,
+    outputDir = join(this.#repositoryRoot, SNAPSHOT_PATH),
+  ): Promise<void> {
+    try {
+      if (publicationBackupName != null && !/^\.snapshot-data\.backup-[0-9a-f-]{36}$/.test(publicationBackupName)) {
+        throw new GitSafetyError();
+      }
+      const gitDirectory = await this.#resolvedGitDirectory();
+      const commit = (await this.#git(["rev-parse", "HEAD"])).stdout.trim();
+      assertObjectId(commit);
+      const marker = {
+        version: 1,
+        commit,
+        privateIndex: this.#privateIndex
+          ? await describeRecoveryArtifact(this.#privateIndex.name, this.#privateIndex.root)
+          : null,
+        publicationBackup: publicationBackupName
+          ? await describeRecoveryArtifact(
+            publicationBackupName,
+            join(resolve(dirname(outputDir)), publicationBackupName),
+          )
+          : null,
+      };
+      await writeFileAsync(join(gitDirectory, RECOVERY_MARKER), `${JSON.stringify(marker)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+      });
+    } catch {
+      throw new Error("Unable to record snapshot recovery");
+    }
+  }
+
+  async recoverSnapshot(outputDir = join(this.#repositoryRoot, SNAPSHOT_PATH)): Promise<void> {
+    try {
+      const repository = await this.#git(["rev-parse", "--show-toplevel"]);
+      if (!samePath(resolve(repository.stdout.trim()), this.#repositoryRoot)) throw new GitSafetyError();
+      const gitDirectory = await this.#resolvedGitDirectory();
+      const markerPath = join(gitDirectory, RECOVERY_MARKER);
+      const marker = parseRecoveryMarker(await readFileAsync(markerPath, "utf8"));
+      const status = await this.#statusPorcelain();
+      if (status.stdout !== "") throw new GitSafetyError();
+      const origin = await this.#git(["remote", "get-url", "origin"]);
+      if (!APPROVED_ORIGINS.has(origin.stdout.trim())) throw new GitSafetyError();
+      await this.#git(["fetch", "origin", "main"]);
+      const head = (await this.#git(["rev-parse", "HEAD"])).stdout.trim();
+      const parent = (await this.#git(["rev-parse", "HEAD^"])).stdout.trim();
+      const originMain = (await this.#git(["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
+      if (head !== marker.commit || parent !== originMain) throw new GitSafetyError();
+
+      let cleanupFailed = false;
+      if (marker.privateIndex) {
+        try {
+          const privatePath = join(gitDirectory, marker.privateIndex.name);
+          assertExactChild(privatePath, gitDirectory, marker.privateIndex.name);
+          const stat = await lstatIfPresent(privatePath);
+          if (stat) {
+            assertRecoveryIdentity(stat, marker.privateIndex);
+            await this.#privateIndexOperations.removeDirectory(privatePath);
+          }
+          if (this.#privateIndex?.name === marker.privateIndex.name) this.#privateIndex = undefined;
+        } catch {
+          cleanupFailed = true;
+        }
+      }
+      if (marker.publicationBackup) {
+        try {
+          const outputParent = resolve(dirname(outputDir));
+          const backupPath = join(outputParent, marker.publicationBackup.name);
+          assertExactChild(backupPath, outputParent, marker.publicationBackup.name);
+          const stat = await lstatIfPresent(backupPath);
+          if (stat) {
+            assertRecoveryIdentity(stat, marker.publicationBackup);
+            await rmAsync(backupPath, { recursive: true, force: false });
+          }
+        } catch {
+          cleanupFailed = true;
+        }
+      }
+      if (cleanupFailed) throw new GitSafetyError();
+      await this.pushMain();
+      await unlinkAsync(markerPath);
+    } catch {
+      throw new Error("Unable to recover card snapshot");
+    }
+  }
+
   async pushMain(): Promise<void> {
     try {
       await this.#git(["push", "origin", "HEAD:main"]);
@@ -237,6 +341,26 @@ export class GitClient {
         }
         await this.#privateIndexOperations.wait(PRIVATE_INDEX_CLEANUP_RETRY_MS);
       }
+    }
+  }
+
+  async #resolvedGitDirectory(): Promise<string> {
+    const configured = (await this.#git(["rev-parse", "--git-dir"])).stdout.trim();
+    if (configured === "") throw new GitSafetyError();
+    const resolved = realpathSync(resolve(this.#repositoryRoot, configured));
+    if (!lstatSync(resolved).isDirectory()) throw new GitSafetyError();
+    return resolved;
+  }
+
+  async #assertNoRecoveryMarker(): Promise<void> {
+    const gitDirectory = await this.#resolvedGitDirectory();
+    try {
+      await lstatAsync(join(gitDirectory, RECOVERY_MARKER));
+      throw new GitSafetyError();
+    } catch (error: unknown) {
+      if (error instanceof GitSafetyError) throw error;
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return;
+      throw new GitSafetyError();
     }
   }
 }
@@ -286,7 +410,15 @@ export function resolveNpmCliPath(environment: NodeJS.ProcessEnv): string {
   throw new Error("npm CLI is unavailable");
 }
 
-export const runBoundedProcess: ArgumentArrayRunner = async (command, args, options) => {
+export function createBoundedProcessRunner(
+  dependencies: BoundedProcessDependencies = {},
+): ArgumentArrayRunner {
+  const terminationTimeoutMs = positiveLimit(
+    dependencies.terminationTimeoutMs,
+    TERMINATION_TIMEOUT_MS,
+  );
+  const taskkill = dependencies.taskkill ?? ((pid: number) => runTaskkill(pid, terminationTimeoutMs));
+  return async (command, args, options) => {
   const timeoutMs = positiveLimit(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const maxOutputBytes = positiveLimit(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
   let child: SpawnedProcess | SupervisedProcess;
@@ -294,7 +426,7 @@ export const runBoundedProcess: ArgumentArrayRunner = async (command, args, opti
   const environment = options.env ? { ...process.env, ...options.env } : { ...process.env };
   try {
     child = supervised
-      ? spawnWindowsSupervisor(options.cwd)
+      ? spawnWindowsSupervisor(options.cwd, dependencies.supervisorPath)
       : spawn(command, [...args], {
         cwd: options.cwd,
         detached: true,
@@ -346,28 +478,46 @@ export const runBoundedProcess: ArgumentArrayRunner = async (command, args, opti
   const errorListener = () => observeClose({ code: null, signal: null, spawnError: true });
   child.once("close", closeListener);
   child.once("error", errorListener);
-  let resultResolve!: (succeeded: boolean) => void;
-  const resultReported = new Promise<boolean>((resolveResult) => { resultResolve = resolveResult; });
+  const protocolToken = randomUUID();
+  let resultResolve!: (result: { code: number | null; signal: string | null }) => void;
+  const resultReported = new Promise<{ code: number | null; signal: string | null }>((resolveResult) => {
+    resultResolve = resolveResult;
+  });
   let terminationReadyResolve!: () => void;
   const terminationReady = new Promise<void>((resolveReady) => { terminationReadyResolve = resolveReady; });
   let resultObserved = false;
   let terminationConfirmed = false;
   const messageListener = (message: unknown): void => {
     if (typeof message !== "object" || message === null || !("type" in message)) return;
-    if (message.type === "termination-ready") {
+    if (message.type === "termination-ready" && "token" in message && message.token === protocolToken) {
+      if (terminationConfirmed) {
+        fail();
+        return;
+      }
       terminationConfirmed = true;
       terminationReadyResolve();
-    } else if (message.type === "result" && "succeeded" in message && typeof message.succeeded === "boolean") {
-      if (resultObserved) return;
+    } else if (
+      message.type === "result" &&
+      "token" in message && message.token === protocolToken &&
+      "code" in message && (message.code === null || (
+        Number.isInteger(message.code) && typeof message.code === "number" && message.code >= 0
+      )) &&
+      "signal" in message && (message.signal === null || typeof message.signal === "string")
+    ) {
+      if (resultObserved) {
+        fail();
+        return;
+      }
       resultObserved = true;
-      resultResolve(message.succeeded);
-    }
+      resultResolve({ code: message.code as number | null, signal: message.signal });
+    } else fail();
   };
   if (supervised) child.on("message", messageListener);
   if (supervised) {
     try {
       child.send({
         type: "launch",
+        token: protocolToken,
         command,
         args: [...args],
         cwd: options.cwd,
@@ -382,20 +532,24 @@ export const runBoundedProcess: ArgumentArrayRunner = async (command, args, opti
   const first = await Promise.race([
     (supervised
       ? Promise.race([
-        resultReported.then((succeeded) => ({ code: succeeded ? 0 : 1, signal: null, spawnError: false })),
-        closed,
+        resultReported.then((result) => ({ ...result, spawnError: false })),
+        closed.then(() => ({ code: null, signal: null, spawnError: true })),
       ])
       : closed).then((result) => ({ kind: "closed" as const, result })),
     failureRequested.then(() => ({ kind: "failure" as const })),
   ]);
   if (supervised) {
-    await terminateWindowsSupervisor(
+    const terminated = await terminateWindowsSupervisor(
       child as SupervisedProcess,
       closed,
       () => closeObserved,
       () => terminationConfirmed,
       terminationReady,
+      protocolToken,
+      taskkill,
+      terminationTimeoutMs,
     );
+    if (!terminated) fail();
   } else if (first.kind === "failure" || failureTriggered) {
     await terminatePosixProcessTree(child as SpawnedProcess, closed);
   }
@@ -414,7 +568,10 @@ export const runBoundedProcess: ArgumentArrayRunner = async (command, args, opti
     stdout: Buffer.concat(stdout).toString("utf8"),
     stderr: Buffer.concat(stderr).toString("utf8"),
   };
-};
+  };
+}
+
+export const runBoundedProcess: ArgumentArrayRunner = createBoundedProcessRunner();
 
 async function terminatePosixProcessTree(
   child: SpawnedProcess,
@@ -437,10 +594,15 @@ async function terminatePosixProcessTree(
   await settlesWithin(closed, FALLBACK_CLOSE_TIMEOUT_MS);
 }
 
-function spawnWindowsSupervisor(cwd: string): SupervisedProcess {
+function spawnWindowsSupervisor(cwd: string, injectedPath?: string): SupervisedProcess {
   const currentExtension = extname(fileURLToPath(import.meta.url));
   const supervisorExtension = currentExtension === ".ts" ? ".ts" : ".js";
-  const supervisorPath = fileURLToPath(new URL(`./process-supervisor${supervisorExtension}`, import.meta.url));
+  const supervisorPath = injectedPath ?? fileURLToPath(
+    new URL(`./process-supervisor${supervisorExtension}`, import.meta.url),
+  );
+  if (!isAbsolute(supervisorPath) || !lstatSync(realpathSync(supervisorPath)).isFile()) {
+    throw new BoundedProcessError();
+  }
   const child = spawn(process.execPath, [supervisorPath], {
     cwd,
     env: process.env,
@@ -458,36 +620,55 @@ async function terminateWindowsSupervisor(
   closeObserved: () => boolean,
   terminationConfirmed: () => boolean,
   terminationReady: Promise<void>,
-): Promise<void> {
-  if (closeObserved()) return;
+  token: string,
+  taskkill: (pid: number) => Promise<boolean>,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (closeObserved()) return true;
+  const deadline = performance.now() + timeoutMs;
   try {
-    child.send({ type: "prepare-termination" });
+    child.send({ type: "prepare-termination", token });
   } catch {
-    if (!closeObserved()) await closed;
-    return;
+    return closeObserved();
   }
-  const prepared = await Promise.race([
-    terminationReady.then(() => true),
-    closed.then(() => false),
-  ]);
-  if (!prepared || closeObserved() || !terminationConfirmed()) return;
+  const prepared = await settlesBeforeDeadline(terminationReady, closed, deadline);
+  if (closeObserved()) return true;
+  if (prepared !== "primary" || !terminationConfirmed()) {
+    return requestSupervisorSelfTermination(child, closed, closeObserved, token, deadline, false);
+  }
   const pid = child.pid;
   if (!Number.isInteger(pid) || pid! <= 0) {
-    await closed;
-    return;
+    return requestSupervisorSelfTermination(child, closed, closeObserved, token, deadline, false);
   }
 
-  const deadline = performance.now() + TERMINATION_TIMEOUT_MS;
   while (!closeObserved() && terminationConfirmed() && performance.now() < deadline) {
-    const taskkillSucceeded = await runTaskkill(pid!);
-    if (closeObserved()) return;
-    if (taskkillSucceeded && await settlesWithin(closed, FALLBACK_CLOSE_TIMEOUT_MS)) return;
-    await settlesWithin(closed, 50);
+    const attempt = await resolvesBeforeDeadline(taskkill(pid!), deadline);
+    if (closeObserved()) return attempt === true;
+    if (attempt === true && await settlesWithin(closed, remainingMilliseconds(deadline))) return true;
+    if (remainingMilliseconds(deadline) > 0) await settlesWithin(closed, Math.min(50, remainingMilliseconds(deadline)));
   }
-  if (!closeObserved()) await closed;
+  if (closeObserved()) return true;
+  return requestSupervisorSelfTermination(child, closed, closeObserved, token, deadline, false);
 }
 
-async function runTaskkill(pid: number): Promise<boolean> {
+async function requestSupervisorSelfTermination(
+  child: SupervisedProcess,
+  closed: Promise<unknown>,
+  closeObserved: () => boolean,
+  token: string,
+  originalDeadline: number,
+  externalSucceeded: boolean,
+): Promise<boolean> {
+  const cleanupDeadline = Math.max(originalDeadline, performance.now() + FALLBACK_CLOSE_TIMEOUT_MS);
+  try { child.send({ type: "terminate-self", token }); } catch { /* The close race below remains authoritative. */ }
+  if (!closeObserved()) child.disconnect?.();
+  await settlesWithin(closed, remainingMilliseconds(cleanupDeadline));
+  if (!closeObserved()) child.kill("SIGKILL");
+  await settlesWithin(closed, Math.min(FALLBACK_CLOSE_TIMEOUT_MS, remainingMilliseconds(cleanupDeadline)));
+  return externalSucceeded && closeObserved();
+}
+
+async function runTaskkill(pid: number, timeoutMs: number): Promise<boolean> {
   return new Promise<boolean>((resolveTaskkill) => {
     let taskkill;
     try {
@@ -512,8 +693,49 @@ async function runTaskkill(pid: number): Promise<boolean> {
     taskkill.once("error", () => settle(false));
     const timer = setTimeout(() => {
       taskkill.kill("SIGKILL");
-    }, TERMINATION_TIMEOUT_MS);
+      settle(false);
+    }, timeoutMs);
   });
+}
+
+async function settlesBeforeDeadline(
+  primary: Promise<unknown>,
+  closed: Promise<unknown>,
+  deadline: number,
+): Promise<"primary" | "closed" | "timeout"> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      primary.then(() => "primary" as const),
+      closed.then(() => "closed" as const),
+      new Promise<"timeout">((resolveTimeout) => {
+        timer = setTimeout(() => resolveTimeout("timeout"), remainingMilliseconds(deadline));
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function resolvesBeforeDeadline(
+  promise: Promise<boolean>,
+  deadline: number,
+): Promise<boolean | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolveTimeout) => {
+        timer = setTimeout(() => resolveTimeout(undefined), remainingMilliseconds(deadline));
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function remainingMilliseconds(deadline: number): number {
+  return Math.max(0, Math.ceil(deadline - performance.now()));
 }
 
 function resolveTaskkillExecutable(): string {
@@ -547,7 +769,78 @@ async function createPrivateIndex(repositoryRoot: string, gitDirectory: string):
   const resolvedGitDirectory = realpathSync(configuredGitDirectory);
   if (!lstatSync(resolvedGitDirectory).isDirectory()) throw new GitSafetyError();
   const root = await mkdtempAsync(join(resolvedGitDirectory, PRIVATE_INDEX_PREFIX));
-  return { root, path: join(root, "index") };
+  return { root, path: join(root, "index"), name: basename(root) };
+}
+
+interface RecoveryMarker {
+  version: 1;
+  commit: string;
+  privateIndex: RecoveryArtifact | null;
+  publicationBackup: RecoveryArtifact | null;
+}
+
+interface RecoveryArtifact {
+  name: string;
+  dev: string;
+  ino: string;
+  birthtimeMs: string;
+}
+
+function parseRecoveryMarker(raw: string): RecoveryMarker {
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null) throw new GitSafetyError();
+  const marker = value as Partial<RecoveryMarker>;
+  if (
+    marker.version !== 1 || typeof marker.commit !== "string" || !/^[a-f0-9]{40,64}$/.test(marker.commit) ||
+    !isRecoveryArtifact(marker.privateIndex, /^stsdle-snapshot-index-[A-Za-z0-9_-]+$/) ||
+    !isRecoveryArtifact(marker.publicationBackup, /^\.snapshot-data\.backup-[0-9a-f-]{36}$/)
+  ) throw new GitSafetyError();
+  return marker as RecoveryMarker;
+}
+
+function isRecoveryArtifact(value: unknown, namePattern: RegExp): value is RecoveryArtifact | null {
+  if (value === null) return true;
+  if (typeof value !== "object" || value === null) return false;
+  const artifact = value as Partial<RecoveryArtifact>;
+  return typeof artifact.name === "string" && namePattern.test(artifact.name) &&
+    typeof artifact.dev === "string" && /^\d+$/.test(artifact.dev) &&
+    typeof artifact.ino === "string" && /^\d+$/.test(artifact.ino) &&
+    typeof artifact.birthtimeMs === "string" && /^\d+(?:\.\d+)?$/.test(artifact.birthtimeMs);
+}
+
+async function describeRecoveryArtifact(name: string, path: string): Promise<RecoveryArtifact> {
+  const stat = await lstatAsync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new GitSafetyError();
+  return {
+    name,
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    birthtimeMs: String(stat.birthtimeMs),
+  };
+}
+
+function assertRecoveryIdentity(
+  stat: Awaited<ReturnType<typeof lstatAsync>>,
+  artifact: RecoveryArtifact,
+): void {
+  if (
+    !stat.isDirectory() || stat.isSymbolicLink() ||
+    String(stat.dev) !== artifact.dev || String(stat.ino) !== artifact.ino ||
+    String(stat.birthtimeMs) !== artifact.birthtimeMs
+  ) throw new GitSafetyError();
+}
+
+async function lstatIfPresent(path: string): Promise<Awaited<ReturnType<typeof lstatAsync>> | undefined> {
+  try {
+    return await lstatAsync(path);
+  } catch (error: unknown) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function assertExactChild(path: string, parent: string, name: string): void {
+  if (resolve(path) !== resolve(parent, name) || dirname(resolve(path)) !== resolve(parent)) throw new GitSafetyError();
 }
 
 function privateIndexEnvironment(index: PrivateIndex): NodeJS.ProcessEnv {

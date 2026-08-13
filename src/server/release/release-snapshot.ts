@@ -42,7 +42,7 @@ export interface SnapshotBuildDependencies {
 }
 
 export interface ReleaseSnapshotDependencies extends SnapshotBuildDependencies {
-  gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "rollbackSnapshotIndex" | "commitSnapshot" | "cleanupPrivateIndex" | "pushMain">;
+  gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "rollbackSnapshotIndex" | "commitSnapshot" | "cleanupPrivateIndex" | "writeRecoveryMarker" | "recoverSnapshot" | "pushMain">;
   readCommittedRevision(): Promise<string | null>;
   runChecks(): Promise<void>;
   outputDir?: string;
@@ -50,6 +50,7 @@ export interface ReleaseSnapshotDependencies extends SnapshotBuildDependencies {
 
 export interface ReleaseSnapshotOptions {
   force?: boolean;
+  recover?: boolean;
 }
 
 export interface BuildSnapshotBundleOptions {
@@ -70,6 +71,15 @@ export class SnapshotPushError extends Error {
   constructor() {
     super("Card snapshot was committed but could not be pushed");
     this.name = "SnapshotPushError";
+  }
+}
+
+export class SnapshotPostCommitCleanupError extends Error {
+  readonly committed = true;
+
+  constructor() {
+    super("Snapshot committed but local cleanup failed");
+    this.name = "SnapshotPostCommitCleanupError";
   }
 }
 
@@ -111,6 +121,7 @@ export async function releaseSnapshot(
       );
 
       let committed = false;
+      let privateCleanupFailed = false;
       try {
         await dependencies.validatePublishedSnapshot(published.active);
         await dependencies.gitClient.assertOnlySnapshotChanges();
@@ -120,7 +131,11 @@ export async function releaseSnapshot(
         } catch (error: unknown) {
           if (!(error instanceof GitPostCommitCleanupError)) throw error;
           committed = true;
-          await dependencies.gitClient.cleanupPrivateIndex();
+          try {
+            await dependencies.gitClient.cleanupPrivateIndex();
+          } catch {
+            privateCleanupFailed = true;
+          }
         }
       } catch {
         if (!committed) await rollbackPreCommitIgnoringPayload(published, dependencies.gitClient);
@@ -128,7 +143,23 @@ export async function releaseSnapshot(
       }
 
       if (!committed) throw new SnapshotReleaseError();
-      await published.finalize();
+      let finalizeFailed = false;
+      try {
+        await published.finalize();
+      } catch {
+        finalizeFailed = true;
+      }
+      if (privateCleanupFailed || finalizeFailed) {
+        try {
+          await dependencies.gitClient.writeRecoveryMarker(
+            published.recoveryArtifact?.(),
+            dependencies.outputDir,
+          );
+        } catch {
+          // The fixed post-commit state remains authoritative even if durable recording fails.
+        }
+        throw new SnapshotPostCommitCleanupError();
+      }
       try {
         await dependencies.gitClient.pushMain();
       } catch {
@@ -137,7 +168,9 @@ export async function releaseSnapshot(
       result = { status: "released", sourceRevision: fetched.sourceRevision };
     }
   } catch (error: unknown) {
-    failure = error instanceof SnapshotPushError ? error : new SnapshotReleaseError();
+    failure = error instanceof SnapshotPushError || error instanceof SnapshotPostCommitCleanupError
+      ? error
+      : new SnapshotReleaseError();
   }
 
   if (temporary) {
