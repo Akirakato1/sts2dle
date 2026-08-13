@@ -57,6 +57,33 @@ describe("releaseSnapshot", () => {
     expect(harness.cleanup).toHaveBeenCalledOnce();
   });
 
+  it("records publication cleanup ownership in the commit and clears recovery state before pushing", async () => {
+    const harness = createReleaseHarness();
+
+    await releaseSnapshot({}, harness.dependencies);
+
+    expect(harness.commitRecoveryOptions).toEqual({
+      publicationBackupName: ".snapshot-data.backup-00000000-0000-4000-8000-000000000000",
+      outputDir: "deploy/snapshot-data",
+    });
+    expect(harness.completeSnapshotRecovery).toHaveBeenCalledWith(
+      ".snapshot-data.backup-00000000-0000-4000-8000-000000000000",
+      "deploy/snapshot-data",
+    );
+    expect(harness.recoveryCompletedBeforePush).toBe(true);
+  });
+
+  it("retains recovery state and never pushes when the clean marker cannot be removed", async () => {
+    const harness = createReleaseHarness({ failRecoveryCompletion: true });
+
+    const error = await captureError(releaseSnapshot({}, harness.dependencies));
+
+    expect(error).toBeInstanceOf(SnapshotPostCommitCleanupError);
+    expect(harness.finalize).toHaveBeenCalledOnce();
+    expect(harness.completeSnapshotRecovery).toHaveBeenCalledOnce();
+    expect(harness.events).not.toContain("push");
+  });
+
   it("returns unchanged immediately after readiness and the single fetch", async () => {
     const harness = createReleaseHarness({ committedRevision: NEXT_REVISION });
 
@@ -166,7 +193,7 @@ describe("releaseSnapshot", () => {
     expect(stringifyErrorChain(error)).toBe("Snapshot committed but local cleanup failed");
     expect(harness.privateCleanup).toHaveBeenCalledOnce();
     expect(harness.finalize).toHaveBeenCalledOnce();
-    expect(harness.writeRecoveryMarker).toHaveBeenCalledOnce();
+    expect(harness.completeSnapshotRecovery).not.toHaveBeenCalled();
     expect(harness.events).not.toContain("push");
   });
 
@@ -235,7 +262,7 @@ describe("releaseSnapshot", () => {
           rollbackSnapshotIndex: () => realGit.rollbackSnapshotIndex(),
           commitSnapshot: async () => { throw new Error("private commit failure"); },
           cleanupPrivateIndex: () => realGit.cleanupPrivateIndex(),
-          writeRecoveryMarker: (backup) => realGit.writeRecoveryMarker(backup),
+          completeSnapshotRecovery: (backup, outputDir) => realGit.completeSnapshotRecovery(backup, outputDir),
           recoverSnapshot: (outputDir) => realGit.recoverSnapshot(outputDir),
           pushMain: () => realGit.pushMain(),
         },
@@ -556,6 +583,7 @@ interface HarnessOptions {
   failRollback?: boolean;
   failPrivateCleanup?: boolean;
   failFinalize?: boolean;
+  failRecoveryCompletion?: boolean;
 }
 
 function createReleaseHarness(options: HarnessOptions = {}) {
@@ -569,6 +597,12 @@ function createReleaseHarness(options: HarnessOptions = {}) {
   let commitCreated = false;
   let finalized = false;
   let finalizedBeforePush = false;
+  let recoveryCompleted = false;
+  let recoveryCompletedBeforePush = false;
+  let commitRecoveryOptions: {
+    publicationBackupName?: string | null;
+    outputDir?: string;
+  } | undefined;
   let fetchedByBuilder: FetchedCards | undefined;
   const failure = options.failure ?? new Error(`private failure at C:\\secret\\${options.failAt}`);
   const fail = (point: string): void => {
@@ -597,7 +631,10 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     events.push("private-index-cleanup");
     if (options.failPrivateCleanup) throw failure;
   });
-  const writeRecoveryMarker = vi.fn(async () => undefined);
+  const completeSnapshotRecovery = vi.fn(async () => {
+    if (options.failRecoveryCompletion) throw failure;
+    recoveryCompleted = true;
+  });
   const fetchCards = vi.fn(async () => {
     events.push("fetch");
     return fetched;
@@ -610,8 +647,9 @@ function createReleaseHarness(options: HarnessOptions = {}) {
         if (options.failAt === "stage") throw failure;
         fail("scope-check");
       },
-      commitSnapshot: async () => {
+      commitSnapshot: async (_sourceRevision, recoveryOptions) => {
         events.push("commit");
+        commitRecoveryOptions = recoveryOptions;
         if (options.failAt === "post-commit-cleanup") {
           commitCreated = true;
           throw new GitPostCommitCleanupError();
@@ -620,12 +658,13 @@ function createReleaseHarness(options: HarnessOptions = {}) {
         commitCreated = true;
       },
       cleanupPrivateIndex: privateCleanup,
-      writeRecoveryMarker,
+      completeSnapshotRecovery,
       recoverSnapshot: async () => undefined,
       rollbackSnapshotIndex: indexRollback,
       pushMain: async () => {
         events.push("push");
         finalizedBeforePush = finalized;
+        recoveryCompletedBeforePush = recoveryCompleted;
         fail("push");
       },
     },
@@ -652,7 +691,9 @@ function createReleaseHarness(options: HarnessOptions = {}) {
         active: PUBLISHED_ACTIVE,
         finalize,
         rollback,
-        recoveryArtifact: () => ".snapshot-data.backup-00000000-0000-4000-8000-000000000000",
+        recoveryArtifact: () => finalized
+          ? null
+          : ".snapshot-data.backup-00000000-0000-4000-8000-000000000000",
       };
     },
     validatePublishedSnapshot: async () => {
@@ -668,7 +709,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     fetchCards,
     finalize,
     privateCleanup,
-    writeRecoveryMarker,
+    completeSnapshotRecovery,
     rollback,
     indexRollback,
     cleanup,
@@ -679,6 +720,8 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     get cleanupSettled() { return cleanupSettled; },
     get commitCreated() { return commitCreated; },
     get finalizedBeforePush() { return finalizedBeforePush; },
+    get recoveryCompletedBeforePush() { return recoveryCompletedBeforePush; },
+    get commitRecoveryOptions() { return commitRecoveryOptions; },
     get fetchedByBuilder() { return fetchedByBuilder; },
   };
 }

@@ -42,7 +42,7 @@ export interface SnapshotBuildDependencies {
 }
 
 export interface ReleaseSnapshotDependencies extends SnapshotBuildDependencies {
-  gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "rollbackSnapshotIndex" | "commitSnapshot" | "cleanupPrivateIndex" | "writeRecoveryMarker" | "recoverSnapshot" | "pushMain">;
+  gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "rollbackSnapshotIndex" | "commitSnapshot" | "cleanupPrivateIndex" | "completeSnapshotRecovery" | "recoverSnapshot" | "pushMain">;
   readCommittedRevision(): Promise<string | null>;
   runChecks(): Promise<void>;
   outputDir?: string;
@@ -115,10 +115,12 @@ export async function releaseSnapshot(
       await dependencies.runChecks();
       temporary = await dependencies.buildTemporarySnapshot(fetched);
       await dependencies.validateTemporarySnapshot(temporary.active);
+      const outputDir = dependencies.outputDir ?? "deploy/snapshot-data";
       const published = await dependencies.publishTemporarySnapshot(
         temporary,
-        dependencies.outputDir ?? "deploy/snapshot-data",
+        outputDir,
       );
+      const publicationRecoveryArtifact = published.recoveryArtifact?.() ?? null;
 
       let committed = false;
       let privateCleanupFailed = false;
@@ -126,7 +128,10 @@ export async function releaseSnapshot(
         await dependencies.validatePublishedSnapshot(published.active);
         await dependencies.gitClient.assertOnlySnapshotChanges();
         try {
-          await dependencies.gitClient.commitSnapshot(fetched.sourceRevision);
+          await dependencies.gitClient.commitSnapshot(fetched.sourceRevision, {
+            publicationBackupName: publicationRecoveryArtifact,
+            outputDir,
+          });
           committed = true;
         } catch (error: unknown) {
           if (!(error instanceof GitPostCommitCleanupError)) throw error;
@@ -150,14 +155,14 @@ export async function releaseSnapshot(
         finalizeFailed = true;
       }
       if (privateCleanupFailed || finalizeFailed) {
-        try {
-          await dependencies.gitClient.writeRecoveryMarker(
-            published.recoveryArtifact?.(),
-            dependencies.outputDir,
-          );
-        } catch {
-          // The fixed post-commit state remains authoritative even if durable recording fails.
-        }
+        throw new SnapshotPostCommitCleanupError();
+      }
+      try {
+        await dependencies.gitClient.completeSnapshotRecovery(
+          publicationRecoveryArtifact,
+          outputDir,
+        );
+      } catch {
         throw new SnapshotPostCommitCleanupError();
       }
       try {

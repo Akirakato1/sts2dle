@@ -4,10 +4,12 @@ import { lstatSync, realpathSync } from "node:fs";
 import {
   lstat as lstatAsync,
   mkdtemp as mkdtempAsync,
+  open as openAsync,
   readFile as readFileAsync,
+  realpath as realpathAsync,
+  rename as renameAsync,
   rm as rmAsync,
   unlink as unlinkAsync,
-  writeFile as writeFileAsync,
 } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
@@ -51,6 +53,11 @@ export interface BoundedProcessDependencies {
   terminationTimeoutMs?: number;
 }
 
+export interface SnapshotCommitRecoveryOptions {
+  publicationBackupName?: string | null;
+  outputDir?: string;
+}
+
 export class GitPushError extends Error {
   constructor() {
     super("Unable to push card snapshot");
@@ -83,6 +90,12 @@ interface PrivateIndexOperations {
   wait(milliseconds: number): Promise<void>;
   monotonicNow(): number;
 }
+interface RecoveryOperations {
+  beforeQuarantine(path: string): Promise<void>;
+  renameDirectory(from: string, to: string): Promise<void>;
+  removeDirectory(path: string): Promise<void>;
+  unlinkMarker(path: string): Promise<void>;
+}
 type SpawnedProcess = ChildProcessByStdio<null, Readable, Readable>;
 type SupervisedProcess = ChildProcess & { stdout: Readable; stderr: Readable };
 
@@ -90,19 +103,23 @@ export class GitClient {
   readonly #repositoryRoot: string;
   readonly #runner: ArgumentArrayRunner;
   readonly #privateIndexOperations: PrivateIndexOperations;
+  readonly #recoveryOperations: RecoveryOperations;
   #privateIndex: PrivateIndex | undefined;
+  #recoveryMarker: RecoveryMarker | undefined;
 
   constructor(repositoryRoot: string, runner?: ArgumentArrayRunner);
   constructor(options: {
     repositoryRoot: string;
     runner?: ArgumentArrayRunner;
     privateIndexOperations?: PrivateIndexOperations;
+    recoveryOperations?: Partial<RecoveryOperations>;
   });
   constructor(
     repositoryRootOrOptions: string | {
       repositoryRoot: string;
       runner?: ArgumentArrayRunner;
       privateIndexOperations?: PrivateIndexOperations;
+      recoveryOperations?: Partial<RecoveryOperations>;
     },
     runner: ArgumentArrayRunner = runBoundedProcess,
   ) {
@@ -110,10 +127,15 @@ export class GitClient {
       this.#repositoryRoot = resolve(repositoryRootOrOptions);
       this.#runner = runner;
       this.#privateIndexOperations = defaultPrivateIndexOperations;
+      this.#recoveryOperations = defaultRecoveryOperations;
     } else {
       this.#repositoryRoot = resolve(repositoryRootOrOptions.repositoryRoot);
       this.#runner = repositoryRootOrOptions.runner ?? runBoundedProcess;
       this.#privateIndexOperations = repositoryRootOrOptions.privateIndexOperations ?? defaultPrivateIndexOperations;
+      this.#recoveryOperations = {
+        ...defaultRecoveryOperations,
+        ...repositoryRootOrOptions.recoveryOperations,
+      };
     }
   }
 
@@ -166,8 +188,12 @@ export class GitClient {
     }
   }
 
-  async commitSnapshot(sourceRevision: string): Promise<void> {
+  async commitSnapshot(
+    sourceRevision: string,
+    recoveryOptions: SnapshotCommitRecoveryOptions = {},
+  ): Promise<void> {
     let updatedRef = false;
+    let markerPublished = false;
     let oldHead = "";
     let newCommit = "";
     try {
@@ -182,19 +208,36 @@ export class GitClient {
         "-m", `chore: refresh card snapshot ${sourceRevision.slice(0, 12)}`,
       ], environment)).stdout.trim();
       assertObjectId(newCommit);
+      this.#recoveryMarker = await this.#createRecoveryMarker(
+        oldHead,
+        newCommit,
+        recoveryOptions,
+      );
+      await this.#publishRecoveryMarker(this.#recoveryMarker, false);
+      markerPublished = true;
+      await this.#assertRecoveryArtifactsOwned(this.#recoveryMarker, recoveryOptions.outputDir);
       await this.#git(["update-ref", "HEAD", newCommit, oldHead]);
       updatedRef = true;
       await this.#restoreSnapshotIndex();
       try {
         await this.#discardPrivateIndex();
+        await this.#recordPrivateIndexClean();
       } catch {
         throw new GitPostCommitCleanupError();
       }
     } catch (error: unknown) {
       if (error instanceof GitPostCommitCleanupError) throw error;
       if (updatedRef) {
-        await this.#git(["update-ref", "HEAD", oldHead, newCommit]).catch(() => undefined);
+        try {
+          await this.#git(["update-ref", "HEAD", oldHead, newCommit]);
+          updatedRef = false;
+        } catch {
+          throw new GitPostCommitCleanupError();
+        }
         await this.#restoreSnapshotIndex().catch(() => undefined);
+      }
+      if (markerPublished && !updatedRef) {
+        await this.#removeRecoveryMarker().catch(() => undefined);
       }
       await this.#discardPrivateIndex().catch(() => undefined);
       throw new Error("Unable to commit card snapshot");
@@ -204,6 +247,7 @@ export class GitClient {
   async cleanupPrivateIndex(): Promise<void> {
     try {
       await this.#discardPrivateIndex();
+      await this.#recordPrivateIndexClean();
     } catch {
       throw new Error("Unable to clean private index");
     }
@@ -214,31 +258,43 @@ export class GitClient {
     outputDir = join(this.#repositoryRoot, SNAPSHOT_PATH),
   ): Promise<void> {
     try {
-      if (publicationBackupName != null && !/^\.snapshot-data\.backup-[0-9a-f-]{36}$/.test(publicationBackupName)) {
-        throw new GitSafetyError();
-      }
       const gitDirectory = await this.#resolvedGitDirectory();
-      const commit = (await this.#git(["rev-parse", "HEAD"])).stdout.trim();
-      assertObjectId(commit);
-      const marker = {
-        version: 1,
-        commit,
-        privateIndex: this.#privateIndex
-          ? await describeRecoveryArtifact(this.#privateIndex.name, this.#privateIndex.root)
-          : null,
-        publicationBackup: publicationBackupName
-          ? await describeRecoveryArtifact(
-            publicationBackupName,
-            join(resolve(dirname(outputDir)), publicationBackupName),
-          )
-          : null,
-      };
-      await writeFileAsync(join(gitDirectory, RECOVERY_MARKER), `${JSON.stringify(marker)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-      });
+      const marker = parseRecoveryMarker(await readFileAsync(join(gitDirectory, RECOVERY_MARKER), "utf8"));
+      const expectedName = publicationBackupName ?? null;
+      if ((marker.publicationBackup?.name ?? null) !== expectedName) throw new GitSafetyError();
+      await this.#assertRecoveryArtifactsOwned(marker, outputDir);
+      this.#recoveryMarker = marker;
     } catch {
       throw new Error("Unable to record snapshot recovery");
+    }
+  }
+
+  async completeSnapshotRecovery(
+    publicationBackupName?: string | null,
+    outputDir = join(this.#repositoryRoot, SNAPSHOT_PATH),
+  ): Promise<void> {
+    try {
+      const gitDirectory = await this.#resolvedGitDirectory();
+      const markerPath = join(gitDirectory, RECOVERY_MARKER);
+      let marker = parseRecoveryMarker(await readFileAsync(markerPath, "utf8"));
+      if (marker.privateIndex !== null) throw new GitSafetyError();
+      const expectedName = publicationBackupName ?? null;
+      if (marker.publicationBackup) {
+        if (marker.publicationBackup.name !== expectedName) throw new GitSafetyError();
+        const outputParent = await resolveRecoveryOutputParent(this.#repositoryRoot, outputDir);
+        const artifactPath = join(outputParent.path, marker.publicationBackup.name);
+        assertExactChild(artifactPath, outputParent.path, marker.publicationBackup.name);
+        if (await lstatIfPresent(artifactPath)) throw new GitSafetyError();
+        marker = { ...marker, publicationBackup: null };
+        this.#recoveryMarker = marker;
+        await this.#publishRecoveryMarker(marker, true);
+      } else if (expectedName !== null && this.#recoveryMarker?.publicationBackup !== null) {
+        throw new GitSafetyError();
+      }
+      this.#recoveryMarker = marker;
+      await this.#removeRecoveryMarker();
+    } catch {
+      throw new Error("Unable to complete snapshot recovery state");
     }
   }
 
@@ -248,49 +304,47 @@ export class GitClient {
       if (!samePath(resolve(repository.stdout.trim()), this.#repositoryRoot)) throw new GitSafetyError();
       const gitDirectory = await this.#resolvedGitDirectory();
       const markerPath = join(gitDirectory, RECOVERY_MARKER);
-      const marker = parseRecoveryMarker(await readFileAsync(markerPath, "utf8"));
+      let marker = parseRecoveryMarker(await readFileAsync(markerPath, "utf8"));
+      this.#recoveryMarker = marker;
       const status = await this.#statusPorcelain();
       if (status.stdout !== "") throw new GitSafetyError();
       const origin = await this.#git(["remote", "get-url", "origin"]);
       if (!APPROVED_ORIGINS.has(origin.stdout.trim())) throw new GitSafetyError();
       await this.#git(["fetch", "origin", "main"]);
       const head = (await this.#git(["rev-parse", "HEAD"])).stdout.trim();
-      const parent = (await this.#git(["rev-parse", "HEAD^"])).stdout.trim();
-      const originMain = (await this.#git(["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
-      if (head !== marker.commit || parent !== originMain) throw new GitSafetyError();
+      assertObjectId(head);
+      const commitInstalled = head === marker.newCommit;
+      if (!commitInstalled && head !== marker.oldCommit) throw new GitSafetyError();
+      if (commitInstalled) {
+        const parent = (await this.#git(["rev-parse", "HEAD^"])).stdout.trim();
+        if (parent !== marker.oldCommit) throw new GitSafetyError();
+      }
 
-      let cleanupFailed = false;
-      if (marker.privateIndex) {
-        try {
-          const privatePath = join(gitDirectory, marker.privateIndex.name);
-          assertExactChild(privatePath, gitDirectory, marker.privateIndex.name);
-          const stat = await lstatIfPresent(privatePath);
-          if (stat) {
-            assertRecoveryIdentity(stat, marker.privateIndex);
-            await this.#privateIndexOperations.removeDirectory(privatePath);
-          }
-          if (this.#privateIndex?.name === marker.privateIndex.name) this.#privateIndex = undefined;
-        } catch {
-          cleanupFailed = true;
-        }
+      const gitParent = await describeRecoveryParent(gitDirectory);
+      const privateName = marker.privateIndex?.name;
+      marker = await this.#settleRecoveryArtifact(marker, "privateIndex", gitParent, true);
+      if (privateName && this.#privateIndex?.name === privateName) this.#privateIndex = undefined;
+      const outputParent = await resolveRecoveryOutputParent(this.#repositoryRoot, outputDir);
+      marker = await this.#settleRecoveryArtifact(
+        marker,
+        "publicationBackup",
+        outputParent,
+        commitInstalled,
+      );
+
+      const originMain = (await this.#git(["rev-parse", "refs/remotes/origin/main"])).stdout.trim();
+      assertObjectId(originMain);
+      if (!commitInstalled) {
+        if (originMain !== marker.oldCommit) throw new GitSafetyError();
+        await this.#removeRecoveryMarker();
+        return;
       }
-      if (marker.publicationBackup) {
-        try {
-          const outputParent = resolve(dirname(outputDir));
-          const backupPath = join(outputParent, marker.publicationBackup.name);
-          assertExactChild(backupPath, outputParent, marker.publicationBackup.name);
-          const stat = await lstatIfPresent(backupPath);
-          if (stat) {
-            assertRecoveryIdentity(stat, marker.publicationBackup);
-            await rmAsync(backupPath, { recursive: true, force: false });
-          }
-        } catch {
-          cleanupFailed = true;
-        }
+      if (originMain === marker.oldCommit) {
+        await this.pushMain();
+      } else if (originMain !== marker.newCommit) {
+        throw new GitSafetyError();
       }
-      if (cleanupFailed) throw new GitSafetyError();
-      await this.pushMain();
-      await unlinkAsync(markerPath);
+      await this.#removeRecoveryMarker();
     } catch {
       throw new Error("Unable to recover card snapshot");
     }
@@ -352,6 +406,119 @@ export class GitClient {
     return resolved;
   }
 
+  async #createRecoveryMarker(
+    oldCommit: string,
+    newCommit: string,
+    options: SnapshotCommitRecoveryOptions,
+  ): Promise<RecoveryMarker> {
+    const privateIndex = this.#privateIndex;
+    if (!privateIndex) throw new GitSafetyError();
+    const gitDirectory = await this.#resolvedGitDirectory();
+    const gitParent = await describeRecoveryParent(gitDirectory);
+    assertExactChild(privateIndex.root, gitParent.path, privateIndex.name);
+    const privateArtifact = await describeRecoveryArtifact(
+      privateIndex.name,
+      `stsdle-snapshot-recovery-quarantine-${randomUUID()}`,
+      privateIndex.root,
+      gitParent,
+    );
+    const publicationBackupName = options.publicationBackupName ?? null;
+    let publicationBackup: RecoveryArtifact | null = null;
+    if (publicationBackupName !== null) {
+      if (!/^\.snapshot-data\.backup-[0-9a-f-]{36}$/.test(publicationBackupName)) throw new GitSafetyError();
+      const outputParent = await resolveRecoveryOutputParent(
+        this.#repositoryRoot,
+        options.outputDir ?? join(this.#repositoryRoot, SNAPSHOT_PATH),
+      );
+      publicationBackup = await describeRecoveryArtifact(
+        publicationBackupName,
+        `.snapshot-data.recovery-quarantine-${randomUUID()}`,
+        join(outputParent.path, publicationBackupName),
+        outputParent,
+      );
+    }
+    return { version: 2, oldCommit, newCommit, privateIndex: privateArtifact, publicationBackup };
+  }
+
+  async #publishRecoveryMarker(marker: RecoveryMarker, replace: boolean): Promise<void> {
+    const gitDirectory = await this.#resolvedGitDirectory();
+    const parent = await describeRecoveryParent(gitDirectory);
+    await writeRecoveryMarkerAtomically(parent, marker, replace);
+  }
+
+  async #assertRecoveryArtifactsOwned(marker: RecoveryMarker, outputDir?: string): Promise<void> {
+    const gitParent = await describeRecoveryParent(await this.#resolvedGitDirectory());
+    if (marker.privateIndex) await assertRecoveryArtifactOwned(marker.privateIndex, gitParent);
+    if (marker.publicationBackup) {
+      const outputParent = await resolveRecoveryOutputParent(
+        this.#repositoryRoot,
+        outputDir ?? join(this.#repositoryRoot, SNAPSHOT_PATH),
+      );
+      await assertRecoveryArtifactOwned(marker.publicationBackup, outputParent);
+    }
+  }
+
+  async #recordPrivateIndexClean(): Promise<void> {
+    if (!this.#recoveryMarker || this.#recoveryMarker.privateIndex === null) return;
+    this.#recoveryMarker = { ...this.#recoveryMarker, privateIndex: null };
+    await this.#publishRecoveryMarker(this.#recoveryMarker, true);
+  }
+
+  async #settleRecoveryArtifact(
+    marker: RecoveryMarker,
+    key: "privateIndex" | "publicationBackup",
+    parent: RecoveryParent,
+    mayRemove: boolean,
+  ): Promise<RecoveryMarker> {
+    const artifact = marker[key];
+    if (!artifact) return marker;
+    const sourcePath = join(parent.path, artifact.name);
+    const quarantinePath = join(parent.path, artifact.quarantineName);
+    assertExactChild(sourcePath, parent.path, artifact.name);
+    assertExactChild(quarantinePath, parent.path, artifact.quarantineName);
+    await revalidateRecoveryParent(parent);
+    const source = await lstatIfPresent(sourcePath);
+    const quarantine = await lstatIfPresent(quarantinePath);
+    if (!mayRemove && (source || quarantine)) throw new GitSafetyError();
+    if (source && quarantine) throw new GitSafetyError();
+    if (mayRemove && source) {
+      assertRecoveryIdentity(source, artifact);
+      await this.#recoveryOperations.beforeQuarantine(sourcePath);
+      await revalidateRecoveryParent(parent);
+      const currentSource = await lstatAsync(sourcePath);
+      assertRecoveryIdentity(currentSource, artifact);
+      if (await lstatIfPresent(quarantinePath)) throw new GitSafetyError();
+      await this.#recoveryOperations.renameDirectory(sourcePath, quarantinePath);
+      if (await lstatIfPresent(sourcePath)) throw new GitSafetyError();
+      assertRecoveryIdentity(await lstatAsync(quarantinePath), artifact);
+    } else if (quarantine) {
+      assertRecoveryIdentity(quarantine, artifact);
+    }
+    if (mayRemove && (source || quarantine)) {
+      await revalidateRecoveryParent(parent);
+      assertRecoveryIdentity(await lstatAsync(quarantinePath), artifact);
+      await this.#recoveryOperations.removeDirectory(quarantinePath);
+      if (await lstatIfPresent(quarantinePath)) throw new GitSafetyError();
+    }
+    const updated = { ...marker, [key]: null } as RecoveryMarker;
+    this.#recoveryMarker = updated;
+    await this.#publishRecoveryMarker(updated, true);
+    return updated;
+  }
+
+  async #removeRecoveryMarker(): Promise<void> {
+    const gitDirectory = await this.#resolvedGitDirectory();
+    const parent = await describeRecoveryParent(gitDirectory);
+    const markerPath = join(parent.path, RECOVERY_MARKER);
+    assertExactChild(markerPath, parent.path, RECOVERY_MARKER);
+    await revalidateRecoveryParent(parent);
+    const markerStat = await lstatAsync(markerPath);
+    if (!markerStat.isFile() || markerStat.isSymbolicLink()) throw new GitSafetyError();
+    await this.#recoveryOperations.unlinkMarker(markerPath);
+    await syncDirectoryIfSupported(parent.path);
+    this.#recoveryMarker = undefined;
+  }
+
   async #assertNoRecoveryMarker(): Promise<void> {
     const gitDirectory = await this.#resolvedGitDirectory();
     try {
@@ -371,6 +538,13 @@ const defaultPrivateIndexOperations: PrivateIndexOperations = {
     setTimeout(resolveWait, milliseconds);
   }),
   monotonicNow: () => performance.now(),
+};
+
+const defaultRecoveryOperations: RecoveryOperations = {
+  beforeQuarantine: async () => undefined,
+  renameDirectory: renameAsync,
+  removeDirectory: async (path) => rmAsync(path, { recursive: true, force: false }),
+  unlinkMarker: unlinkAsync,
 };
 
 function isTransientRemovalFailure(error: unknown): boolean {
@@ -417,7 +591,15 @@ export function createBoundedProcessRunner(
     dependencies.terminationTimeoutMs,
     TERMINATION_TIMEOUT_MS,
   );
-  const taskkill = dependencies.taskkill ?? ((pid: number) => runTaskkill(pid, terminationTimeoutMs));
+  let taskkill: (pid: number) => Promise<boolean>;
+  if (dependencies.taskkill) {
+    taskkill = dependencies.taskkill;
+  } else if (process.platform === "win32") {
+    const taskkillExecutable = resolveTaskkillExecutable();
+    taskkill = (pid: number) => runTaskkill(pid, terminationTimeoutMs, taskkillExecutable);
+  } else {
+    taskkill = async () => false;
+  }
   return async (command, args, options) => {
   const timeoutMs = positiveLimit(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const maxOutputBytes = positiveLimit(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
@@ -668,11 +850,11 @@ async function requestSupervisorSelfTermination(
   return externalSucceeded && closeObserved();
 }
 
-async function runTaskkill(pid: number, timeoutMs: number): Promise<boolean> {
+async function runTaskkill(pid: number, timeoutMs: number, executable: string): Promise<boolean> {
   return new Promise<boolean>((resolveTaskkill) => {
     let taskkill;
     try {
-      taskkill = spawn(resolveTaskkillExecutable(), ["/PID", String(pid), "/T", "/F"], {
+      taskkill = spawn(executable, ["/PID", String(pid), "/T", "/F"], {
         shell: false,
         stdio: "ignore",
         windowsHide: true,
@@ -739,14 +921,23 @@ function remainingMilliseconds(deadline: number): number {
 }
 
 function resolveTaskkillExecutable(): string {
-  const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
-  if (!isAbsolute(windowsRoot)) throw new BoundedProcessError();
-  const executable = realpathSync(join(windowsRoot, "System32", "taskkill.exe"));
-  if (
-    basename(executable).toLocaleLowerCase("en-US") !== "taskkill.exe" ||
-    !lstatSync(executable).isFile()
-  ) throw new BoundedProcessError();
-  return executable;
+  try {
+    const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
+    if (!isAbsolute(windowsRoot)) throw new BoundedProcessError();
+    const systemDirectory = realpathSync(join(windowsRoot, "System32"));
+    if (!samePath(systemDirectory, resolve(windowsRoot, "System32")) || !lstatSync(systemDirectory).isDirectory()) {
+      throw new BoundedProcessError();
+    }
+    const executable = realpathSync(join(systemDirectory, "taskkill.exe"));
+    if (
+      dirname(executable) !== systemDirectory ||
+      basename(executable).toLocaleLowerCase("en-US") !== "taskkill.exe" ||
+      !lstatSync(executable).isFile()
+    ) throw new BoundedProcessError();
+    return executable;
+  } catch {
+    throw new BoundedProcessError();
+  }
 }
 
 async function settlesWithin(promise: Promise<unknown>, milliseconds: number): Promise<boolean> {
@@ -773,14 +964,23 @@ async function createPrivateIndex(repositoryRoot: string, gitDirectory: string):
 }
 
 interface RecoveryMarker {
-  version: 1;
-  commit: string;
+  version: 2;
+  oldCommit: string;
+  newCommit: string;
   privateIndex: RecoveryArtifact | null;
   publicationBackup: RecoveryArtifact | null;
 }
 
 interface RecoveryArtifact {
   name: string;
+  quarantineName: string;
+  dev: string;
+  ino: string;
+  birthtimeMs: string;
+}
+
+interface RecoveryParent {
+  path: string;
   dev: string;
   ino: string;
   birthtimeMs: string;
@@ -791,32 +991,171 @@ function parseRecoveryMarker(raw: string): RecoveryMarker {
   if (typeof value !== "object" || value === null) throw new GitSafetyError();
   const marker = value as Partial<RecoveryMarker>;
   if (
-    marker.version !== 1 || typeof marker.commit !== "string" || !/^[a-f0-9]{40,64}$/.test(marker.commit) ||
-    !isRecoveryArtifact(marker.privateIndex, /^stsdle-snapshot-index-[A-Za-z0-9_-]+$/) ||
-    !isRecoveryArtifact(marker.publicationBackup, /^\.snapshot-data\.backup-[0-9a-f-]{36}$/)
+    marker.version !== 2 || typeof marker.oldCommit !== "string" || !/^[a-f0-9]{40,64}$/.test(marker.oldCommit) ||
+    typeof marker.newCommit !== "string" || !/^[a-f0-9]{40,64}$/.test(marker.newCommit) ||
+    !isRecoveryArtifact(
+      marker.privateIndex,
+      /^stsdle-snapshot-index-[A-Za-z0-9_-]+$/,
+      /^stsdle-snapshot-recovery-quarantine-[0-9a-f-]{36}$/,
+    ) ||
+    !isRecoveryArtifact(
+      marker.publicationBackup,
+      /^\.snapshot-data\.backup-[0-9a-f-]{36}$/,
+      /^\.snapshot-data\.recovery-quarantine-[0-9a-f-]{36}$/,
+    )
   ) throw new GitSafetyError();
   return marker as RecoveryMarker;
 }
 
-function isRecoveryArtifact(value: unknown, namePattern: RegExp): value is RecoveryArtifact | null {
+function isRecoveryArtifact(
+  value: unknown,
+  namePattern: RegExp,
+  quarantineNamePattern: RegExp,
+): value is RecoveryArtifact | null {
   if (value === null) return true;
   if (typeof value !== "object" || value === null) return false;
   const artifact = value as Partial<RecoveryArtifact>;
   return typeof artifact.name === "string" && namePattern.test(artifact.name) &&
+    typeof artifact.quarantineName === "string" && quarantineNamePattern.test(artifact.quarantineName) &&
     typeof artifact.dev === "string" && /^\d+$/.test(artifact.dev) &&
     typeof artifact.ino === "string" && /^\d+$/.test(artifact.ino) &&
     typeof artifact.birthtimeMs === "string" && /^\d+(?:\.\d+)?$/.test(artifact.birthtimeMs);
 }
 
-async function describeRecoveryArtifact(name: string, path: string): Promise<RecoveryArtifact> {
+async function describeRecoveryArtifact(
+  name: string,
+  quarantineName: string,
+  path: string,
+  parent: RecoveryParent,
+): Promise<RecoveryArtifact> {
+  assertExactChild(path, parent.path, name);
+  assertExactChild(join(parent.path, quarantineName), parent.path, quarantineName);
+  await revalidateRecoveryParent(parent);
   const stat = await lstatAsync(path);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new GitSafetyError();
   return {
     name,
+    quarantineName,
     dev: String(stat.dev),
     ino: String(stat.ino),
     birthtimeMs: String(stat.birthtimeMs),
   };
+}
+
+async function describeRecoveryParent(path: string): Promise<RecoveryParent> {
+  const resolved = await realpathAsync(path);
+  if (!samePath(resolved, resolve(path))) throw new GitSafetyError();
+  const stat = await lstatAsync(resolved);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new GitSafetyError();
+  return {
+    path: resolved,
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    birthtimeMs: String(stat.birthtimeMs),
+  };
+}
+
+async function resolveRecoveryOutputParent(repositoryRoot: string, outputDir: string): Promise<RecoveryParent> {
+  const expectedOutput = resolve(repositoryRoot, SNAPSHOT_PATH);
+  if (!samePath(resolve(outputDir), expectedOutput)) throw new GitSafetyError();
+  return describeRecoveryParent(dirname(expectedOutput));
+}
+
+async function revalidateRecoveryParent(parent: RecoveryParent): Promise<void> {
+  const stat = await lstatAsync(parent.path);
+  if (
+    !stat.isDirectory() || stat.isSymbolicLink() ||
+    String(stat.dev) !== parent.dev || String(stat.ino) !== parent.ino ||
+    String(stat.birthtimeMs) !== parent.birthtimeMs ||
+    !samePath(await realpathAsync(parent.path), parent.path)
+  ) throw new GitSafetyError();
+}
+
+async function assertRecoveryArtifactOwned(
+  artifact: RecoveryArtifact,
+  parent: RecoveryParent,
+): Promise<void> {
+  const path = join(parent.path, artifact.name);
+  assertExactChild(path, parent.path, artifact.name);
+  assertExactChild(join(parent.path, artifact.quarantineName), parent.path, artifact.quarantineName);
+  await revalidateRecoveryParent(parent);
+  assertRecoveryIdentity(await lstatAsync(path), artifact);
+}
+
+async function writeRecoveryMarkerAtomically(
+  parent: RecoveryParent,
+  marker: RecoveryMarker,
+  replaceExisting: boolean,
+): Promise<void> {
+  const markerPath = join(parent.path, RECOVERY_MARKER);
+  const temporaryName = `.${RECOVERY_MARKER}.tmp-${randomUUID()}`;
+  const temporaryPath = join(parent.path, temporaryName);
+  assertExactChild(markerPath, parent.path, RECOVERY_MARKER);
+  assertExactChild(temporaryPath, parent.path, temporaryName);
+  await revalidateRecoveryParent(parent);
+  const existing = await lstatIfPresent(markerPath);
+  if (replaceExisting) {
+    if (!existing?.isFile() || existing.isSymbolicLink()) throw new GitSafetyError();
+    const current = parseRecoveryMarker(await readFileAsync(markerPath, "utf8"));
+    if (current.oldCommit !== marker.oldCommit || current.newCommit !== marker.newCommit) {
+      throw new GitSafetyError();
+    }
+  } else if (existing) {
+    throw new GitSafetyError();
+  }
+
+  let handle: Awaited<ReturnType<typeof openAsync>> | undefined;
+  let temporaryIdentity: RecoveryParent | undefined;
+  try {
+    handle = await openAsync(temporaryPath, "wx", 0o600);
+    await handle.writeFile(`${JSON.stringify(marker)}\n`, { encoding: "utf8" });
+    await handle.sync();
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new GitSafetyError();
+    temporaryIdentity = {
+      path: temporaryPath,
+      dev: String(stat.dev),
+      ino: String(stat.ino),
+      birthtimeMs: String(stat.birthtimeMs),
+    };
+    await handle.close();
+    handle = undefined;
+    await revalidateRecoveryParent(parent);
+    const current = await lstatIfPresent(markerPath);
+    if (!replaceExisting && current) throw new GitSafetyError();
+    if (replaceExisting && (!current?.isFile() || current.isSymbolicLink())) throw new GitSafetyError();
+    await renameAsync(temporaryPath, markerPath);
+    const published = await lstatAsync(markerPath);
+    if (
+      !published.isFile() || published.isSymbolicLink() ||
+      String(published.dev) !== temporaryIdentity.dev || String(published.ino) !== temporaryIdentity.ino ||
+      String(published.birthtimeMs) !== temporaryIdentity.birthtimeMs
+    ) throw new GitSafetyError();
+    await syncDirectoryIfSupported(parent.path);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await unlinkAsync(temporaryPath).catch(() => undefined);
+  }
+}
+
+async function syncDirectoryIfSupported(path: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof openAsync>> | undefined;
+  try {
+    handle = await openAsync(path, "r");
+    await handle.sync();
+  } catch (error: unknown) {
+    if (!isUnsupportedDirectorySync(error)) throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+function isUnsupportedDirectorySync(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "EISDIR" || error.code === "EINVAL" || error.code === "ENOTSUP" ||
+    error.code === "EBADF" || (process.platform === "win32" && (
+      error.code === "EPERM" || error.code === "EACCES"
+    ));
 }
 
 function assertRecoveryIdentity(

@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -282,6 +282,78 @@ describe("GitClient", () => {
     expect((await git(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("unrelated.txt");
   }, 15_000);
 
+  it("durably publishes strict recovery metadata before installing the snapshot commit", async () => {
+    const repository = await createGitRepository();
+    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+    await git(repository, ["add", ".gitignore"]);
+    await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
+    const oldHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
+    const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
+    const outputDir = join(repository, "deploy", "snapshot-data");
+    await mkdir(join(repository, "deploy", backupName));
+    let markerAtRefUpdate: unknown;
+    const observingRunner: ArgumentArrayRunner = async (command, args, options) => {
+      if (args[0] === "update-ref") {
+        markerAtRefUpdate = JSON.parse(await readFile(
+          join(repository, ".git", "stsdle-snapshot-recovery.json"),
+          "utf8",
+        ));
+      }
+      return runBoundedProcess(command, args, options);
+    };
+    const client = new GitClient(repository, observingRunner);
+    await writeFile(join(outputDir, "active.json"), "new snapshot\n");
+    await client.assertOnlySnapshotChanges();
+
+    await client.commitSnapshot("b".repeat(64), { publicationBackupName: backupName, outputDir });
+
+    const newHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
+    expect(markerAtRefUpdate).toMatchObject({
+      version: 2,
+      oldCommit: oldHead,
+      newCommit: newHead,
+      privateIndex: {
+        name: expect.stringMatching(/^stsdle-snapshot-index-/),
+        quarantineName: expect.stringMatching(/^stsdle-snapshot-recovery-quarantine-/),
+      },
+      publicationBackup: {
+        name: backupName,
+        quarantineName: expect.stringMatching(/^\.snapshot-data\.recovery-quarantine-/),
+      },
+    });
+    expect(JSON.stringify(markerAtRefUpdate)).not.toContain(repository);
+    expect(JSON.parse(await readFile(
+      join(repository, ".git", "stsdle-snapshot-recovery.json"),
+      "utf8",
+    ))).toMatchObject({ privateIndex: null, publicationBackup: { name: backupName } });
+  }, 20_000);
+
+  it("does not move HEAD or overwrite recovery state when marker publication cannot begin", async () => {
+    const repository = await createGitRepository();
+    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+    await git(repository, ["add", ".gitignore"]);
+    await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
+    const oldHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
+    const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
+    const outputDir = join(repository, "deploy", "snapshot-data");
+    await mkdir(join(repository, "deploy", backupName));
+    const markerPath = join(repository, ".git", "stsdle-snapshot-recovery.json");
+    const existingMarker = "unrelated recovery owner\n";
+    await writeFile(markerPath, existingMarker, { flag: "wx" });
+    const client = new GitClient(repository, runBoundedProcess);
+    await writeFile(join(outputDir, "active.json"), "new snapshot\n");
+    await client.assertOnlySnapshotChanges();
+
+    const error = await captureError(client.commitSnapshot("b".repeat(64), {
+      publicationBackupName: backupName,
+      outputDir,
+    }));
+
+    expect(stringifyErrorChain(error)).toBe("Unable to commit card snapshot");
+    expect((await git(repository, ["rev-parse", "HEAD"])).trim()).toBe(oldHead);
+    expect(await readFile(markerPath, "utf8")).toBe(existingMarker);
+  }, 20_000);
+
   it("durably recovers an owned private index and publication backup before pushing", async () => {
     const repository = await createGitRepository();
     await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
@@ -317,15 +389,14 @@ describe("GitClient", () => {
         monotonicNow: () => clock,
       },
     });
-    await writeFile(join(repository, "deploy", "snapshot-data", "active.json"), "recovery snapshot\n");
-    await client.assertOnlySnapshotChanges();
-    await expect(client.commitSnapshot("b".repeat(64)))
-      .rejects.toThrow("Card snapshot committed but private index cleanup failed");
     const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
     const backupPath = join(repository, "deploy", backupName);
     await mkdir(backupPath);
-
-    await client.writeRecoveryMarker(backupName);
+    const outputDir = join(repository, "deploy", "snapshot-data");
+    await writeFile(join(outputDir, "active.json"), "recovery snapshot\n");
+    await client.assertOnlySnapshotChanges();
+    await expect(client.commitSnapshot("b".repeat(64), { publicationBackupName: backupName, outputDir }))
+      .rejects.toThrow("Card snapshot committed but private index cleanup failed");
 
     const markerPath = join(repository, ".git", "stsdle-snapshot-recovery.json");
     const marker = await readFile(markerPath, "utf8");
@@ -340,6 +411,119 @@ describe("GitClient", () => {
     await expect(readFile(join(backupPath, "anything"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(pushed).toBe(true);
   }, 20_000);
+
+  it("retries idempotently when push succeeds but recovery-marker unlink fails", async () => {
+    const repository = await createGitRepository();
+    const backupName = ".snapshot-data.backup-10000000-0000-4000-8000-000000000000";
+    let originMain = await prepareRecoveryCommit(repository, backupName);
+    let privateCleanupBlocked = true;
+    let markerUnlinkBlocked = true;
+    let pushes = 0;
+    let clock = 0;
+    const client = new GitClient({
+      repositoryRoot: repository,
+      runner: recoveryRunner(repository, () => originMain, async () => {
+        pushes += 1;
+        originMain = (await git(repository, ["rev-parse", "HEAD"])).trim();
+      }),
+      privateIndexOperations: {
+        removeDirectory: async (path) => {
+          if (privateCleanupBlocked) throw Object.assign(new Error("blocked"), { code: "EBUSY" });
+          await rm(path, { recursive: true, force: true });
+        },
+        wait: async () => { clock += 100; },
+        monotonicNow: () => clock,
+      },
+      recoveryOperations: {
+        unlinkMarker: async (path) => {
+          if (markerUnlinkBlocked) {
+            markerUnlinkBlocked = false;
+            throw Object.assign(new Error("blocked"), { code: "EBUSY" });
+          }
+          await unlink(path);
+        },
+      },
+    });
+    await stageRecoveryCommit(client, repository, backupName);
+    privateCleanupBlocked = false;
+
+    await expect(client.recoverSnapshot()).rejects.toThrow("Unable to recover card snapshot");
+
+    const markerPath = join(repository, ".git", "stsdle-snapshot-recovery.json");
+    expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({
+      privateIndex: null,
+      publicationBackup: null,
+    });
+    expect(pushes).toBe(1);
+    await client.recoverSnapshot();
+    expect(pushes).toBe(1);
+    await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  }, 30_000);
+
+  it("cleans all owned local artifacts before reporting unrelated remote advancement", async () => {
+    const repository = await createGitRepository();
+    const backupName = ".snapshot-data.backup-20000000-0000-4000-8000-000000000000";
+    await prepareRecoveryCommit(repository, backupName);
+    let privateCleanupBlocked = true;
+    let clock = 0;
+    let pushed = false;
+    const client = new GitClient({
+      repositoryRoot: repository,
+      runner: recoveryRunner(repository, () => "e".repeat(40), async () => { pushed = true; }),
+      privateIndexOperations: {
+        removeDirectory: async (path) => {
+          if (privateCleanupBlocked) throw Object.assign(new Error("blocked"), { code: "EBUSY" });
+          await rm(path, { recursive: true, force: true });
+        },
+        wait: async () => { clock += 100; },
+        monotonicNow: () => clock,
+      },
+    });
+    await stageRecoveryCommit(client, repository, backupName);
+    privateCleanupBlocked = false;
+
+    await expect(client.recoverSnapshot()).rejects.toThrow("Unable to recover card snapshot");
+
+    expect(await privateIndexDirectories(repository)).toEqual([]);
+    await expect(readFile(join(repository, "deploy", backupName, "sentinel"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(
+      join(repository, ".git", "stsdle-snapshot-recovery.json"),
+      "utf8",
+    ))).toMatchObject({ privateIndex: null, publicationBackup: null });
+    expect(pushed).toBe(false);
+  }, 30_000);
+
+  it("fails closed without moving a replacement that appears before quarantine", async () => {
+    const repository = await createGitRepository();
+    const backupName = ".snapshot-data.backup-30000000-0000-4000-8000-000000000000";
+    const originMain = await prepareRecoveryCommit(repository, backupName);
+    const external = await makeTemporaryRoot();
+    const externalSentinel = join(external, "external-sentinel.txt");
+    await writeFile(externalSentinel, "external data\n");
+    const backupPath = join(repository, "deploy", backupName);
+    const preservedPath = `${backupPath}-preserved`;
+    let replaced = false;
+    const client = new GitClient({
+      repositoryRoot: repository,
+      runner: recoveryRunner(repository, () => originMain, async () => undefined),
+      recoveryOperations: {
+        beforeQuarantine: async (path) => {
+          if (replaced || path !== backupPath) return;
+          replaced = true;
+          await rename(backupPath, preservedPath);
+          await symlink(external, backupPath, "junction");
+        },
+      },
+    });
+    await stageRecoveryCommit(client, repository, backupName, false);
+
+    await expect(client.recoverSnapshot()).rejects.toThrow("Unable to recover card snapshot");
+
+    expect(await readFile(externalSentinel, "utf8")).toBe("external data\n");
+    expect(await readFile(join(preservedPath, "sentinel"), "utf8")).toBe("owned backup\n");
+    expect(await readFile(join(backupPath, "external-sentinel.txt"), "utf8")).toBe("external data\n");
+  }, 30_000);
 
   it("returns a fixed typed push error without preserving credential-bearing causes", async () => {
     const runner = new RecordingRunner();
@@ -356,6 +540,21 @@ describe("GitClient", () => {
 });
 
 describe("runBoundedProcess", () => {
+  it.runIf(process.platform === "win32")(
+    "refuses to launch when the exact System32 taskkill executable is unavailable",
+    async () => {
+      const fakeWindowsRoot = await makeTemporaryRoot();
+      const originalSystemRoot = process.env.SystemRoot;
+      process.env.SystemRoot = fakeWindowsRoot;
+      try {
+        expect(() => createBoundedProcessRunner()).toThrow("Child process failed");
+      } finally {
+        if (originalSystemRoot === undefined) delete process.env.SystemRoot;
+        else process.env.SystemRoot = originalSystemRoot;
+      }
+    },
+  );
+
   it("rejects a supervisor that exits successfully without an authenticated result", async () => {
     const root = await makeTemporaryRoot();
     const supervisorPath = join(
@@ -534,6 +733,55 @@ async function createGitRepository(): Promise<string> {
   await git(root, ["add", "-A"]);
   await git(root, ["commit", "-m", "initial"]);
   return root;
+}
+
+async function prepareRecoveryCommit(repository: string, backupName: string): Promise<string> {
+  void backupName;
+  await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+  await git(repository, ["add", ".gitignore"]);
+  await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
+  return (await git(repository, ["rev-parse", "HEAD"])).trim();
+}
+
+async function stageRecoveryCommit(
+  client: GitClient,
+  repository: string,
+  backupName: string,
+  expectPrivateCleanupFailure = true,
+): Promise<void> {
+  const outputDir = join(repository, "deploy", "snapshot-data");
+  const backupPath = join(repository, "deploy", backupName);
+  await mkdir(backupPath);
+  await writeFile(join(backupPath, "sentinel"), "owned backup\n");
+  await writeFile(join(outputDir, "active.json"), "recovery snapshot\n");
+  await client.assertOnlySnapshotChanges();
+  const commit = client.commitSnapshot("b".repeat(64), { publicationBackupName: backupName, outputDir });
+  if (expectPrivateCleanupFailure) {
+    await expect(commit).rejects.toThrow("Card snapshot committed but private index cleanup failed");
+  } else {
+    await commit;
+  }
+}
+
+function recoveryRunner(
+  repository: string,
+  originMain: () => string,
+  push: () => Promise<void>,
+): ArgumentArrayRunner {
+  return async (command, args, options) => {
+    if (key(args) === key(["remote", "get-url", "origin"])) {
+      return { stdout: `${EXPECTED_ORIGIN}\n`, stderr: "" };
+    }
+    if (key(args) === key(["fetch", "origin", "main"])) return { stdout: "", stderr: "" };
+    if (key(args) === key(["rev-parse", "refs/remotes/origin/main"])) {
+      return { stdout: `${originMain()}\n`, stderr: "" };
+    }
+    if (key(args) === key(["push", "origin", "HEAD:main"])) {
+      await push();
+      return { stdout: "", stderr: "" };
+    }
+    return runBoundedProcess(command, args, { ...options, cwd: repository });
+  };
 }
 
 async function privateIndexDirectories(repository: string): Promise<string[]> {
