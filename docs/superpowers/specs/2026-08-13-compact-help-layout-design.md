@@ -26,7 +26,7 @@ The modal uses short icon-led rows grouped into six always-expanded sections. It
 
 ### Result Colors
 
-- Green swatch: both base and upgraded values match.
+- Green swatch: both base and upgraded features match.
 - Yellow swatch: exactly one version matches.
 - Red swatch: neither version matches.
 
@@ -108,4 +108,3 @@ Use test-driven development for every behavior change.
 - Orb-tray tests preserve accessible inventory behavior and assert shared centering hooks.
 - Browser tests measure the help button, modal containment, centered hint/toggles, and matching orb/well centers at 390, 768, and 1440 pixel viewports.
 - Existing drag, keyboard orb, candidate search, persistence, Daily, Hardcore, Practice, and sharing tests remain green.
-
