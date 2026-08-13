@@ -2,13 +2,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp, type CreateAppOptions } from "./app.js";
 import { loadConfig, type ServerConfig } from "./config.js";
-import { FallbackRenderer } from "./images/fallback-renderer.js";
-import { SpireCodexClient } from "./spire-codex/client.js";
-import {
-  buildSnapshot,
-  type ActivatedSnapshot,
-  type BuildSnapshotDependencies,
-} from "./sync/build-snapshot.js";
+import type { ActivatedSnapshot } from "./sync/build-snapshot.js";
 import {
   SnapshotStore,
   type ActiveSnapshot,
@@ -18,6 +12,11 @@ import { loadActivatedSnapshot } from "./sync/validate-snapshot.js";
 import type { SnapshotValidationOptions } from "./sync/validate-snapshot.js";
 
 type Environment = Record<string, string | undefined>;
+
+export type ProductionSync = (
+  config: ServerConfig,
+  store: SnapshotStore,
+) => Promise<ActivatedSnapshot>;
 
 export interface ActiveSnapshotStore {
   loadActive(): Promise<ActiveSnapshot | null>;
@@ -39,6 +38,7 @@ export interface MainDependencies {
   clientRoot?: string;
   store?: ActiveSnapshotStore;
   sync?: (config: ServerConfig, store: ActiveSnapshotStore) => Promise<ActivatedSnapshot>;
+  loadProductionSync?: () => Promise<ProductionSync>;
   loadActivatedSnapshot?: (
     snapshotPath: string,
     options: SnapshotValidationOptions,
@@ -49,9 +49,8 @@ export interface MainDependencies {
 export async function main(dependencies: MainDependencies = {}): Promise<MainApp> {
   const config = loadConfig(dependencies.env ?? process.env);
   const store = dependencies.store ?? new SnapshotStore(config.dataDir);
-  const sync = dependencies.sync ?? (async (activeConfig) => buildSnapshot(
-    createProductionDependencies(activeConfig, store as SnapshotStore),
-  ));
+  const loadSync = dependencies.loadProductionSync ?? (async () =>
+    (await import("./sync/production-sync.js")).buildProductionSnapshot);
   const loadPrior = dependencies.loadActivatedSnapshot ?? loadActivatedSnapshot;
   const makeApp = dependencies.createApp ?? createApp;
   let active: ActivatedSnapshot;
@@ -63,7 +62,14 @@ export async function main(dependencies: MainDependencies = {}): Promise<MainApp
     active = await loadPrior(prior.path, validationOptions(config));
   } else {
     try {
-      active = await sync(config, store);
+      if (dependencies.sync) {
+        active = await dependencies.sync(config, store);
+      } else {
+        if (!(store instanceof SnapshotStore)) {
+          throw new Error("Default synchronization requires SnapshotStore");
+        }
+        active = await (await loadSync())(config, store);
+      }
     } catch (refreshError: unknown) {
       refreshErrorName = refreshError instanceof Error ? refreshError.name : "UnknownError";
       const prior = await store.loadActive();
@@ -129,31 +135,6 @@ export async function main(dependencies: MainDependencies = {}): Promise<MainApp
 
 function validationOptions(config: ServerConfig): SnapshotValidationOptions {
   return {
-    allowedArtworkOrigins: config.artworkAllowedOrigins,
-    allowedFullCardOrigins: config.fullCardAllowedOrigins,
-  };
-}
-
-export function createProductionDependencies(
-  config: ServerConfig,
-  store: SnapshotStore,
-): BuildSnapshotDependencies {
-  const client = new SpireCodexClient({
-    baseUrl: config.spireCodexBaseUrl,
-    requestTimeoutMs: config.requestTimeoutMs,
-  });
-  return {
-    client,
-    store,
-    baseUrl: config.spireCodexBaseUrl,
-    fetchImpl: globalThis.fetch,
-    fallbackRenderer: new FallbackRenderer({
-      portraitBaseUrl: config.spireCodexBaseUrl,
-      allowedPortraitOrigins: config.artworkAllowedOrigins,
-      requestTimeoutMs: config.requestTimeoutMs,
-    }),
-    requestTimeoutMs: config.requestTimeoutMs,
-    artworkConcurrency: config.artworkConcurrency,
     allowedArtworkOrigins: config.artworkAllowedOrigins,
     allowedFullCardOrigins: config.fullCardAllowedOrigins,
   };

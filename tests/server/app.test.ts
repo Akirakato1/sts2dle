@@ -39,7 +39,7 @@ async function createStaticRoots(): Promise<{ root: string; clientRoot: string; 
   return { root, clientRoot, snapshotRoot };
 }
 
-function active(path: string): ActivatedSnapshot {
+function active(path: string, buildId = "prior-build"): ActivatedSnapshot {
   const report: SnapshotAcceptanceReport = {
     cardCount: 0,
     upgradeCount: 0,
@@ -53,7 +53,7 @@ function active(path: string): ActivatedSnapshot {
     guessSprite: { width: 1, height: 1, bytes: 1 },
   };
   return {
-    buildId: "prior-build",
+    buildId,
     path,
     manifest: {
       schemaVersion: 1,
@@ -340,30 +340,38 @@ describe("main", () => {
     expect(JSON.stringify(error.mock.calls)).not.toContain("MAD_SCIENCE");
   });
 
-  it("performs exactly one successful synchronization before listening", async () => {
+  it("loads and runs the production synchronizer once before creating and listening with the app", async () => {
     const events: string[] = [];
     const roots = await createStaticRoots();
+    const store = new SnapshotStore(join(roots.root, "data"));
+    const staging = await store.createStaging("prebuilt");
+    const snapshot = active(await staging.activate(), staging.buildId);
     const listen = vi.fn(async () => {
       events.push("listen");
       return "http://127.0.0.1:3000";
     });
-    const sync = vi.fn(async () => {
-      events.push("sync");
-      return active(roots.snapshotRoot);
+    const synchronize = vi.fn(async () => {
+      events.push("synchronize");
+      return snapshot;
+    });
+    const loadProductionSync = vi.fn(async () => {
+      events.push("loadProductionSync");
+      return synchronize;
     });
 
     await main({
-      env: { STSDLE_DATA_DIR: roots.snapshotRoot },
-      store: { loadActive: vi.fn(async () => null) },
-      sync,
+      env: { STSDLE_DATA_DIR: join(roots.root, "data") },
+      store,
+      loadProductionSync,
       createApp: vi.fn(async () => {
         events.push("createApp");
-        return { listen };
+        return { listen, addHook: vi.fn() };
       }),
     });
 
-    expect(sync).toHaveBeenCalledTimes(1);
-    expect(events).toEqual(["sync", "createApp", "listen"]);
+    expect(loadProductionSync).toHaveBeenCalledOnce();
+    expect(synchronize).toHaveBeenCalledOnce();
+    expect(events).toEqual(["loadProductionSync", "synchronize", "createApp", "listen"]);
   });
 
   it("closes before releasing a failed-startup lease and preserves cleanup failures", async () => {
