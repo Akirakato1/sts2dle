@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_p
 import { randomUUID } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import {
+  link as linkAsync,
   lstat as lstatAsync,
   mkdtemp as mkdtempAsync,
   open as openAsync,
@@ -91,6 +92,7 @@ interface PrivateIndexOperations {
   monotonicNow(): number;
 }
 interface RecoveryOperations {
+  beforeMarkerPublish(path: string): Promise<void>;
   beforeQuarantine(path: string): Promise<void>;
   renameDirectory(from: string, to: string): Promise<void>;
   removeDirectory(path: string): Promise<void>;
@@ -443,7 +445,7 @@ export class GitClient {
   async #publishRecoveryMarker(marker: RecoveryMarker, replace: boolean): Promise<void> {
     const gitDirectory = await this.#resolvedGitDirectory();
     const parent = await describeRecoveryParent(gitDirectory);
-    await writeRecoveryMarkerAtomically(parent, marker, replace);
+    await writeRecoveryMarkerAtomically(parent, marker, replace, this.#recoveryOperations);
   }
 
   async #assertRecoveryArtifactsOwned(marker: RecoveryMarker, outputDir?: string): Promise<void> {
@@ -541,6 +543,7 @@ const defaultPrivateIndexOperations: PrivateIndexOperations = {
 };
 
 const defaultRecoveryOperations: RecoveryOperations = {
+  beforeMarkerPublish: async () => undefined,
   beforeQuarantine: async () => undefined,
   renameDirectory: renameAsync,
   removeDirectory: async (path) => rmAsync(path, { recursive: true, force: false }),
@@ -1086,6 +1089,7 @@ async function writeRecoveryMarkerAtomically(
   parent: RecoveryParent,
   marker: RecoveryMarker,
   replaceExisting: boolean,
+  operations: Pick<RecoveryOperations, "beforeMarkerPublish">,
 ): Promise<void> {
   const markerPath = join(parent.path, RECOVERY_MARKER);
   const temporaryName = `.${RECOVERY_MARKER}.tmp-${randomUUID()}`;
@@ -1106,6 +1110,7 @@ async function writeRecoveryMarkerAtomically(
 
   let handle: Awaited<ReturnType<typeof openAsync>> | undefined;
   let temporaryIdentity: RecoveryParent | undefined;
+  let markerPublishedByThisCall = false;
   try {
     handle = await openAsync(temporaryPath, "wx", 0o600);
     await handle.writeFile(`${JSON.stringify(marker)}\n`, { encoding: "utf8" });
@@ -1124,18 +1129,61 @@ async function writeRecoveryMarkerAtomically(
     const current = await lstatIfPresent(markerPath);
     if (!replaceExisting && current) throw new GitSafetyError();
     if (replaceExisting && (!current?.isFile() || current.isSymbolicLink())) throw new GitSafetyError();
-    await renameAsync(temporaryPath, markerPath);
+    if (replaceExisting) {
+      await renameAsync(temporaryPath, markerPath);
+    } else {
+      await operations.beforeMarkerPublish(markerPath);
+      await revalidateRecoveryParent(parent);
+      await linkAsync(temporaryPath, markerPath);
+      markerPublishedByThisCall = true;
+    }
     const published = await lstatAsync(markerPath);
     if (
       !published.isFile() || published.isSymbolicLink() ||
       String(published.dev) !== temporaryIdentity.dev || String(published.ino) !== temporaryIdentity.ino ||
       String(published.birthtimeMs) !== temporaryIdentity.birthtimeMs
     ) throw new GitSafetyError();
+    await syncFile(markerPath);
     await syncDirectoryIfSupported(parent.path);
+    if (!replaceExisting) {
+      await unlinkAsync(temporaryPath);
+      await syncDirectoryIfSupported(parent.path);
+    }
+  } catch (error: unknown) {
+    if (markerPublishedByThisCall && temporaryIdentity) {
+      try {
+        const published = await lstatAsync(markerPath);
+        if (sameRecoveryIdentity(published, temporaryIdentity)) {
+          await unlinkAsync(markerPath);
+          await syncDirectoryIfSupported(parent.path);
+        }
+      } catch {
+        // Never remove a path whose identity is not the marker published by this call.
+      }
+    }
+    throw error;
   } finally {
     await handle?.close().catch(() => undefined);
     await unlinkAsync(temporaryPath).catch(() => undefined);
   }
+}
+
+async function syncFile(path: string): Promise<void> {
+  const handle = await openAsync(path, "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function sameRecoveryIdentity(
+  stat: Awaited<ReturnType<typeof lstatAsync>>,
+  identity: RecoveryParent,
+): boolean {
+  return stat.isFile() && !stat.isSymbolicLink() &&
+    String(stat.dev) === identity.dev && String(stat.ino) === identity.ino &&
+    String(stat.birthtimeMs) === identity.birthtimeMs;
 }
 
 async function syncDirectoryIfSupported(path: string): Promise<void> {

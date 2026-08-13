@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -352,6 +352,48 @@ describe("GitClient", () => {
     expect(stringifyErrorChain(error)).toBe("Unable to commit card snapshot");
     expect((await git(repository, ["rev-parse", "HEAD"])).trim()).toBe(oldHead);
     expect(await readFile(markerPath, "utf8")).toBe(existingMarker);
+  }, 20_000);
+
+  it("preserves a concurrent marker winner created after the absence check", async () => {
+    const repository = await createGitRepository();
+    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+    await git(repository, ["add", ".gitignore"]);
+    await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
+    const oldHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
+    const outputDir = join(repository, "deploy", "snapshot-data");
+    const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
+    await mkdir(join(repository, "deploy", backupName));
+    const markerPath = join(repository, ".git", "stsdle-snapshot-recovery.json");
+    const winnerBytes = "concurrent recovery owner\n";
+    let winnerIdentity: { dev: bigint; ino: bigint; birthtimeMs: number } | undefined;
+    const client = new GitClient({
+      repositoryRoot: repository,
+      runner: runBoundedProcess,
+      recoveryOperations: {
+        beforeMarkerPublish: async (path) => {
+          expect(path).toBe(markerPath);
+          await writeFile(path, winnerBytes, { flag: "wx" });
+          const stat = await lstat(path, { bigint: true });
+          winnerIdentity = { dev: stat.dev, ino: stat.ino, birthtimeMs: Number(stat.birthtimeMs) };
+        },
+      },
+    });
+    await writeFile(join(outputDir, "active.json"), "new snapshot\n");
+    await client.assertOnlySnapshotChanges();
+
+    const error = await captureError(client.commitSnapshot("b".repeat(64), {
+      publicationBackupName: backupName,
+      outputDir,
+    }));
+
+    const surviving = await lstat(markerPath, { bigint: true });
+    expect(stringifyErrorChain(error)).toBe("Unable to commit card snapshot");
+    expect((await git(repository, ["rev-parse", "HEAD"])).trim()).toBe(oldHead);
+    expect(await readFile(markerPath, "utf8")).toBe(winnerBytes);
+    expect({ dev: surviving.dev, ino: surviving.ino, birthtimeMs: Number(surviving.birthtimeMs) })
+      .toEqual(winnerIdentity);
+    expect((await readdir(join(repository, ".git")))
+      .filter((name) => name.startsWith(".stsdle-snapshot-recovery.json.tmp-"))).toEqual([]);
   }, 20_000);
 
   it("durably recovers an owned private index and publication backup before pushing", async () => {
