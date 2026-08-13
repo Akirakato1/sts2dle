@@ -36,22 +36,25 @@ export function resolveBuildOutput(repositoryRoot: string, args: readonly string
 
 export async function runBuildCli(
   args: readonly string[],
-  dependencies: BuildCliDependencies = defaultCliDependencies(),
+  dependencies?: BuildCliDependencies,
 ): Promise<number> {
+  let resolvedDependencies: BuildCliDependencies;
   let outputDir: string;
   try {
-    outputDir = resolveBuildOutput(dependencies.repositoryRoot, args);
+    resolvedDependencies = dependencies ?? defaultCliDependencies();
+    outputDir = resolveBuildOutput(resolvedDependencies.repositoryRoot, args);
   } catch {
-    dependencies.writeError("Invalid snapshot build output");
-    dependencies.writeError("Card snapshot build failed");
+    const writeError = dependencies?.writeError ?? ((line: string) => console.error(line));
+    writeError("Invalid snapshot build output");
+    writeError("Card snapshot build failed");
     return 1;
   }
   try {
-    await dependencies.build({ outputDir });
-    dependencies.writeOutput("Card snapshot bundle built");
+    await resolvedDependencies.build({ outputDir });
+    resolvedDependencies.writeOutput("Card snapshot bundle built");
     return 0;
   } catch {
-    dependencies.writeError("Card snapshot build failed");
+    resolvedDependencies.writeError("Card snapshot build failed");
     return 1;
   }
 }

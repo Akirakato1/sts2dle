@@ -16,14 +16,13 @@ import {
 } from "./deployment-bundle.js";
 import {
   GitClient,
+  resolveNpmCliPath,
   runBoundedProcess,
+  runNpmCheck,
   type ArgumentArrayRunner,
 } from "./git-client.js";
 
 const BUILD_TEMP_PREFIX = "stsdle-snapshot-release-";
-const CHECK_TIMEOUT_MS = 15 * 60 * 1000;
-const CHECK_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
-
 export interface TemporarySnapshotBundle {
   active: ActiveSnapshot;
   dataDir: string;
@@ -42,7 +41,7 @@ export interface SnapshotBuildDependencies {
 }
 
 export interface ReleaseSnapshotDependencies extends SnapshotBuildDependencies {
-  gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "commitSnapshot" | "pushMain">;
+  gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "rollbackSnapshotIndex" | "commitSnapshot" | "pushMain">;
   readCommittedRevision(): Promise<string | null>;
   runChecks(): Promise<void>;
   outputDir?: string;
@@ -63,6 +62,7 @@ export interface DefaultReleaseDependenciesOptions {
   outputDir?: string;
   config?: ServerConfig;
   runner?: ArgumentArrayRunner;
+  npmCliPath?: string;
 }
 
 export class SnapshotPushError extends Error {
@@ -116,7 +116,7 @@ export async function releaseSnapshot(
         await dependencies.gitClient.commitSnapshot(fetched.sourceRevision);
         committed = true;
       } catch {
-        await rollbackIgnoringPayload(published);
+        await rollbackPreCommitIgnoringPayload(published, dependencies.gitClient);
         throw new SnapshotReleaseError();
       }
 
@@ -148,9 +148,7 @@ export async function releaseSnapshot(
 export async function buildSnapshotBundle(
   options: BuildSnapshotBundleOptions,
 ): Promise<ActiveSnapshot> {
-  const dependencies = options.dependencies ?? createDefaultSnapshotBuildDependencies(
-    options.config ?? loadConfig(process.env),
-  );
+  let dependencies: SnapshotBuildDependencies | undefined;
   let temporary: TemporarySnapshotBundle | undefined;
   let published: PublishedBundle | undefined;
   let finalized = false;
@@ -158,6 +156,9 @@ export async function buildSnapshotBundle(
   let failure: unknown;
 
   try {
+    dependencies = options.dependencies ?? createDefaultSnapshotBuildDependencies(
+      options.config ?? loadConfig(process.env),
+    );
     const fetched = await dependencies.fetchCards();
     temporary = await dependencies.buildTemporarySnapshot(fetched);
     await dependencies.validateTemporarySnapshot(temporary.active);
@@ -195,6 +196,7 @@ export function createReleaseSnapshotDependencies(
   const config = options.config ?? loadConfig(process.env);
   const outputDir = options.outputDir ?? join(options.repositoryRoot, "deploy", "snapshot-data");
   const runner = options.runner ?? runBoundedProcess;
+  const npmCliPath = options.npmCliPath ?? resolveNpmCliPath(process.env);
   const buildDependencies = createDefaultSnapshotBuildDependencies(config);
   return {
     ...buildDependencies,
@@ -202,11 +204,7 @@ export function createReleaseSnapshotDependencies(
     outputDir,
     readCommittedRevision: () => readDeploymentRevision(outputDir),
     runChecks: async () => {
-      await runner(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "check"], {
-        cwd: options.repositoryRoot,
-        timeoutMs: CHECK_TIMEOUT_MS,
-        maxOutputBytes: CHECK_OUTPUT_LIMIT_BYTES,
-      });
+      await runNpmCheck(options.repositoryRoot, npmCliPath, runner);
     },
   };
 }
@@ -264,10 +262,12 @@ function createDefaultSnapshotBuildDependencies(config: ServerConfig): SnapshotB
   };
 }
 
-async function rollbackIgnoringPayload(published: PublishedBundle): Promise<void> {
-  try {
-    await published.rollback();
-  } catch {
-    throw new SnapshotReleaseError();
-  }
+async function rollbackPreCommitIgnoringPayload(
+  published: PublishedBundle,
+  gitClient: Pick<GitClient, "rollbackSnapshotIndex">,
+): Promise<void> {
+  let failed = false;
+  try { await published.rollback(); } catch { failed = true; }
+  try { await gitClient.rollbackSnapshotIndex(); } catch { failed = true; }
+  if (failed) throw new SnapshotReleaseError();
 }

@@ -4,12 +4,21 @@ import type { ActiveSnapshot } from "../../src/server/sync/snapshot-store.js";
 import type { PublishedBundle } from "../../src/server/release/deployment-bundle.js";
 import {
   buildSnapshotBundle,
+  createReleaseSnapshotDependencies,
   releaseSnapshot,
   SnapshotPushError,
   type ReleaseSnapshotDependencies,
   type SnapshotBuildDependencies,
   type TemporarySnapshotBundle,
 } from "../../src/server/release/release-snapshot.js";
+import type { ServerConfig } from "../../src/server/config.js";
+import { resolveNpmCliPath } from "../../src/server/release/git-client.js";
+import { GitClient, runBoundedProcess } from "../../src/server/release/git-client.js";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   parseReleaseOptions,
   runReleaseCli,
@@ -29,6 +38,7 @@ const PUBLISHED_ACTIVE: ActiveSnapshot = {
   buildId: TEMP_ACTIVE.buildId,
   path: "C:\\repository\\deploy\\snapshot-data\\snapshots\\new-build",
 };
+const execFileAsync = promisify(execFile);
 
 describe("releaseSnapshot", () => {
   it("runs the guarded release workflow in the required order", async () => {
@@ -105,6 +115,8 @@ describe("releaseSnapshot", () => {
 
       expect(harness.rollback).toHaveBeenCalledOnce();
       expect(harness.rollbackSettled).toBe(true);
+      expect(harness.indexRollback).toHaveBeenCalledOnce();
+      expect(harness.indexRollbackSettled).toBe(true);
       expect(harness.destination).toBe("head-snapshot");
       expect(harness.events).not.toContain("push");
     },
@@ -148,6 +160,78 @@ describe("releaseSnapshot", () => {
     expect(chain).toBe("Card snapshot release failed");
     expect(chain).not.toContain(secret);
     expect(chain).not.toContain(fakeRoot);
+  });
+
+  it("awaits index restoration even when publication rollback fails", async () => {
+    const harness = createReleaseHarness({ failAt: "scope-check", failRollback: true });
+
+    const error = await captureError(releaseSnapshot({}, harness.dependencies));
+
+    expect(stringifyErrorChain(error)).toBe("Card snapshot release failed");
+    expect(harness.indexRollback).toHaveBeenCalledOnce();
+    expect(harness.indexRollbackSettled).toBe(true);
+  });
+
+  it("launches checks as Node plus the explicit npm CLI JavaScript path", async () => {
+    const calls: Array<[string, readonly string[]]> = [];
+    const npmCliPath = resolveNpmCliPath(process.env);
+    const dependencies = createReleaseSnapshotDependencies({
+      repositoryRoot: "C:\\repository",
+      config: validConfig(),
+      npmCliPath,
+      runner: async (command, args) => {
+        calls.push([command, args]);
+        return { stdout: "", stderr: "" };
+      },
+    });
+
+    await dependencies.runChecks();
+
+    expect(calls).toEqual([[process.execPath, [npmCliPath, "run", "check"]]]);
+  });
+
+  it("restores a real repository publication and index together after commit failure", async () => {
+    const repository = await createRealGitRepository();
+    try {
+      const realGit = new GitClient(repository, runBoundedProcess);
+      const snapshot = join(repository, "deploy", "snapshot-data", "active.json");
+      const dependencies: ReleaseSnapshotDependencies = {
+        gitClient: {
+          assertReady: async () => undefined,
+          assertOnlySnapshotChanges: () => realGit.assertOnlySnapshotChanges(),
+          rollbackSnapshotIndex: () => realGit.rollbackSnapshotIndex(),
+          commitSnapshot: async () => { throw new Error("private commit failure"); },
+          pushMain: () => realGit.pushMain(),
+        },
+        readCommittedRevision: async () => CURRENT_REVISION,
+        fetchCards: async () => fetchedCards(),
+        runChecks: async () => undefined,
+        buildTemporarySnapshot: async () => ({
+          active: TEMP_ACTIVE,
+          dataDir: "temporary",
+          cleanup: async () => undefined,
+        }),
+        validateTemporarySnapshot: async () => undefined,
+        publishTemporarySnapshot: async () => {
+          await writeFile(snapshot, "published snapshot\n");
+          return {
+            active: PUBLISHED_ACTIVE,
+            finalize: async () => undefined,
+            rollback: async () => { await writeFile(snapshot, "old snapshot\n"); },
+          };
+        },
+        validatePublishedSnapshot: async () => undefined,
+        outputDir: join(repository, "deploy", "snapshot-data"),
+      };
+
+      await expect(releaseSnapshot({}, dependencies)).rejects.toThrow("Card snapshot release failed");
+
+      expect((await realGitCommand(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("");
+      expect((await realGitCommand(repository, ["diff", "--", "deploy/snapshot-data"])).trim()).toBe("");
+      expect(await readFile(snapshot, "utf8")).toBe("old snapshot\n");
+    } finally {
+      await rm(repository, { recursive: true, force: true });
+    }
   });
 });
 
@@ -241,6 +325,22 @@ describe("buildSnapshotBundle", () => {
     expect(stringifyErrorChain(error)).toBe("Card snapshot build failed");
     expect(cleanupSettled).toBe(true);
   });
+
+  it("sanitizes failures while constructing default dependencies", async () => {
+    const secret = "ssh://fake-user:fake-password@example.invalid/C:\\private\\token";
+    const config = validConfig();
+    Object.defineProperty(config, "spireCodexBaseUrl", {
+      get() { throw new Error(secret); },
+    });
+
+    const error = await captureError(buildSnapshotBundle({
+      outputDir: "C:\\repository\\deploy\\snapshot-data",
+      config,
+    }));
+
+    expect(stringifyErrorChain(error)).toBe("Card snapshot build failed");
+    expect(stringifyErrorChain(error)).not.toContain(secret);
+  });
 });
 
 describe("snapshot release CLI", () => {
@@ -311,6 +411,19 @@ describe("snapshot release CLI", () => {
     expect(createDependencies).not.toHaveBeenCalled();
     expect(errors).toEqual(["Unknown snapshot release option", "Card snapshot release failed"]);
   });
+
+  it("prints fixed output when default release CLI construction throws a secret", async () => {
+    const secret = "ssh://fake-user:fake-password@example.invalid/C:\\private\\token";
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => { throw new Error(secret); });
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await runReleaseCli([])).toBe(1);
+      expect(stderr.mock.calls.flat().join("\n")).not.toContain(secret);
+    } finally {
+      cwd.mockRestore();
+      stderr.mockRestore();
+    }
+  });
 });
 
 describe("snapshot build CLI", () => {
@@ -345,12 +458,26 @@ describe("snapshot build CLI", () => {
     expect(output).toEqual(["Card snapshot bundle built"]);
     expect(errors).toEqual([]);
   });
+
+  it("prints fixed output when default build CLI construction throws a secret", async () => {
+    const secret = "ssh://fake-user:fake-password@example.invalid/C:\\private\\token";
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => { throw new Error(secret); });
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await runBuildCli(["--output", "deploy/snapshot-data"])).toBe(1);
+      expect(stderr.mock.calls.flat().join("\n")).not.toContain(secret);
+    } finally {
+      cwd.mockRestore();
+      stderr.mockRestore();
+    }
+  });
 });
 
 interface HarnessOptions {
   committedRevision?: string | null;
   failAt?: string;
   failure?: Error;
+  failRollback?: boolean;
 }
 
 function createReleaseHarness(options: HarnessOptions = {}) {
@@ -359,6 +486,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
   let destination = "head-snapshot";
   let publicationRestored = false;
   let rollbackSettled = false;
+  let indexRollbackSettled = false;
   let cleanupSettled = false;
   let commitCreated = false;
   let finalized = false;
@@ -374,8 +502,13 @@ function createReleaseHarness(options: HarnessOptions = {}) {
   });
   const rollback = vi.fn(async () => {
     await Promise.resolve();
+    if (options.failRollback) throw failure;
     destination = "head-snapshot";
     rollbackSettled = true;
+  });
+  const indexRollback = vi.fn(async () => {
+    await Promise.resolve();
+    indexRollbackSettled = true;
   });
   const finalize = vi.fn(async () => {
     await Promise.resolve();
@@ -398,6 +531,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
         fail("commit");
         commitCreated = true;
       },
+      rollbackSnapshotIndex: indexRollback,
       pushMain: async () => {
         events.push("push");
         finalizedBeforePush = finalized;
@@ -438,15 +572,48 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     fetchCards,
     finalize,
     rollback,
+    indexRollback,
     cleanup,
     get destination() { return destination; },
     get publicationRestored() { return publicationRestored; },
     get rollbackSettled() { return rollbackSettled; },
+    get indexRollbackSettled() { return indexRollbackSettled; },
     get cleanupSettled() { return cleanupSettled; },
     get commitCreated() { return commitCreated; },
     get finalizedBeforePush() { return finalizedBeforePush; },
     get fetchedByBuilder() { return fetchedByBuilder; },
   };
+}
+
+function validConfig(): ServerConfig {
+  return {
+    host: "127.0.0.1",
+    port: 3000,
+    dataDir: "./var",
+    spireCodexBaseUrl: "https://spire-codex.com",
+    requestTimeoutMs: 30_000,
+    artworkConcurrency: 1,
+    artworkAllowedOrigins: ["https://spire-codex.com"],
+    fullCardAllowedOrigins: ["https://spire-codex.com"],
+    skipSync: false,
+  };
+}
+
+async function createRealGitRepository(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "stsdle-release-orchestration-"));
+  await realGitCommand(root, ["init"]);
+  await realGitCommand(root, ["config", "user.name", "Snapshot Test"]);
+  await realGitCommand(root, ["config", "user.email", "snapshot@example.invalid"]);
+  await mkdir(join(root, "deploy", "snapshot-data"), { recursive: true });
+  await writeFile(join(root, "deploy", "snapshot-data", "active.json"), "old snapshot\n");
+  await realGitCommand(root, ["add", "-A"]);
+  await realGitCommand(root, ["commit", "-m", "initial"]);
+  return root;
+}
+
+async function realGitCommand(cwd: string, args: readonly string[]): Promise<string> {
+  const result = await execFileAsync("git", [...args], { cwd, windowsHide: true });
+  return result.stdout;
 }
 
 function fetchedCards(): FetchedCards {

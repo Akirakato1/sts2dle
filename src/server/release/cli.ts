@@ -24,32 +24,35 @@ export function parseReleaseOptions(args: readonly string[]): ReleaseSnapshotOpt
 
 export async function runReleaseCli(
   args: readonly string[],
-  dependencies: ReleaseCliDependencies = defaultCliDependencies(),
+  dependencies?: ReleaseCliDependencies,
 ): Promise<number> {
+  let resolvedDependencies: ReleaseCliDependencies;
   let options: ReleaseSnapshotOptions;
   try {
+    resolvedDependencies = dependencies ?? defaultCliDependencies();
     options = parseReleaseOptions(args);
   } catch {
-    dependencies.writeError("Unknown snapshot release option");
-    dependencies.writeError("Card snapshot release failed");
+    const writeError = dependencies?.writeError ?? ((line: string) => console.error(line));
+    writeError("Unknown snapshot release option");
+    writeError("Card snapshot release failed");
     return 1;
   }
 
   try {
-    const result = await dependencies.release(
+    const result = await resolvedDependencies.release(
       options,
-      dependencies.createDependencies(dependencies.repositoryRoot),
+      resolvedDependencies.createDependencies(resolvedDependencies.repositoryRoot),
     );
-    dependencies.writeOutput(
+    resolvedDependencies.writeOutput(
       result.status === "unchanged"
         ? "Card snapshot is already current"
         : "Card snapshot committed and pushed to main",
     );
     return 0;
   } catch (error: unknown) {
-    dependencies.writeError("Card snapshot release failed");
+    resolvedDependencies.writeError("Card snapshot release failed");
     if (error instanceof SnapshotPushError) {
-      dependencies.writeError("Retry: git push origin HEAD:main");
+      resolvedDependencies.writeError("Retry: git push origin HEAD:main");
     }
     return 1;
   }
