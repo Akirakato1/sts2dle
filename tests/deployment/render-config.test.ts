@@ -70,4 +70,12 @@ describe("Render deployment configuration", () => {
     expect(ignore).toContain("var");
     expect(ignore).not.toContain("vendor");
   });
+
+  test("documents the one-click Blueprint deployment and persistent-disk requirement", async () => {
+    const readme = await readRoot("README.md");
+    for (const required of [
+      "Deploy to Render", "New → Blueprint", "Akirakato1/sts2dle",
+      "persistent disk", "/health", "STSDLE_SKIP_SYNC=0", "main",
+    ]) expect(readme).toContain(required);
+  });
 });

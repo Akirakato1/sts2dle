@@ -90,6 +90,16 @@ The server stores and serves the candidate/guess artwork atlases plus exceptiona
 
 Daily selection uses the UTC date and the active content revision. A restart with the same revision preserves that UTC day's answer and stored progress. If the stable source changes during the same UTC day, the revision changes and the browser starts the new revision-scoped Daily instead of mixing old guesses with new card data. Practice rounds are random and never write Daily round storage or expose sharing.
 
+## Deploy to Render
+
+1. Sign in to Render and select **New → Blueprint**.
+2. Connect GitHub, then choose `Akirakato1/sts2dle` on the `main` branch.
+3. Confirm the paid Starter service and its 1 GB persistent disk before deploying.
+4. Wait for the first synchronization to finish before `/health` becomes ready, then use the generated HTTPS URL.
+5. Later pushes to `main` deploy automatically.
+
+Keep `STSDLE_SKIP_SYNC=0` so each normal deployment refreshes the synchronized card snapshot. If a refresh fails, the service can recover by revalidating its prior active snapshot; without a valid snapshot, it fails closed. Size the persistent disk for two complete snapshots plus one in-progress staging snapshot, and add another complete snapshot for each concurrently live service retaining an older activation.
+
 ## Attribution
 
 Card data and hosted image references come from [Spire Codex](https://spire-codex.com); its [API terms](https://github.com/ptrlrd/spire-codex/blob/main/API_TERMS.md) apply. Slay the Spire 2 and its game data/artwork belong to [Mega Crit](https://www.megacrit.com/) and their respective rights holders. The exceptional-card renderer is derived from the MIT-licensed [Slay the Spire 2 Card Maker](https://github.com/WanderZil/Slay-the-Spire-2-Card-Maker). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the complete renderer, asset, font, and fan-project notices.
