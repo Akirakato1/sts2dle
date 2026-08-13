@@ -933,14 +933,34 @@ test("Daily and Practice complete the full paired-card experience without leakin
   );
   await expect(attribution).toContainText(/unofficial fan project/i);
   await expect(attribution).toContainText(/not affiliated with or endorsed by Mega Crit/i);
+  const helpTrigger = page.getByRole("button", { name: "How to play" });
   await expect(page.getByText("Both base and upgraded features match", { exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "How to play" }).click();
+  await helpTrigger.click();
   const help = page.getByRole("dialog", { name: "How to play" });
   await expect(help).toBeVisible();
+  for (const heading of ["Basics", "Result colors", "Keyword icons", "Orbs and filtering", "Name hints", "Modes"]) {
+    await expect(help.getByRole("heading", { name: heading })).toBeVisible();
+  }
   await expect(help.getByText("Both base and upgraded features match", { exact: true })).toBeVisible();
+  const closeHelp = help.getByRole("button", { name: "Close help" });
+  await expect(closeHelp).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(closeHelp).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(closeHelp).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(help).toBeHidden();
-  await expect(page.getByRole("button", { name: "How to play" })).toBeFocused();
+  await expect(helpTrigger).toBeFocused();
+
+  await helpTrigger.click();
+  await closeHelp.click();
+  await expect(help).toBeHidden();
+  await expect(helpTrigger).toBeFocused();
+
+  await helpTrigger.click();
+  await page.locator(".game-guide__backdrop").click({ position: { x: 4, y: 4 } });
+  await expect(help).toBeHidden();
+  await expect(helpTrigger).toBeFocused();
   const dailyTab = page.getByRole("button", { name: "Daily", exact: true });
   await expectAccessibleTarget(dailyTab);
   await page.keyboard.press("Tab");
@@ -1145,6 +1165,64 @@ for (const viewport of [
       expect(Math.abs(orb.well.x - orb.art.x)).toBeLessThanOrEqual(.5);
       expect(Math.abs(orb.well.y - orb.art.y)).toBeLessThanOrEqual(.5);
     }
+    const helpTrigger = page.locator(".game-guide__trigger");
+    const documentSizeBeforeHelp = await page.evaluate(() => ({
+      width: document.documentElement.scrollWidth,
+      height: document.documentElement.scrollHeight,
+    }));
+    const triggerGeometry = await helpTrigger.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const shellRect = document.querySelector(".app-shell")!.getBoundingClientRect();
+      const heroRect = document.querySelector(".hero")!.getBoundingClientRect();
+      return {
+        rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height },
+        shell: { left: shellRect.left, right: shellRect.right, width: shellRect.width },
+        heroTop: heroRect.top,
+        viewport: { width: document.documentElement.clientWidth, height: window.innerHeight },
+      };
+    });
+    expect(triggerGeometry.rect.width).toBeGreaterThanOrEqual(44);
+    expect(triggerGeometry.rect.height).toBeGreaterThanOrEqual(44);
+    expect(triggerGeometry.rect.left).toBeGreaterThanOrEqual(0);
+    expect(triggerGeometry.rect.top).toBeGreaterThanOrEqual(0);
+    expect(triggerGeometry.rect.right).toBeLessThanOrEqual(triggerGeometry.viewport.width);
+    expect(triggerGeometry.rect.bottom).toBeLessThanOrEqual(triggerGeometry.viewport.height);
+    expect(triggerGeometry.rect.left + triggerGeometry.rect.width / 2)
+      .toBeGreaterThan(triggerGeometry.shell.left + triggerGeometry.shell.width / 2);
+    expect(Math.abs(triggerGeometry.shell.right - triggerGeometry.rect.right)).toBeLessThanOrEqual(1);
+    expect(Math.abs(triggerGeometry.heroTop - triggerGeometry.rect.top)).toBeLessThanOrEqual(1);
+
+    await helpTrigger.click();
+    const help = page.getByRole("dialog", { name: "How to play" });
+    await expect(help).toBeVisible();
+    const modalGeometry = await help.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const root = document.documentElement;
+      return {
+        rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        pageClientWidth: root.clientWidth,
+        pageScrollWidth: root.scrollWidth,
+        pageScrollHeight: root.scrollHeight,
+        viewportHeight: window.innerHeight,
+      };
+    });
+    expect(modalGeometry.rect.left).toBeGreaterThanOrEqual(0);
+    expect(modalGeometry.rect.top).toBeGreaterThanOrEqual(0);
+    expect(modalGeometry.rect.right).toBeLessThanOrEqual(modalGeometry.pageClientWidth);
+    expect(modalGeometry.rect.bottom).toBeLessThanOrEqual(modalGeometry.viewportHeight);
+    expect(modalGeometry.scrollHeight).toBeGreaterThanOrEqual(modalGeometry.clientHeight);
+    expect(modalGeometry.overflowY).toBe("auto");
+    if (viewport.width === 390) {
+      expect(modalGeometry.scrollHeight).toBeGreaterThan(modalGeometry.clientHeight);
+    }
+    expect(modalGeometry.pageScrollWidth).toBeLessThanOrEqual(modalGeometry.pageClientWidth);
+    expect(modalGeometry.pageScrollWidth).toBe(documentSizeBeforeHelp.width);
+    expect(modalGeometry.pageScrollHeight).toBe(documentSizeBeforeHelp.height);
+    await help.getByRole("button", { name: "Close help" }).click();
+    await expect(help).toBeHidden();
     await page.getByRole("button", { name: "Reveal Orb, available" }).click();
     await openEmptySearch(page);
     await expect(page.locator(".card-search__options")).toBeVisible();
