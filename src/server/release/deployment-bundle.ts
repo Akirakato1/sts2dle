@@ -25,13 +25,15 @@ const PUBLISH_RETRY_DELAY_MS = 50;
 const MAX_RENAME_ATTEMPTS = Math.ceil(PUBLISH_TIMEOUT_MS / PUBLISH_RETRY_DELAY_MS) + 1;
 
 export interface PublishOperations {
+  beforeMutation?: () => Promise<void>;
   monotonicNow?: () => number;
+  removeDirectory?: (path: string) => Promise<void>;
   renameDirectory?: (from: string, to: string) => Promise<void>;
   wait?: (milliseconds: number) => Promise<void>;
   validatePublishedBundle?: (
     dataDir: string,
     options: SnapshotValidationOptions,
-  ) => Promise<ActiveSnapshot>;
+  ) => Promise<unknown>;
 }
 
 export interface PublishedBundle {
@@ -41,13 +43,15 @@ export interface PublishedBundle {
 }
 
 interface ResolvedPublishOperations {
+  beforeMutation(): Promise<void>;
   monotonicNow(): number;
+  removeDirectory(path: string): Promise<void>;
   renameDirectory(from: string, to: string): Promise<void>;
   wait(milliseconds: number): Promise<void>;
   validatePublishedBundle(
     dataDir: string,
     options: SnapshotValidationOptions,
-  ): Promise<ActiveSnapshot>;
+  ): Promise<unknown>;
 }
 
 interface DirectoryIdentity {
@@ -58,18 +62,43 @@ interface DirectoryIdentity {
 
 interface OwnedDirectory {
   path: string;
-  parent: string;
+  parent: OwnedParent;
   name: string;
   identity: DirectoryIdentity;
+}
+
+interface OwnedPathIdentity extends DirectoryIdentity {
+  path: string;
+}
+
+interface OwnedParent {
+  path: string;
+  ancestry: readonly OwnedPathIdentity[];
+}
+
+interface DirectChildTarget {
+  path: string;
+  parent: OwnedParent;
+  name: string;
+}
+
+interface RollbackState {
+  published: OwnedDirectory | null;
+  backup: OwnedDirectory | null;
+  quarantine: OwnedDirectory | null;
+  quarantineTarget: DirectChildTarget;
+  destinationTarget: DirectChildTarget;
 }
 
 class DeploymentBundleError extends Error {}
 
 const DEFAULT_PUBLISH_OPERATIONS: ResolvedPublishOperations = {
+  beforeMutation: async () => undefined,
   monotonicNow: () => performance.now(),
+  removeDirectory: async (path) => rm(path, { recursive: true, force: false, maxRetries: 0 }),
   renameDirectory: rename,
   wait: delay,
-  validatePublishedBundle: loadValidatedDeploymentBundle,
+  validatePublishedBundle: async () => undefined,
 };
 
 export async function readDeploymentRevision(dataDir: string): Promise<string | null> {
@@ -107,18 +136,12 @@ export async function stageDeploymentBundle(
     await loadActivatedSnapshot(sourceActive.path, options);
 
     const stagingTarget = await resolveNewDirectChild(stagingDir);
-    await mkdir(stagingTarget.path);
-    ownedStaging = await resolveOwnedDirectory(
-      stagingTarget.path,
-      stagingTarget.parent,
-      stagingTarget.name,
-    );
-    const snapshotsPath = join(ownedStaging.path, "snapshots");
-    assertExactDirectChild(snapshotsPath, ownedStaging.path, "snapshots");
-    await mkdir(snapshotsPath, { recursive: true });
-    const resolvedSnapshots = await resolveOwnedDirectory(snapshotsPath, ownedStaging.path, "snapshots");
+    ownedStaging = await createOwnedDirectory(stagingTarget);
+    const snapshotsTarget = createSiblingTarget(asOwnedParent(ownedStaging), "snapshots");
+    const resolvedSnapshots = await createOwnedDirectory(snapshotsTarget);
     const stagedSnapshotPath = join(resolvedSnapshots.path, sourceActive.buildId);
     assertExactDirectChild(stagedSnapshotPath, resolvedSnapshots.path, sourceActive.buildId);
+    await revalidateOwnedDirectory(resolvedSnapshots);
     await cp(sourceActive.path, stagedSnapshotPath, {
       recursive: true,
       errorOnExist: true,
@@ -127,6 +150,7 @@ export async function stageDeploymentBundle(
       verbatimSymlinks: true,
     });
     await assertTreeContainsNoLinks(stagedSnapshotPath);
+    await revalidateOwnedDirectory(ownedStaging);
     await writeFile(
       join(ownedStaging.path, "active.json"),
       `${JSON.stringify({ buildId: sourceActive.buildId })}\n`,
@@ -140,7 +164,7 @@ export async function stageDeploymentBundle(
   } catch (error: unknown) {
     if (ownedStaging) {
       try {
-        await removeOwnedDirectory(ownedStaging);
+        await removeOwnedDirectory(ownedStaging, DEFAULT_PUBLISH_OPERATIONS);
       } catch (cleanupError: unknown) {
         throw fixedError(
           "Unable to stage deployment bundle",
@@ -183,7 +207,7 @@ async function publishDeploymentBundle(
 ): Promise<PublishedBundle> {
   const destinationTarget = await resolveConfiguredDirectChild(destinationDir);
   const stagingTarget = await resolveConfiguredDirectChild(stagingDir);
-  if (!samePath(destinationTarget.parent, stagingTarget.parent)) {
+  if (!samePath(destinationTarget.parent.path, stagingTarget.parent.path)) {
     throw new Error("Deployment staging and destination directories must be siblings");
   }
   const staging = await resolveOwnedDirectory(
@@ -254,17 +278,19 @@ async function publishDeploymentBundle(
 
   let active: ActiveSnapshot;
   try {
-    active = await operations.validatePublishedBundle(destinationTarget.path, options);
+    active = await loadValidatedDeploymentBundle(destinationTarget.path, options);
+    await operations.validatePublishedBundle(destinationTarget.path, options);
+    active = await loadValidatedDeploymentBundle(destinationTarget.path, options);
     await assertPublishedActive(active, publishedDirectory, stagedActive.buildId);
   } catch (validationError: unknown) {
+    const recoveryState = createRollbackState(
+      publishedDirectory,
+      backup,
+      quarantineTarget,
+      destinationTarget,
+    );
     try {
-      await restorePublishedDirectory(
-        publishedDirectory,
-        backup,
-        quarantineTarget,
-        destinationTarget,
-        operations,
-      );
+      await resumeRollback(recoveryState, operations);
     } catch (restoreError: unknown) {
       throw fixedError(
         "Unable to restore previous deployment bundle",
@@ -278,44 +304,46 @@ async function publishDeploymentBundle(
 
   return createPublishedBundleTransaction(
     active,
-    publishedDirectory,
-    backup,
-    quarantineTarget,
-    destinationTarget,
+    createRollbackState(
+      publishedDirectory,
+      backup,
+      quarantineTarget,
+      destinationTarget,
+    ),
     operations,
   );
 }
 
 function createPublishedBundleTransaction(
   active: ActiveSnapshot,
-  publishedDirectory: OwnedDirectory,
-  backup: OwnedDirectory | null,
-  quarantineTarget: { path: string; parent: string; name: string },
-  destinationTarget: { path: string; parent: string; name: string },
+  rollbackState: RollbackState,
   operations: ResolvedPublishOperations,
 ): PublishedBundle {
+  let lifecycle: "active" | "finalized" | "rolled-back" = "active";
   let settlement: Promise<void> | undefined;
   const settle = (action: "finalize" | "rollback"): Promise<void> => {
-    settlement ??= (async () => {
+    if (lifecycle !== "active") return Promise.resolve();
+    if (settlement) return settlement;
+    settlement = (async () => {
       if (action === "finalize") {
-        if (backup) await removeOwnedDirectory(backup);
+        if (rollbackState.backup) {
+          await removeOwnedDirectory(rollbackState.backup, operations);
+          rollbackState.backup = null;
+        }
+        lifecycle = "finalized";
         return;
       }
-      await restorePublishedDirectory(
-        publishedDirectory,
-        backup,
-        quarantineTarget,
-        destinationTarget,
-        operations,
-      );
+      await resumeRollback(rollbackState, operations);
+      lifecycle = "rolled-back";
     })().catch((error: unknown) => {
-      if (error instanceof DeploymentBundleError) throw error;
       throw fixedError(
         action === "finalize"
           ? "Unable to finalize deployment bundle"
           : "Unable to roll back deployment bundle",
         error,
       );
+    }).finally(() => {
+      settlement = undefined;
     });
     return settlement;
   };
@@ -326,32 +354,51 @@ function createPublishedBundleTransaction(
   };
 }
 
-async function restorePublishedDirectory(
+function createRollbackState(
   publishedDirectory: OwnedDirectory,
   backup: OwnedDirectory | null,
-  quarantineTarget: { path: string; parent: string; name: string },
-  destinationTarget: { path: string; parent: string; name: string },
+  quarantineTarget: DirectChildTarget,
+  destinationTarget: DirectChildTarget,
+): RollbackState {
+  return {
+    published: publishedDirectory,
+    backup,
+    quarantine: null,
+    quarantineTarget,
+    destinationTarget,
+  };
+}
+
+async function resumeRollback(
+  state: RollbackState,
   operations: ResolvedPublishOperations,
 ): Promise<void> {
-  await assertPathMissing(quarantineTarget.path);
   const deadline = createDeadline(operations);
-  const quarantine = await renameOwnedDirectory(
-    publishedDirectory,
-    quarantineTarget,
-    operations,
-    deadline,
-    "Unable to restore previous deployment bundle",
-  );
-  if (backup) {
-    await renameOwnedDirectory(
-      backup,
-      destinationTarget,
+  if (state.published) {
+    if (!state.quarantine) await assertPathMissing(state.quarantineTarget.path);
+    state.quarantine = await renameOwnedDirectory(
+      state.published,
+      state.quarantineTarget,
       operations,
       deadline,
       "Unable to restore previous deployment bundle",
     );
+    state.published = null;
   }
-  await removeOwnedDirectory(quarantine);
+  if (state.backup) {
+    await renameOwnedDirectory(
+      state.backup,
+      state.destinationTarget,
+      operations,
+      deadline,
+      "Unable to restore previous deployment bundle",
+    );
+    state.backup = null;
+  }
+  if (state.quarantine) {
+    await removeOwnedDirectory(state.quarantine, operations);
+    state.quarantine = null;
+  }
 }
 
 async function loadValidatedDeploymentBundle(
@@ -372,12 +419,16 @@ async function loadSafeActiveSnapshot(dataDir: string): Promise<ActiveSnapshot |
   const store = new SnapshotStore(root.path);
   const active = await store.loadActive();
   if (!active) return null;
-  const snapshots = await resolveOwnedDirectory(join(root.path, "snapshots"), root.path, "snapshots");
+  const snapshots = await resolveOwnedDirectory(
+    join(root.path, "snapshots"),
+    asOwnedParent(root),
+    "snapshots",
+  );
   const pointer = await readStrictActivePointer(root.path);
   if (pointer.buildId !== active.buildId) throw new Error("Active snapshot pointer changed while loading");
   const resolvedActive = await resolveOwnedDirectory(
     join(snapshots.path, active.buildId),
-    snapshots.path,
+    asOwnedParent(snapshots),
     active.buildId,
   );
   if (!samePath(resolvedActive.path, active.path)) {
@@ -405,12 +456,12 @@ async function assertPublishedActive(
   if (active.buildId !== expectedBuildId) throw new Error("Published deployment build identity changed");
   const snapshots = await resolveOwnedDirectory(
     join(publishedDirectory.path, "snapshots"),
-    publishedDirectory.path,
+    asOwnedParent(publishedDirectory),
     "snapshots",
   );
   const expectedActive = await resolveOwnedDirectory(
     join(snapshots.path, expectedBuildId),
-    snapshots.path,
+    asOwnedParent(snapshots),
     expectedBuildId,
   );
   if (!samePath(expectedActive.path, active.path)) {
@@ -431,48 +482,35 @@ async function resolveOptionalRootDirectory(path: string): Promise<OwnedDirector
   }
   const resolvedPath = await realpath(path);
   if (!samePath(resolvedPath, path)) throw new Error("Deployment data directory is unsafe");
+  const parent = await resolveOwnedParent(dirname(resolvedPath));
   return {
     path: resolvedPath,
-    parent: dirname(resolvedPath),
+    parent,
     name: basename(resolvedPath),
     identity: identityOf(metadata),
   };
 }
 
-async function resolveConfiguredDirectChild(path: string): Promise<{
-  path: string;
-  parent: string;
-  name: string;
-}> {
+async function resolveConfiguredDirectChild(path: string): Promise<DirectChildTarget> {
   const configuredPath = resolve(path);
   const configuredParent = dirname(configuredPath);
-  const parentMetadata = await lstat(configuredParent);
-  if (parentMetadata.isSymbolicLink() || !parentMetadata.isDirectory()) {
-    throw new Error("Deployment parent directory is unsafe");
-  }
-  const resolvedParent = await realpath(configuredParent);
-  if (!samePath(configuredParent, resolvedParent)) {
-    throw new Error("Deployment parent directory is unsafe");
-  }
+  const parent = await resolveOwnedParent(configuredParent);
   const name = basename(configuredPath);
-  const resolvedPath = join(resolvedParent, name);
-  assertExactDirectChild(resolvedPath, resolvedParent, name);
-  return { path: resolvedPath, parent: resolvedParent, name };
+  const resolvedPath = join(parent.path, name);
+  assertExactDirectChild(resolvedPath, parent.path, name);
+  return { path: resolvedPath, parent, name };
 }
 
-async function resolveNewDirectChild(path: string): Promise<{
-  path: string;
-  parent: string;
-  name: string;
-}> {
+async function resolveNewDirectChild(path: string): Promise<DirectChildTarget> {
   const target = await resolveConfiguredDirectChild(path);
+  await revalidateOwnedParent(target.parent);
   await assertPathMissing(target.path);
   return target;
 }
 
 async function resolveOptionalOwnedDirectory(
   path: string,
-  parent: string,
+  parent: OwnedParent,
   name: string,
 ): Promise<OwnedDirectory | null> {
   try {
@@ -485,31 +523,83 @@ async function resolveOptionalOwnedDirectory(
 
 async function resolveOwnedDirectory(
   path: string,
-  parent: string,
+  parent: OwnedParent,
   name: string,
 ): Promise<OwnedDirectory> {
-  assertExactDirectChild(path, parent, name);
+  assertExactDirectChild(path, parent.path, name);
   const metadata = await lstat(path);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
     throw new Error("Deployment directory is unsafe");
   }
   const resolvedPath = await realpath(path);
-  if (!isExactDirectChild(resolvedPath, parent, name)) {
+  if (!isExactDirectChild(resolvedPath, parent.path, name)) {
     throw new Error("Deployment directory escapes its configured parent");
   }
   return { path: resolvedPath, parent, name, identity: identityOf(metadata) };
 }
 
 async function revalidateOwnedDirectory(directory: OwnedDirectory): Promise<void> {
+  await revalidateOwnedParent(directory.parent);
   const current = await resolveOwnedDirectory(directory.path, directory.parent, directory.name);
   if (!sameIdentity(current.identity, directory.identity)) {
     throw new Error("Deployment directory ownership changed");
   }
 }
 
+async function resolveOwnedParent(path: string): Promise<OwnedParent> {
+  const configuredPath = resolve(path);
+  const ancestry: OwnedPathIdentity[] = [];
+  let currentPath = configuredPath;
+  while (true) {
+    const metadata = await lstat(currentPath);
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+      throw new Error("Deployment parent directory is unsafe");
+    }
+    const resolvedPath = await realpath(currentPath);
+    if (!samePath(resolvedPath, currentPath)) {
+      throw new Error("Deployment parent directory is unsafe");
+    }
+    ancestry.push({ path: resolvedPath, ...identityOf(metadata) });
+    const nextPath = dirname(currentPath);
+    if (samePath(nextPath, currentPath)) break;
+    currentPath = nextPath;
+  }
+  return { path: configuredPath, ancestry };
+}
+
+async function revalidateOwnedParent(parent: OwnedParent): Promise<void> {
+  for (const expected of parent.ancestry) {
+    const metadata = await lstat(expected.path);
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+      throw new Error("Deployment parent ownership changed");
+    }
+    const resolvedPath = await realpath(expected.path);
+    if (!samePath(resolvedPath, expected.path) || !sameIdentity(identityOf(metadata), expected)) {
+      throw new Error("Deployment parent ownership changed");
+    }
+  }
+}
+
+function asOwnedParent(directory: OwnedDirectory): OwnedParent {
+  return {
+    path: directory.path,
+    ancestry: [
+      { path: directory.path, ...directory.identity },
+      ...directory.parent.ancestry,
+    ],
+  };
+}
+
+async function createOwnedDirectory(target: DirectChildTarget): Promise<OwnedDirectory> {
+  await revalidateOwnedParent(target.parent);
+  await assertPathMissing(target.path);
+  await mkdir(target.path);
+  return resolveOwnedDirectory(target.path, target.parent, target.name);
+}
+
 async function renameOwnedDirectory(
   source: OwnedDirectory,
-  target: { path: string; parent: string; name: string },
+  target: DirectChildTarget,
   operations: ResolvedPublishOperations,
   deadline: number,
   publicMessage: string,
@@ -519,38 +609,82 @@ async function renameOwnedDirectory(
   while (attempts < MAX_RENAME_ATTEMPTS) {
     if (operations.monotonicNow() >= deadline) throw fixedError(publicMessage, lastError);
     try {
+      await operations.beforeMutation();
       await revalidateOwnedDirectory(source);
+      await revalidateOwnedParent(target.parent);
       await assertPathMissing(target.path);
     } catch (error: unknown) {
       throw fixedError(publicMessage, error);
     }
     attempts += 1;
+    let operationError: unknown;
     try {
       await operations.renameDirectory(source.path, target.path);
-      return await resolveOwnedDirectory(target.path, target.parent, target.name).then((renamed) => {
-        if (!sameIdentity(renamed.identity, source.identity)) {
-          throw new Error("Deployment directory ownership changed during rename");
-        }
-        return renamed;
-      });
     } catch (error: unknown) {
-      lastError = error;
-      if (!isTransientRenameError(error)) throw fixedError(publicMessage, error);
-      const remaining = deadline - operations.monotonicNow();
-      if (remaining <= 0 || attempts >= MAX_RENAME_ATTEMPTS) throw fixedError(publicMessage, error);
-      try {
-        await operations.wait(Math.min(PUBLISH_RETRY_DELAY_MS, remaining));
-      } catch (waitError: unknown) {
-        throw fixedError(publicMessage, waitError);
-      }
+      operationError = error;
+    }
+    let renameState: { moved: true; directory: OwnedDirectory } | { moved: false };
+    try {
+      renameState = await inspectRenameState(source, target);
+    } catch (error: unknown) {
+      throw fixedError(publicMessage, error);
+    }
+    if (renameState.moved) return renameState.directory;
+    lastError = operationError;
+    if (!isTransientRenameError(operationError)) throw fixedError(publicMessage, operationError);
+    const remaining = deadline - operations.monotonicNow();
+    if (remaining <= 0 || attempts >= MAX_RENAME_ATTEMPTS) {
+      throw fixedError(publicMessage, operationError);
+    }
+    try {
+      await operations.wait(Math.min(PUBLISH_RETRY_DELAY_MS, remaining));
+    } catch (waitError: unknown) {
+      throw fixedError(publicMessage, waitError);
     }
   }
   throw fixedError(publicMessage, lastError);
 }
 
-async function removeOwnedDirectory(directory: OwnedDirectory): Promise<void> {
+async function inspectRenameState(
+  source: OwnedDirectory,
+  target: DirectChildTarget,
+): Promise<{ moved: true; directory: OwnedDirectory } | { moved: false }> {
+  const moved = await resolveOptionalOwnedDirectory(target.path, target.parent, target.name);
+  if (moved) {
+    if (!sameIdentity(moved.identity, source.identity)) {
+      throw new Error("Deployment directory ownership changed during rename");
+    }
+    return { moved: true, directory: moved };
+  }
+  try {
+    await revalidateOwnedDirectory(source);
+    return { moved: false };
+  } catch (error: unknown) {
+    if (isNodeError(error, "ENOENT")) {
+      throw new Error("Deployment directory move state is ambiguous");
+    }
+    throw error;
+  }
+}
+
+async function removeOwnedDirectory(
+  directory: OwnedDirectory,
+  operations: ResolvedPublishOperations,
+): Promise<void> {
+  await operations.beforeMutation();
   await revalidateOwnedDirectory(directory);
-  await rm(directory.path, { recursive: true, force: false, maxRetries: 0 });
+  try {
+    await operations.removeDirectory(directory.path);
+  } catch (error: unknown) {
+    try {
+      await lstat(directory.path);
+    } catch (inspectionError: unknown) {
+      if (isNodeError(inspectionError, "ENOENT")) return;
+      throw inspectionError;
+    }
+    await revalidateOwnedDirectory(directory);
+    throw error;
+  }
 }
 
 async function assertTreeContainsNoLinks(root: string): Promise<void> {
@@ -578,13 +712,9 @@ async function inspectDirectory(root: string, directory: string): Promise<void> 
   }
 }
 
-function createSiblingTarget(parent: string, name: string): {
-  path: string;
-  parent: string;
-  name: string;
-} {
-  const path = join(parent, name);
-  assertExactDirectChild(path, parent, name);
+function createSiblingTarget(parent: OwnedParent, name: string): DirectChildTarget {
+  const path = join(parent.path, name);
+  assertExactDirectChild(path, parent.path, name);
   return { path, parent, name };
 }
 
@@ -645,7 +775,8 @@ function createDeadline(operations: ResolvedPublishOperations): number {
 }
 
 function fixedError(message: string, cause: unknown): DeploymentBundleError {
-  return new DeploymentBundleError(message, { cause });
+  void cause;
+  return new DeploymentBundleError(message);
 }
 
 function isTransientRenameError(error: unknown): boolean {

@@ -207,14 +207,64 @@ describe("transactional deployment bundle publication", () => {
     })).rejects.toSatisfy((error: unknown) => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe("Published deployment bundle failed validation");
-      expect((error as Error).message).not.toContain(destination);
-      expect((error as Error).cause).toBe(failure);
+      expect(reachableErrorText(error)).not.toContain(destination);
+      expect(reachableErrorText(error)).not.toContain("injected validation leak");
       return true;
     });
 
     expect(await fingerprintTree(destination)).toEqual(before);
     expect(await artifactNames(root, destination)).toEqual([]);
     await expect(pathExists(staging)).resolves.toBe(false);
+  });
+
+  it("cannot bypass strict published validation with an injected callback", async () => {
+    const root = await createTemporaryDirectory();
+    const destination = join(root, "snapshot-data");
+    const oldSource = await createValidSource("bd".repeat(32));
+    const newSource = await createValidSource("ce".repeat(32));
+    await installDestination(oldSource.dataDir, destination, root, "initial.staging");
+    const before = await fingerprintTree(destination);
+    const staging = join(root, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+    let renameCalls = 0;
+
+    await expect(beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      renameDirectory: async (from, to) => {
+        renameCalls += 1;
+        await rename(from, to);
+        if (renameCalls === 2) await writeFile(join(to, "snapshots", newSource.active.buildId, "cards.json"), "[]\n");
+      },
+      validatePublishedBundle: async () => ({
+        buildId: newSource.active.buildId,
+        path: join(destination, "snapshots", newSource.active.buildId),
+      }),
+    })).rejects.toThrow("Published deployment bundle failed validation");
+
+    expect(await fingerprintTree(destination)).toEqual(before);
+    expect(await artifactNames(root, destination)).toEqual([]);
+  });
+
+  it("rejects corruption introduced by the post-validation callback", async () => {
+    const root = await createTemporaryDirectory();
+    const destination = join(root, "snapshot-data");
+    const oldSource = await createValidSource("cf".repeat(32));
+    const newSource = await createValidSource("d1".repeat(32));
+    await installDestination(oldSource.dataDir, destination, root, "initial.staging");
+    const before = await fingerprintTree(destination);
+    const staging = join(root, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+
+    await expect(beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      validatePublishedBundle: async () => {
+        await writeFile(
+          join(destination, "snapshots", newSource.active.buildId, "cards.json"),
+          "[]\n",
+        );
+      },
+    })).rejects.toThrow("Published deployment bundle failed validation");
+
+    expect(await fingerprintTree(destination)).toEqual(before);
+    expect(await artifactNames(root, destination)).toEqual([]);
   });
 
   it("rejects a destination junction escape without moving staging or external data", async () => {
@@ -266,7 +316,69 @@ describe("transactional deployment bundle publication", () => {
     expect(await readDeploymentRevision(destination)).toBe("ef".repeat(32));
   });
 
-  it("does not retry non-transient rename errors and preserves their details only as cause", async () => {
+  it("revalidates the destination parent before a rename retry", async () => {
+    const root = await createTemporaryDirectory();
+    const ownedParent = join(root, "owned-parent");
+    const displacedParent = join(root, "displaced-parent");
+    const external = join(root, "external-parent");
+    await mkdir(ownedParent);
+    await mkdir(external);
+    await writeFile(join(external, "sentinel.txt"), "outside", "utf8");
+    const destination = join(ownedParent, "snapshot-data");
+    const oldSource = await createValidSource("d0".repeat(32));
+    const newSource = await createValidSource("e1".repeat(32));
+    await installDestination(oldSource.dataDir, destination, ownedParent, "initial.staging");
+    const staging = join(ownedParent, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+    let mutationCalls = 0;
+
+    await expect(beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      beforeMutation: async () => {
+        mutationCalls += 1;
+        if (mutationCalls !== 1) return;
+        await rename(ownedParent, displacedParent);
+        await symlink(external, ownedParent, "junction");
+      },
+    })).rejects.toThrow("Unable to publish deployment bundle");
+
+    expect(await readFile(join(external, "sentinel.txt"), "utf8")).toBe("outside");
+    expect(await readDeploymentRevision(join(displacedParent, "snapshot-data"))).toBe("d0".repeat(32));
+    await expect(pathExists(join(displacedParent, "release.staging"))).resolves.toBe(true);
+  });
+
+  it("revalidates the destination parent before rollback mutations", async () => {
+    const root = await createTemporaryDirectory();
+    const ownedParent = join(root, "owned-parent");
+    const displacedParent = join(root, "displaced-parent");
+    const external = join(root, "external-parent");
+    await mkdir(ownedParent);
+    await mkdir(external);
+    await writeFile(join(external, "sentinel.txt"), "outside", "utf8");
+    const destination = join(ownedParent, "snapshot-data");
+    const oldSource = await createValidSource("f2".repeat(32));
+    const newSource = await createValidSource("03".repeat(32));
+    await installDestination(oldSource.dataDir, destination, ownedParent, "initial.staging");
+    const staging = join(ownedParent, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+    let armed = false;
+    const published = await beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      beforeMutation: async () => {
+        if (!armed) return;
+        armed = false;
+        await rename(ownedParent, displacedParent);
+        await symlink(external, ownedParent, "junction");
+      },
+    });
+    armed = true;
+
+    await expect(published.rollback()).rejects.toThrow("Unable to roll back deployment bundle");
+
+    expect(await readFile(join(external, "sentinel.txt"), "utf8")).toBe("outside");
+    expect(await readDeploymentRevision(join(displacedParent, "snapshot-data"))).toBe("03".repeat(32));
+    expect(await artifactNames(displacedParent, destination)).toHaveLength(1);
+  });
+
+  it("does not retry non-transient rename errors or expose their payloads", async () => {
     const root = await createTemporaryDirectory();
     const destination = join(root, "snapshot-data");
     const oldSource = await createValidSource("f0".repeat(32));
@@ -286,8 +398,8 @@ describe("transactional deployment bundle publication", () => {
     })).rejects.toSatisfy((error: unknown) => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe("Unable to publish deployment bundle");
-      expect((error as Error).message).not.toContain(destination);
-      expect((error as Error).cause).toBe(raw);
+      expect(reachableErrorText(error)).not.toContain(destination);
+      expect(reachableErrorText(error)).not.toContain("secret");
       return true;
     });
     expect(attempts).toBe(1);
@@ -318,11 +430,140 @@ describe("transactional deployment bundle publication", () => {
     })).rejects.toSatisfy((error: unknown) => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe("Unable to publish deployment bundle");
-      expect((error as Error).cause).toBe(raw);
+      expect(reachableErrorText(error)).not.toContain("transient secret");
       return true;
     });
     expect(attempts).toBe(2);
     expect(await fingerprintTree(destination)).toEqual(before);
+  });
+
+  it("shares the first publication deadline with the second rename", async () => {
+    const root = await createTemporaryDirectory();
+    const destination = join(root, "snapshot-data");
+    const oldSource = await createValidSource("24".repeat(32));
+    const newSource = await createValidSource("35".repeat(32));
+    await installDestination(oldSource.dataDir, destination, root, "initial.staging");
+    const before = await fingerprintTree(destination);
+    const staging = join(root, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+    let now = 1_000;
+    let renameCalls = 0;
+    let stagingAttempts = 0;
+
+    await expect(beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      monotonicNow: () => now,
+      wait: async (milliseconds) => { now += milliseconds; },
+      renameDirectory: async (from, to) => {
+        renameCalls += 1;
+        if (renameCalls === 1) {
+          await rename(from, to);
+          now += 4_990;
+          return;
+        }
+        if (basename(from) === "release.staging") {
+          stagingAttempts += 1;
+          throw nodeError("EBUSY", "deadline payload");
+        }
+        await rename(from, to);
+      },
+    })).rejects.toThrow("Unable to publish deployment bundle");
+
+    expect(stagingAttempts).toBe(1);
+    expect(renameCalls).toBe(3);
+    expect(await fingerprintTree(destination)).toEqual(before);
+  });
+
+  it("recovers when a rename moves the directory before throwing", async () => {
+    const root = await createTemporaryDirectory();
+    const destination = join(root, "snapshot-data");
+    const external = join(root, "external");
+    await mkdir(external);
+    await writeFile(join(external, "sentinel.txt"), "outside", "utf8");
+    const oldSource = await createValidSource("46".repeat(32));
+    const newSource = await createValidSource("57".repeat(32));
+    await installDestination(oldSource.dataDir, destination, root, "initial.staging");
+    const before = await fingerprintTree(destination);
+    const staging = join(root, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+    let renameCalls = 0;
+
+    await expect(beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      renameDirectory: async (from, to) => {
+        renameCalls += 1;
+        await rename(from, to);
+        if (renameCalls === 2) throw nodeError("EPERM", "moved payload");
+      },
+      validatePublishedBundle: async () => { throw new Error("reject publication"); },
+    })).rejects.toThrow("Published deployment bundle failed validation");
+
+    expect(await fingerprintTree(destination)).toEqual(before);
+    expect(await readFile(join(external, "sentinel.txt"), "utf8")).toBe("outside");
+    expect(await artifactNames(root, destination)).toEqual([]);
+  });
+
+  it("retries finalize after a transient owned-backup removal failure", async () => {
+    const root = await createTemporaryDirectory();
+    const destination = join(root, "snapshot-data");
+    const oldSource = await createValidSource("68".repeat(32));
+    const newSource = await createValidSource("79".repeat(32));
+    await installDestination(oldSource.dataDir, destination, root, "initial.staging");
+    const staging = join(root, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+    let removeCalls = 0;
+    const published = await beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      removeDirectory: async (path: string) => {
+        removeCalls += 1;
+        if (removeCalls === 1) throw nodeError("EBUSY", `secret-token ${path}`);
+        await rm(path, { recursive: true, force: false });
+      },
+    });
+
+    await expect(published.finalize()).rejects.toSatisfy((error: unknown) => {
+      expect(reachableErrorText(error)).not.toContain("secret-token");
+      expect(reachableErrorText(error)).not.toContain(destination);
+      return true;
+    });
+    expect(await artifactNames(root, destination)).toHaveLength(1);
+    await expect(published.finalize()).resolves.toBeUndefined();
+    await expect(published.finalize()).resolves.toBeUndefined();
+    expect(removeCalls).toBe(2);
+    expect(await artifactNames(root, destination)).toEqual([]);
+  });
+
+  it("resumes rollback after a partial backup-restore failure", async () => {
+    const root = await createTemporaryDirectory();
+    const destination = join(root, "snapshot-data");
+    const oldSource = await createValidSource("8a".repeat(32));
+    const newSource = await createValidSource("9b".repeat(32));
+    await installDestination(oldSource.dataDir, destination, root, "initial.staging");
+    const before = await fingerprintTree(destination);
+    const staging = join(root, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+    let renameCalls = 0;
+    let now = 0;
+    let failRestore = true;
+    const published = await beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      monotonicNow: () => now,
+      wait: async () => { now += 5_000; },
+      renameDirectory: async (from, to) => {
+        renameCalls += 1;
+        if (renameCalls >= 4 && failRestore) throw nodeError("EBUSY", `rollback-token ${destination}`);
+        await rename(from, to);
+      },
+    });
+
+    await expect(published.rollback()).rejects.toSatisfy((error: unknown) => {
+      expect(reachableErrorText(error)).not.toContain("rollback-token");
+      expect(reachableErrorText(error)).not.toContain(destination);
+      return true;
+    });
+    await expect(pathExists(destination)).resolves.toBe(false);
+    expect(await artifactNames(root, destination)).toHaveLength(2);
+    failRestore = false;
+    await expect(published.rollback()).resolves.toBeUndefined();
+    await expect(published.rollback()).resolves.toBeUndefined();
+    expect(await fingerprintTree(destination)).toEqual(before);
+    expect(await artifactNames(root, destination)).toEqual([]);
   });
 
   it("revalidates source ownership before a transient rename retry", async () => {
@@ -437,4 +678,15 @@ function nodeError(code: string, message: string): NodeJS.ErrnoException {
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
+
+function reachableErrorText(error: unknown, seen = new Set<unknown>()): string {
+  if (seen.has(error)) return "";
+  seen.add(error);
+  if (!(error instanceof Error)) return String(error);
+  const nested = [
+    "cause" in error ? error.cause : undefined,
+    error instanceof AggregateError ? error.errors : undefined,
+  ].flatMap((value) => Array.isArray(value) ? value : [value]);
+  return [error.name, error.message, ...nested.map((value) => reachableErrorText(value, seen))].join("\n");
 }
