@@ -75,7 +75,9 @@ describe("Render deployment configuration", () => {
     const readme = await readRoot("README.md");
     for (const required of [
       "Deploy to Render", "New → Blueprint", "Akirakato1/sts2dle",
-      "persistent disk", "/health", "STSDLE_SKIP_SYNC=0", "main",
+      "/health", "STSDLE_SKIP_SYNC=0",
     ]) expect(readme).toContain(required);
+    expect(readme).toContain("paid Starter service and its 1 GB persistent disk");
+    expect(readme).toContain("Later pushes to `main` deploy automatically.");
   });
 });
