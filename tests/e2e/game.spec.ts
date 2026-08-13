@@ -21,7 +21,6 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 const FIXED_NOW = new Date("2026-08-12T12:00:00.000Z");
 const FIXED_UTC_DATE = FIXED_NOW.toISOString().slice(0, 10);
-const APP_ROOT = `${process.env.STSDLE_E2E_ORIGIN ?? "http://127.0.0.1:3000"}/`;
 const PRACTICE_ROUND_IDS = [
   "practice:00000000-0000-4000-8000-000000000001",
   "practice:00000000-0000-4000-8000-000000000002",
@@ -61,7 +60,6 @@ interface FixtureModel {
 }
 
 interface AtlasReadiness {
-  urls: { candidate: string; guess: string };
   responses: Map<string, Response>;
 }
 
@@ -485,23 +483,24 @@ async function expectAccessibleTarget(locator: Locator): Promise<void> {
   expect(box!.width).toBeGreaterThanOrEqual(44);
 }
 
+const appRoot = (page: Page) => new URL("/", page.url()).href;
+
 function watchAtlasResponses(page: Page): AtlasReadiness {
-  const appOrigin = process.env.STSDLE_E2E_ORIGIN ?? "http://127.0.0.1:3000";
-  const urls = {
-    candidate: new URL("/runtime/candidate.webp", appOrigin).href,
-    guess: new URL("/runtime/guess.webp", appOrigin).href,
-  };
   const responses = new Map<string, Response>();
   page.on("response", (response) => {
-    if (Object.values(urls).includes(response.url())) {
+    if (["/runtime/candidate.webp", "/runtime/guess.webp"].includes(new URL(response.url()).pathname)) {
       responses.set(response.url(), response);
     }
   });
-  return { urls, responses };
+  return { responses };
 }
 
 async function expectAtlasesReady(page: Page, readiness: AtlasReadiness): Promise<void> {
-  for (const url of Object.values(readiness.urls)) {
+  const urls = {
+    candidate: new URL("/runtime/candidate.webp", page.url()).href,
+    guess: new URL("/runtime/guess.webp", page.url()).href,
+  };
+  for (const url of Object.values(urls)) {
     const response = readiness.responses.get(url);
     expect(response, `${url} should finish before gameplay`).toBeDefined();
     expect(await response!.finished(), `${url} should finish without a transfer error`).toBeNull();
@@ -660,7 +659,7 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
     `STS-dle ${FIXED_UTC_DATE} ${submittedCards.length}/\u221e`,
     ...submittedCards.map((card) => expectedShareRow(card, answerCard)),
     "Orbs: \u26ab \u26ab \u26ab",
-    APP_ROOT,
+    appRoot(page),
   ];
   expect(shareLines).toEqual(expectedLines);
   expectNoCardSecrets(shareText, model, [
@@ -793,7 +792,7 @@ test("Hardcore Daily keeps a separate answer, progress domain, and secret-free s
   const expectedLines = [
     `STS-dle Hardcore ${FIXED_UTC_DATE} ${submittedCards.length}/\u221e`,
     ...submittedCards.map((card) => expectedShareRow(card, answerCard)),
-    APP_ROOT,
+    appRoot(page),
   ];
   expect(shareLines).toEqual(expectedLines);
   expectNoCardSecrets(shareText, model);
