@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: sts2dle
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: STSDLE_HOST
+        value: 0.0.0.0
+      - key: STSDLE_PORT
+        value: 10000
+      - key: STSDLE_DATA_DIR
+        value: /var/data
+      - key: STSDLE_SKIP_SYNC
+        value: "0"
+      - key: STSDLE_ARTWORK_CONCURRENCY
+        value: "4"
+      - key: STSDLE_ARTWORK_ALLOWED_ORIGINS
+        value: https://spire-codex.com,https://cdn.spire-codex.com
+      - key: STSDLE_FULL_CARD_ALLOWED_ORIGINS
+        value: https://spire-codex.com,https://cdn.spire-codex.com
+    disk:
+      name: sts2dle-data
+      mountPath: /var/data
+      sizeGB: 1
