@@ -1104,6 +1104,24 @@ for (const viewport of [
     await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
     for (const card of model.dailyWrongGuesses.slice(0, 5)) await submitGuessAndWait(page, card);
     await expect(page.locator(".name-hint")).toBeVisible();
+    const centered = await page.evaluate(() => {
+      const centerX = (selector: string) => {
+        const rect = document.querySelector(selector)!.getBoundingClientRect();
+        return rect.left + rect.width / 2;
+      };
+      const visibility = document.querySelector(".candidate-visibility")!;
+      const labels = [...visibility.querySelectorAll(".candidate-visibility__label")];
+      const left = Math.min(...labels.map((label) => label.getBoundingClientRect().left));
+      const right = Math.max(...labels.map((label) => label.getBoundingClientRect().right));
+      return {
+        search: centerX(".card-search"),
+        hint: centerX(".name-hint"),
+        visibility: centerX(".candidate-visibility"),
+        labels: (left + right) / 2,
+      };
+    });
+    expect(Math.abs(centered.search - centered.hint)).toBeLessThanOrEqual(1);
+    expect(Math.abs(centered.visibility - centered.labels)).toBeLessThanOrEqual(2);
     await page.getByRole("button", { name: "Reveal Orb, available" }).click();
     await openEmptySearch(page);
     await expect(page.locator(".card-search__options")).toBeVisible();

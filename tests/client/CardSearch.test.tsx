@@ -121,7 +121,7 @@ describe("searchCards", () => {
 });
 
 describe("CardSearch", () => {
-  test("composes assisted controls under the input as tray, visibility, then name hint", () => {
+  test("composes assisted controls with the name hint before the search input", () => {
     const { view } = renderSearch({
       assistance: assisted,
       assistanceSlot: <section aria-label="Test orb tray">Orb assistance</section>,
@@ -130,11 +130,11 @@ describe("CardSearch", () => {
 
     const search = view.container.querySelector(".card-search")!;
     expect([...search.children].map((child) => child.getAttribute("aria-label") ?? child.tagName)).toEqual([
+      "Test name hint",
       "LABEL",
       "INPUT",
       "Test orb tray",
       "Candidate visibility",
-      "Test name hint",
     ]);
   });
 

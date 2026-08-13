@@ -38,11 +38,13 @@
 .candidate-visibility {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: .35rem .65rem;
   margin: .55rem 0 0;
   padding: .25rem;
   border: 1px solid #77805b;
   border-radius: .3rem;
+  text-align: center;
 }
 
 .candidate-visibility__label {
@@ -69,10 +71,12 @@
 .name-hint {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: .55rem;
   align-items: end;
-  margin-top: .65rem;
+  margin: 0 0 .65rem;
   color: #f6e8bd;
+  text-align: center;
 }
 
 .name-hint__word {

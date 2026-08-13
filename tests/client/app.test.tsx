@@ -106,7 +106,7 @@ function readyGame(round: RoundState, overrides: Record<string, unknown> = {}) {
 }
 
 describe("App snapshot cleanup", () => {
-  test("composes the live assisted controls in tray, visibility, and name-hint order", async () => {
+  test("composes the live assisted controls with the name hint before the search input", async () => {
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue(readyGame(assistedRound({
       guesses: Array.from({ length: 5 }, () => submittedGuess),
@@ -120,7 +120,7 @@ describe("App snapshot cleanup", () => {
     const visibilityIndex = [...search.children].findIndex((child) => child.matches(".candidate-visibility"));
     const hintIndex = [...search.children].findIndex((child) => child.matches(".name-hint"));
 
-    expect([inputIndex, trayIndex, visibilityIndex, hintIndex]).toEqual([1, 2, 3, 4]);
+    expect([hintIndex, inputIndex, trayIndex, visibilityIndex]).toEqual([0, 2, 3, 4]);
   });
 
   test("routes Reveal, Filter, and Negation target activations to their durable game actions", async () => {

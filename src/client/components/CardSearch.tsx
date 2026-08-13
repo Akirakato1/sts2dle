@@ -138,6 +138,7 @@ export function CardSearch({
   }
 
   return <section className="card-search" aria-label="Card search">
+    {assistance !== null && nameHintSlot}
     <label className="card-search__label" htmlFor={`${listboxId}-input`}>Guess a card</label>
     <input
       id={`${listboxId}-input`}
@@ -214,7 +215,6 @@ export function CardSearch({
         <span>{category[0]!.toUpperCase() + category.slice(1)}</span>
       </label>)}
     </fieldset>}
-    {assistance !== null && nameHintSlot}
     {menuOpen && (results.length > 0 ? <ul id={listboxId} className="card-search__options" role="listbox">
       {results.map(({ card, category }) => <li
         id={optionId(card.id)}
