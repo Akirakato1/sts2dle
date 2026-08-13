@@ -1128,6 +1128,23 @@ for (const viewport of [
     expect(Math.abs(centered.search - centered.words)).toBeLessThanOrEqual(1);
     expect(Math.abs(centered.hint - centered.words)).toBeLessThanOrEqual(1);
     expect(Math.abs(centered.visibility - centered.labels)).toBeLessThanOrEqual(2);
+    const orbCenters = await page.locator(".orb-tray__well").evaluateAll((wells) => wells.map((well) => {
+      const center = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      };
+      return {
+        well: center(well),
+        button: center(well.querySelector(":scope > .orb-button")!),
+        art: center(well.querySelector(":scope > .orb-button > .orb-visual")!),
+      };
+    }));
+    for (const orb of orbCenters) {
+      expect(Math.abs(orb.well.x - orb.button.x)).toBeLessThanOrEqual(.5);
+      expect(Math.abs(orb.well.y - orb.button.y)).toBeLessThanOrEqual(.5);
+      expect(Math.abs(orb.well.x - orb.art.x)).toBeLessThanOrEqual(.5);
+      expect(Math.abs(orb.well.y - orb.art.y)).toBeLessThanOrEqual(.5);
+    }
     await page.getByRole("button", { name: "Reveal Orb, available" }).click();
     await openEmptySearch(page);
     await expect(page.locator(".card-search__options")).toBeVisible();

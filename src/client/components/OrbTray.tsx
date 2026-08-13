@@ -33,7 +33,7 @@ export function OrbTray({ assistance, disabled }: OrbTrayProps) {
                   aria-hidden={dragging || undefined}
                   className={`${buttonProps.className ?? ""}${dragging ? " orb-button--drag-source" : ""}`}
                   disabled={disabled || buttonProps.disabled}
-                  style={{ ...buttonProps.style, minHeight: 48, minWidth: 48 }}
+                  style={buttonProps.style}
                   tabIndex={dragging ? -1 : buttonProps.tabIndex}
                 >
                   <OrbVisual kind={orb} />

@@ -31,10 +31,13 @@
 }
 
 .orb-tray__well {
+  --orb-control-size: 48px;
+  --orb-art-size: 52px;
   position: relative;
   display: grid;
-  width: 48px;
-  height: 48px;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  width: var(--orb-control-size);
+  height: var(--orb-control-size);
   place-items: center;
   overflow: visible;
   border: 1px solid #526775;
@@ -68,8 +71,11 @@
 
 .orb-button {
   display: grid;
-  width: 48px;
-  height: 48px;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  width: var(--orb-control-size);
+  height: var(--orb-control-size);
+  min-width: var(--orb-control-size);
+  min-height: var(--orb-control-size);
   padding: 0;
   place-items: center;
   overflow: visible;
@@ -107,9 +113,11 @@
 }
 
 .orb-button > .orb-visual {
-  width: 52px;
-  height: 52px;
+  width: var(--orb-art-size);
+  height: var(--orb-art-size);
   max-width: none;
+  margin: 0;
+  transform: none;
 }
 
 .orb-visual__rim {

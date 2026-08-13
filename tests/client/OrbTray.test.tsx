@@ -51,7 +51,13 @@ describe("OrbTray", () => {
     for (const label of ["Reveal", "Filter", "Negation"]) {
       const button = screen.getByRole("button", { name: `${label} Orb, available` });
       expect(button).toHaveAttribute("aria-pressed", "false");
-      expect(button).toHaveStyle({ minWidth: "48px", minHeight: "48px" });
+    }
+
+    for (const well of view.container.querySelectorAll(".orb-tray__well")) {
+      const button = well.querySelector<HTMLButtonElement>(":scope > .orb-button");
+      expect(button).not.toBeNull();
+      expect(button).not.toHaveAttribute("style");
+      expect(button!.querySelector(":scope > .orb-visual")).not.toBeNull();
     }
   });
 
