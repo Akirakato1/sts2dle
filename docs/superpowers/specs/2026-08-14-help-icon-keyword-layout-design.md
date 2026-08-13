@@ -12,7 +12,7 @@ The visible trigger contains no “How to play” text at any viewport width. It
 
 The approved source asset is copied into the repository under the client assets so the deployed site does not depend on a local machine path. Its file bytes are preserved exactly and its provenance is recorded in the implementation report.
 
-The PNG is used as a CSS mask, allowing the artwork silhouette to inherit the STS-dle gold/amber palette without destructive bitmap editing. The surrounding circular button supplies the map-node frame:
+The PNG is rendered directly as a contained CSS background so its pale question mark remains distinct from its opaque brown node. The source artwork already uses the STS-dle brown/gold palette, and rendering it directly preserves the approved bytes without destructive bitmap editing. The surrounding circular button supplies the map-node frame:
 
 - 48×48 outer size, never below the existing 44×44 accessible-target minimum;
 - circular border and dark brown radial/linear surface consistent with the site palette;
@@ -58,9 +58,8 @@ Test-first coverage will establish:
 1. The current trigger still renders visible text and therefore fails the icon-only contract.
 2. The current Keyword Icons first column is too narrow for transition sequences and therefore fails the fixed-width/alignment contract.
 3. The copied asset has the same SHA-256 hash as the approved local source.
-4. The final trigger has the stable accessible name, contains the masked asset element, contains no visible text/fallback glyph, and retains modal keyboard/focus behavior.
+4. The final trigger has the stable accessible name, contains the exact asset element with its internal question-mark contrast intact, contains no visible text/fallback glyph, and retains modal keyboard/focus behavior.
 5. All four keyword rows contain the exact expected icon sequence and label.
 6. Browser measurements at all three viewports prove trigger/artwork centering, target size, dialog containment, common label alignment, and non-overlap.
 
 The final project typecheck, unit suite, production build, complete browser suite, and diff checks must pass before commit and push.
-

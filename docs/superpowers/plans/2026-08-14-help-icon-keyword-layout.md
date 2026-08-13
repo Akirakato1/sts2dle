@@ -4,7 +4,7 @@
 
 **Goal:** Replace the visible “How to play” text trigger with the approved Slay the Spire map-question artwork and give all four Keyword Icons rows a stable, non-overlapping two-column layout.
 
-**Architecture:** Copy the approved PNG into the client asset graph without modifying its bytes, then expose it through a decorative masked span inside the existing accessible help button. Keep `KeywordStateIcons` unchanged and add a help-only list class whose fixed icon column accommodates the full X/check transition while the flexible label column stays aligned. Extend existing unit and Playwright coverage rather than creating a second help implementation.
+**Architecture:** Copy the approved PNG into the client asset graph without modifying its bytes, then render it as a contained decorative background inside the existing accessible help button. Keep `KeywordStateIcons` unchanged and add a help-only list class whose fixed icon column accommodates the full X/check transition while the flexible label column stays aligned. Extend existing unit and Playwright coverage rather than creating a second help implementation.
 
 **Tech Stack:** React 19, TypeScript, CSS, Vitest + Testing Library, Playwright, Node crypto, Sharp, Vite.
 
@@ -13,7 +13,7 @@
 - Presentation only: do not change modal behavior, game rules, persistence, card data, orb behavior, or answer selection.
 - Copy exact bytes from `C:\Users\zhuyl\AppData\Roaming\sts2-dashboard\Assets\images\map_icons\map_unknown.png` into `src/client/assets/map_unknown.png`.
 - The approved source is a 73×72 ARGB PNG with SHA-256 `015f662a6dc840ea7f01f8c86216abbd9b3e102022b1da18be26a4bbda4d038d`.
-- Use the PNG as a CSS mask; do not recolor or otherwise rewrite the bitmap.
+- Render the PNG directly as a contained CSS background so its pale question mark remains distinct from its opaque brown node; do not recolor or otherwise rewrite the bitmap.
 - The visible trigger contains no “How to play” text and no fallback `?` glyph at any viewport, while retaining `aria-label="How to play"`.
 - The trigger is a 48×48 circular control and never falls below the 44×44 accessible target minimum.
 - Keep `KeywordStateIcons` as the sole source of the X, check, and transition-arrow graphics.
@@ -30,7 +30,7 @@
 - Create `src/client/assets/map_unknown.png`: exact deployable copy of the approved local question-mark map asset.
 - Create `tests/client/help-asset.test.ts`: stable repository-asset hash, format, and dimension contract independent of the developer’s local dashboard directory.
 - Modify `src/client/components/GameGuide.tsx`: icon-only trigger markup and help-specific Keyword Icons list hook.
-- Modify `src/client/styles/global.css`: circular map-node styling, masked artwork, and fixed Keyword Icons column.
+- Modify `src/client/styles/global.css`: circular map-node styling, contained artwork, and fixed Keyword Icons column.
 - Modify `tests/client/GameGuide.test.tsx`: accessible trigger, no-visible-copy, artwork hook, and exact keyword icon-sequence assertions.
 - Modify `tests/e2e/game.spec.ts`: responsive trigger/artwork and Keyword Icons layout measurements.
 
@@ -44,7 +44,7 @@
 
 **Interfaces:**
 - Consumes: the local source PNG and the existing `KeywordStateIcons({ displayValue })` component.
-- Produces: `.game-guide__trigger-art` as the decorative mask target and `.game-guide__keyword-list` as the help-only grid hook used by Task 2.
+- Produces: `.game-guide__trigger-art` as the decorative artwork target and `.game-guide__keyword-list` as the help-only grid hook used by Task 2.
 
 - [ ] **Step 1: Write the failing repository-asset test**
 
@@ -126,7 +126,7 @@ Get-FileHash 'src\client\assets\map_unknown.png' -Algorithm SHA256
 
 Expected SHA-256: `015F662A6DC840EA7F01F8C86216ABBD9B3E102022B1DA18BE26A4BBDA4D038D`.
 
-- [ ] **Step 5: Replace visible trigger copy with the mask hook and identify the keyword list**
+- [ ] **Step 5: Replace visible trigger copy with the artwork hook and identify the keyword list**
 
 Change only the trigger child and the Keyword Icons list class in `GameGuide.tsx`:
 
@@ -190,13 +190,16 @@ const triggerVisualGeometry = await helpTrigger.evaluate((element) => {
     frame: { width: frame.width, height: frame.height, x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 },
     artwork: { x: artwork.x + artwork.width / 2, y: artwork.y + artwork.height / 2 },
     radius: getComputedStyle(element).borderRadius,
-    maskImage: getComputedStyle(art).maskImage || getComputedStyle(art).webkitMaskImage,
+    backgroundImage: getComputedStyle(art).backgroundImage,
+    maskImage: getComputedStyle(art).maskImage || getComputedStyle(art).getPropertyValue("-webkit-mask-image"),
   };
 });
 expect(triggerVisualGeometry.frame.width).toBe(48);
 expect(triggerVisualGeometry.frame.height).toBe(48);
 expect(triggerVisualGeometry.radius).toBe("50%");
-expect(triggerVisualGeometry.maskImage).toContain("map_unknown.png");
+expect(triggerVisualGeometry.backgroundImage).toContain("/assets/map_unknown-");
+expect(triggerVisualGeometry.backgroundImage).toContain(".png");
+expect(triggerVisualGeometry.maskImage).toBe("none");
 expect(Math.abs(triggerVisualGeometry.frame.x - triggerVisualGeometry.artwork.x)).toBeLessThanOrEqual(.5);
 expect(Math.abs(triggerVisualGeometry.frame.y - triggerVisualGeometry.artwork.y)).toBeLessThanOrEqual(.5);
 ```
@@ -227,9 +230,9 @@ for (let index = 1; index < keywordGeometry.length; index += 1) {
 
 First verify ownership before stopping any existing local site. If ports 3000/5173 are user-owned or unrelated, leave them untouched and use the repository’s ignored alternate-port Playwright harness. Then run the three viewport cases with bundled Node 24.
 
-Expected RED: the trigger contains visible text, is wider than 48 pixels, lacks the masked artwork, and the transition icons extend into the label column.
+Expected RED: the trigger contains visible text, is wider than 48 pixels, lacks the question-mark artwork, and the transition icons extend into the label column.
 
-- [ ] **Step 3: Add the circular map-node and mask styling**
+- [ ] **Step 3: Add the circular map-node and contained artwork styling**
 
 Replace the current rectangular trigger styles in `global.css` with:
 
@@ -253,9 +256,7 @@ Replace the current rectangular trigger styles in `global.css` with:
   display: block;
   width: 34px;
   height: 34px;
-  background: currentColor;
-  -webkit-mask: url("../assets/map_unknown.png") center / contain no-repeat;
-  mask: url("../assets/map_unknown.png") center / contain no-repeat;
+  background: url("../assets/map_unknown.png") center / contain no-repeat;
 }
 
 .game-guide__trigger:hover,

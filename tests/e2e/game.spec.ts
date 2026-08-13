@@ -1259,14 +1259,16 @@ for (const viewport of [
           y: artwork.y + artwork.height / 2,
         },
         radius: getComputedStyle(element).borderRadius,
+        backgroundImage: artStyle.backgroundImage,
         maskImage: artStyle.maskImage || artStyle.getPropertyValue("-webkit-mask-image"),
       };
     });
     expect(triggerVisualGeometry.frame.width).toBe(48);
     expect(triggerVisualGeometry.frame.height).toBe(48);
     expect(triggerVisualGeometry.radius).toBe("50%");
-    expect(triggerVisualGeometry.maskImage).toContain("/assets/map_unknown-");
-    expect(triggerVisualGeometry.maskImage).toContain(".png");
+    expect(triggerVisualGeometry.backgroundImage).toContain("/assets/map_unknown-");
+    expect(triggerVisualGeometry.backgroundImage).toContain(".png");
+    expect(triggerVisualGeometry.maskImage).toBe("none");
     expect(Math.abs(triggerVisualGeometry.frame.x - triggerVisualGeometry.artwork.x)).toBeLessThanOrEqual(.5);
     expect(Math.abs(triggerVisualGeometry.frame.y - triggerVisualGeometry.artwork.y)).toBeLessThanOrEqual(.5);
 

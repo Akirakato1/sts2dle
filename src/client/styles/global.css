@@ -211,9 +211,7 @@ h1 {
   display: block;
   width: 34px;
   height: 34px;
-  background: currentColor;
-  -webkit-mask: url("../assets/map_unknown.png") center / contain no-repeat;
-  mask: url("../assets/map_unknown.png") center / contain no-repeat;
+  background: url("../assets/map_unknown.png") center / contain no-repeat;
 }
 
 .game-guide__trigger:hover,
