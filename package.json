@@ -12,6 +12,8 @@
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/main.js",
     "fixture:snapshot": "tsx tests/e2e/fixtures/build-test-snapshot.ts",
+    "snapshot:build": "tsx src/server/release/build-cli.ts",
+    "release:snapshot": "tsx src/server/release/cli.ts",
     "start:e2e": "npm run build && npm run fixture:snapshot && node dist/server/main.js",
     "test": "vitest run",
     "test:watch": "vitest",
