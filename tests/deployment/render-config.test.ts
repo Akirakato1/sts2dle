@@ -10,7 +10,7 @@ type RenderService = {
   plan?: unknown;
   healthCheckPath?: unknown;
   envVars?: Array<{ key?: unknown; value?: unknown }>;
-  disk?: { mountPath?: unknown; sizeGB?: unknown };
+  disk?: unknown;
 };
 
 const requiredEnvironmentKeys = [
@@ -18,7 +18,6 @@ const requiredEnvironmentKeys = [
   "STSDLE_PORT",
   "STSDLE_DATA_DIR",
   "STSDLE_SKIP_SYNC",
-  "STSDLE_ARTWORK_CONCURRENCY",
   "STSDLE_ARTWORK_ALLOWED_ORIGINS",
   "STSDLE_FULL_CARD_ALLOWED_ORIGINS",
 ];
@@ -33,16 +32,18 @@ const expectEnvironmentValue = (service: RenderService, key: string, value: stri
 };
 
 describe("Render deployment configuration", () => {
-  test("builds the app with matching Playwright Chromium and starts the server", async () => {
+  test("builds the bundled snapshot server without Playwright Chromium", async () => {
     const dockerfile = await readRoot("Dockerfile");
     expect(dockerfile).toContain("FROM node:24-bookworm-slim");
     expect(dockerfile).toContain("npm ci");
-    expect(dockerfile).toContain("npx playwright install --with-deps chromium");
     expect(dockerfile).toContain("npm run build");
+    expect(dockerfile).toContain("npm prune --omit=dev");
     expect(dockerfile).toContain('CMD ["node", "dist/server/main.js"]');
+    expect(dockerfile).not.toContain("playwright install");
+    expect(dockerfile).not.toContain("PLAYWRIGHT_BROWSERS_PATH");
   });
 
-  test("uses one health-checked web service with persistent synchronized data", async () => {
+  test("uses one stateless Starter web service for the immutable bundled snapshot", async () => {
     const blueprint = parse(await readRoot("render.yaml")) as { services?: RenderService[] };
     expect(blueprint.services).toHaveLength(1);
     const service: RenderService = blueprint.services?.[0] ?? {};
@@ -51,34 +52,47 @@ describe("Render deployment configuration", () => {
       runtime: "docker",
       plan: "starter",
       healthCheckPath: "/health",
-      disk: { mountPath: "/var/data", sizeGB: 1 },
     });
+    expect(service).not.toHaveProperty("disk");
     expect(service.envVars).toHaveLength(requiredEnvironmentKeys.length);
+    expect(service.envVars?.map((entry) => entry.key).sort()).toEqual([...requiredEnvironmentKeys].sort());
     expectEnvironmentValue(service, "STSDLE_HOST", "0.0.0.0");
     expectEnvironmentValue(service, "STSDLE_PORT", "10000");
-    expectEnvironmentValue(service, "STSDLE_DATA_DIR", "/var/data");
-    expectEnvironmentValue(service, "STSDLE_SKIP_SYNC", "0");
-    expectEnvironmentValue(service, "STSDLE_ARTWORK_CONCURRENCY", "4");
+    expectEnvironmentValue(service, "STSDLE_DATA_DIR", "/app/deploy/snapshot-data");
+    expectEnvironmentValue(service, "STSDLE_SKIP_SYNC", "1");
     for (const originsKey of ["STSDLE_ARTWORK_ALLOWED_ORIGINS", "STSDLE_FULL_CARD_ALLOWED_ORIGINS"]) {
       expectEnvironmentValue(service, originsKey, "https://spire-codex.com,https://cdn.spire-codex.com");
     }
+    for (const omittedKey of [
+      "STSDLE_ARTWORK_CONCURRENCY",
+      "STSDLE_REQUEST_TIMEOUT_MS",
+      "STSDLE_SPIRE_CODEX_BASE_URL",
+    ]) expect(environmentEntries(service, omittedKey)).toHaveLength(0);
   });
 
-  test("excludes local state but retains vendored renderer assets", async () => {
+  test("excludes local state and renderer vendor files while retaining the deployment snapshot", async () => {
     const ignore = await readRoot(".dockerignore");
     expect(ignore).toContain("node_modules");
     expect(ignore).toContain("var");
     expect(ignore.split(/\r?\n/)).toContain("tests");
-    expect(ignore).not.toContain("vendor");
+    expect(ignore).toContain(".tmp");
+    expect(ignore).toContain("vendor/card-renderer");
+    expect(ignore.split(/\r?\n/)).not.toContain("deploy");
+    expect(ignore.split(/\r?\n/)).not.toContain("deploy/snapshot-data");
   });
 
-  test("documents the one-click Blueprint deployment and persistent-disk requirement", async () => {
+  test("documents snapshot releases and the stateless Render deployment", async () => {
     const readme = await readRoot("README.md");
     for (const required of [
       "Deploy to Render", "New → Blueprint", "Akirakato1/sts2dle",
-      "/health", "STSDLE_SKIP_SYNC=0",
+      "/health", "repository snapshot", "no startup synchronization", "no persistent disk",
+      "npm run release:snapshot", "npm run release:snapshot -- --force",
+      "git push origin HEAD:main", "Mad Science", "official CDN",
+      "Later pushes to `main` deploy automatically.",
     ]) expect(readme).toContain(required);
-    expect(readme).toContain("paid Starter service and its 1 GB persistent disk");
-    expect(readme).toContain("Later pushes to `main` deploy automatically.");
+    expect(readme).toMatch(/unchanged[\s\S]{0,100}no commit|no commit[\s\S]{0,100}unchanged/i);
+    expect(readme).not.toContain("STSDLE_SKIP_SYNC=0");
+    expect(readme).not.toContain("paid Starter service and its 1 GB persistent disk");
+    expect(readme).not.toContain("runtime recovery snapshots");
   });
 });

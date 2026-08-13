@@ -13,16 +13,10 @@ services:
       - key: STSDLE_PORT
         value: 10000
       - key: STSDLE_DATA_DIR
-        value: /var/data
+        value: /app/deploy/snapshot-data
       - key: STSDLE_SKIP_SYNC
-        value: "0"
-      - key: STSDLE_ARTWORK_CONCURRENCY
-        value: "4"
+        value: "1"
       - key: STSDLE_ARTWORK_ALLOWED_ORIGINS
         value: https://spire-codex.com,https://cdn.spire-codex.com
       - key: STSDLE_FULL_CARD_ALLOWED_ORIGINS
         value: https://spire-codex.com,https://cdn.spire-codex.com
-    disk:
-      name: sts2dle-data
-      mountPath: /var/data
-      sizeGB: 1

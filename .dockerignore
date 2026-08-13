@@ -9,4 +9,5 @@ test-results
 tests
 playwright-report
 coverage
+vendor/card-renderer
 *.log

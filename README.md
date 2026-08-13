@@ -17,7 +17,7 @@ npm install
 npx playwright install chromium
 ```
 
-Chromium is required for browser acceptance tests and for the production fallback renderer used when a card has no full-card CDN image.
+Chromium is required for browser acceptance tests. It is also needed locally only when a snapshot release must render a missing framed card such as Mad Science; the Render image does not install Chromium.
 
 ## Development
 
@@ -37,7 +37,7 @@ npm run dev:client
 
 Open `http://127.0.0.1:5173`. The development client proxies runtime data and health requests to the server on port 3000. `npm run dev` starts both processes together.
 
-The server defaults are documented in `.env.example`. `STSDLE_DATA_DIR` must point to a directory the server can create files, rename files, and read on every restart. Production startup synchronizes against `https://spire-codex.com/api/cards?lang=eng`; keep `STSDLE_ARTWORK_CONCURRENCY` at four or lower and adjust origin allowlists only for trusted HTTPS image hosts.
+The server defaults are documented in `.env.example`. `STSDLE_DATA_DIR` selects the validated snapshot that the server reads. For a local generated snapshot, set it to the directory produced by the release tooling; only use trusted HTTPS image hosts in the origin allowlists.
 
 ## Tests and offline fixture
 
@@ -67,26 +67,27 @@ npm run test:e2e
 
 The E2E command builds the application, creates its local snapshot, starts an offline server on `127.0.0.1:3000`, and launches Chromium. It does not use production synchronization.
 
-## Production
+## Snapshot releases
 
-Build once, set a persistent writable data directory, and start the server:
+Render serves the repository snapshot in `deploy/snapshot-data` and performs no startup synchronization. Before releasing, start with a clean local checkout of `main` that matches `origin/main`, with the approved GitHub SSH remote and push authentication available. Run:
 
 ```powershell
-npm run build
-New-Item -ItemType Directory -Force .\var
-$env:STSDLE_DATA_DIR = ".\var"
-$env:STSDLE_ARTWORK_ALLOWED_ORIGINS = "https://spire-codex.com,https://cdn.spire-codex.com"
-$env:STSDLE_FULL_CARD_ALLOWED_ORIGINS = "https://spire-codex.com,https://cdn.spire-codex.com"
-npm start
+npm run release:snapshot
 ```
 
-On every normal restart, the server fetches the current stable English card response once, builds sprites and any required fallback cards in a staging snapshot, validates all files and hashes, atomically activates the snapshot, logs a payload-free startup acceptance record, and only then begins listening. A source patch changes the content revision even when no explicit game-version header is available. Artwork and fallback-portrait requests use `STSDLE_REQUEST_TIMEOUT_MS` for both response headers and body reads and retry only bounded transient failures (HTTP 408/429/5xx or network/timeout failures); URL-policy, redirect, credential, IP, and other HTTP 4xx failures are never retried.
+The command fetches the current stable English card data, compares its source revision with the committed snapshot, runs the full checks when the revision changed, builds and validates the replacement bundle, commits only `deploy/snapshot-data`, and pushes that commit to `main`. An unchanged revision creates no commit. Use this command after generator-only changes to rebuild the same source revision:
 
-If refresh fails, the server revalidates the previous active snapshot before serving it and logs only a fixed error category. If no valid previous snapshot exists, startup fails closed. Never use `STSDLE_SKIP_SYNC=1` as a production refresh bypass.
+```powershell
+npm run release:snapshot -- --force
+```
 
-Production synchronization is serialized per resolved `STSDLE_DATA_DIR`, including across server processes. Before listening, each server acquires a containment-checked lifetime lease for the exact snapshot it serves; graceful close and failed listen release it, while retention reclaims only confirmed-dead owners. After a validated activation, the store keeps the active snapshot, the most recent validated prior recovery snapshot, and every snapshot leased by a live or ambiguous owner; it prunes only older unleased validated snapshots. Invalid, unknown, unrelated, linked, junction, or escaped paths are preserved. A lock with ambiguous ownership fails closed; a confirmed dead-process lock can be recovered. Recognizably owned `.staging` directories from crashed builds are removed only while the exclusive synchronization lock is held. Normally size the writable data volume for two complete snapshots plus one temporary in-progress staging snapshot during startup, and allow one additional complete snapshot for each concurrently live server still serving an older activation.
+If the commit succeeds but the push fails, retry it with:
 
-The server stores and serves the candidate/guess artwork atlases plus exceptional 400 x 520 fallback full cards. Ordinary base and upgraded full-card images remain the responsibility of the trusted CDN and are loaded directly by the browser; the server does not proxy or persist them.
+```powershell
+git push origin HEAD:main
+```
+
+The snapshot contains candidate and guess artwork plus exceptional framed fallback cards. Full accepted-answer cards normally load directly from the official CDN in each player's browser; the server does not proxy them. Install local Playwright Chromium only when a missing framed card, such as Mad Science, needs to be rendered for a release.
 
 Daily selection uses the UTC date and the active content revision. A restart with the same revision preserves that UTC day's answer and stored progress. If the stable source changes during the same UTC day, the revision changes and the browser starts the new revision-scoped Daily instead of mixing old guesses with new card data. Practice rounds are random and never write Daily round storage or expose sharing.
 
@@ -94,11 +95,9 @@ Daily selection uses the UTC date and the active content revision. A restart wit
 
 1. Sign in to Render and select **New → Blueprint**.
 2. Connect GitHub, then choose `Akirakato1/sts2dle` on the `main` branch.
-3. Confirm the paid Starter service and its 1 GB persistent disk before deploying.
-4. Wait for the first synchronization to finish before `/health` becomes ready, then use the generated HTTPS URL.
+3. Confirm the single Starter web service. It serves the immutable repository snapshot, has no startup synchronization, and requires no persistent disk.
+4. Wait for `/health` to become ready, then use the generated HTTPS URL.
 5. Later pushes to `main` deploy automatically.
-
-Keep `STSDLE_SKIP_SYNC=0` so each normal deployment refreshes the synchronized card snapshot. If a refresh fails, the service can recover by revalidating its prior active snapshot; without a valid snapshot, it fails closed. Size the persistent disk for two complete snapshots plus one in-progress staging snapshot, and add another complete snapshot for each concurrently live service retaining an older activation.
 
 ## Attribution
 
