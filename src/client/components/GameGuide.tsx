@@ -104,7 +104,7 @@ export function GameGuide(): React.JSX.Element {
 
   return <section className="game-guide" aria-label="Game help">
     <button ref={triggerRef} type="button" className="game-guide__trigger" aria-label="How to play" onClick={() => setOpen(true)}>
-      <span aria-hidden="true">?</span><span>How to play</span>
+      <span className="game-guide__trigger-art" aria-hidden="true" />
     </button>
     {open && <div className="game-guide__backdrop" onClick={(event) => {
       if (event.target === event.currentTarget) closeGuide();
@@ -134,7 +134,7 @@ export function GameGuide(): React.JSX.Element {
           </section>
           <section>
             <h3>Keyword icons</h3>
-            <ul className="game-guide__icon-list game-guide__row-list">
+            <ul className="game-guide__icon-list game-guide__keyword-list game-guide__row-list">
               <li><KeywordStateIcons displayValue="false" /><span>Absent</span></li>
               <li><KeywordStateIcons displayValue="true" /><span>Present</span></li>
               <li><KeywordStateIcons displayValue="false → true" /><span>Gained on upgrade</span></li>

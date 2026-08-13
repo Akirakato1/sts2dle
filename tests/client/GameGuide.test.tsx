@@ -13,6 +13,8 @@ describe("GameGuide", () => {
     const trigger = screen.getByRole("button", { name: "How to play" });
 
     expect(trigger).toHaveAttribute("aria-label", "How to play");
+    expect(trigger).toHaveTextContent(/^$/);
+    expect(trigger.querySelector(".game-guide__trigger-art[aria-hidden='true']")).not.toBeNull();
     expect(screen.queryByRole("dialog", { name: "How to play" })).not.toBeInTheDocument();
 
     fireEvent.click(trigger);
@@ -65,6 +67,20 @@ describe("GameGuide", () => {
     expect(dialog.querySelectorAll(".result-legend__swatch[aria-hidden='true']")).toHaveLength(3);
     expect(dialog.querySelectorAll("svg[data-orb-kind]")).toHaveLength(3);
     expect(dialog.querySelectorAll(".keyword-state-icons")).toHaveLength(4);
+    const keywordSection = within(dialog).getByRole("heading", { name: "Keyword icons" }).closest("section")!;
+    expect(keywordSection.querySelector("ul")).toHaveClass("game-guide__keyword-list");
+    const expectedKeywords = [
+      { label: "Absent", icons: ["x"] },
+      { label: "Present", icons: ["check"] },
+      { label: "Gained on upgrade", icons: ["x", "check"] },
+      { label: "Lost on upgrade", icons: ["check", "x"] },
+    ] as const;
+    for (const [index, expected] of expectedKeywords.entries()) {
+      const row = keywordSection.querySelectorAll("li")[index]!;
+      expect([...row.querySelectorAll("svg[data-icon]")].map((icon) => icon.getAttribute("data-icon")))
+        .toEqual(expected.icons);
+      expect(row.querySelector(":scope > span:last-child")).toHaveTextContent(expected.label);
+    }
     expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(14);
     expect(view.container.querySelector("details")).toBeNull();
   });
