@@ -255,6 +255,43 @@ async function openEmptySearch(page: Page): Promise<Locator> {
   return search;
 }
 
+async function clickTrueHelpBackdrop(page: Page): Promise<void> {
+  const hitTest = await page.locator(".game-guide__backdrop").evaluate((backdrop) => {
+    const backdropRect = backdrop.getBoundingClientRect();
+    const dialogRect = backdrop.querySelector(".game-guide__dialog")!.getBoundingClientRect();
+    const client = {
+      x: backdropRect.left + 4,
+      y: backdropRect.top + 4,
+    };
+    const pagePoint = { x: client.x + window.scrollX, y: client.y + window.scrollY };
+    return {
+      client,
+      page: pagePoint,
+      scroll: { x: window.scrollX, y: window.scrollY },
+      targetIsBackdrop: document.elementFromPoint(client.x, client.y) === backdrop,
+      outsideDialog: client.x < dialogRect.left
+        || client.x > dialogRect.right
+        || client.y < dialogRect.top
+        || client.y > dialogRect.bottom,
+      backdropRect: {
+        left: backdropRect.left,
+        top: backdropRect.top,
+        right: backdropRect.right,
+        bottom: backdropRect.bottom,
+      },
+    };
+  });
+  expect(hitTest.client.x).toBeGreaterThanOrEqual(hitTest.backdropRect.left);
+  expect(hitTest.client.x).toBeLessThanOrEqual(hitTest.backdropRect.right);
+  expect(hitTest.client.y).toBeGreaterThanOrEqual(hitTest.backdropRect.top);
+  expect(hitTest.client.y).toBeLessThanOrEqual(hitTest.backdropRect.bottom);
+  expect(hitTest.page.x - hitTest.client.x).toBe(hitTest.scroll.x);
+  expect(hitTest.page.y - hitTest.client.y).toBe(hitTest.scroll.y);
+  expect(hitTest.targetIsBackdrop).toBe(true);
+  expect(hitTest.outsideDialog).toBe(true);
+  await page.mouse.click(hitTest.client.x, hitTest.client.y);
+}
+
 async function dragOrbTo(page: Page, orb: "Reveal" | "Filter" | "Negation", target: Locator): Promise<void> {
   const source = page.getByRole("button", { name: `${orb} Orb, available` });
   await target.scrollIntoViewIfNeeded();
@@ -958,7 +995,7 @@ test("Daily and Practice complete the full paired-card experience without leakin
   await expect(helpTrigger).toBeFocused();
 
   await helpTrigger.click();
-  await page.locator(".game-guide__backdrop").click({ position: { x: 4, y: 4 } });
+  await clickTrueHelpBackdrop(page);
   await expect(help).toBeHidden();
   await expect(helpTrigger).toBeFocused();
   const dailyTab = page.getByRole("button", { name: "Daily", exact: true });
