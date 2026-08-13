@@ -75,8 +75,14 @@ const envelopeSchema = z.object({
   sourceRevision: z.string(),
   ruleset: z.string(),
   utcDate: z.string().nullable(),
+  practiceHardcoreChoice: z.boolean().nullable(),
   round: roundSchema,
 }).strict();
+
+export interface LoadedCurrentRound {
+  round: RoundState;
+  practiceHardcoreChoice: boolean | null;
+}
 
 const EMPTY_STATS: DailyStats = { lastCompletedUtcDate: null, currentStreak: 0, maxStreak: 0 };
 
@@ -179,11 +185,19 @@ function targetHasColor(target: ConstraintOrbTarget, guesses: readonly Submitted
   return guess.results.find((result) => result.feature === target.feature)?.color === color;
 }
 
-function validAssistance(assistance: AssistanceState | null, hardcore: boolean, guesses: readonly SubmittedGuess[]): boolean {
+function validAssistance(
+  assistance: AssistanceState | null,
+  hardcore: boolean,
+  guesses: readonly SubmittedGuess[],
+  status: RoundState["status"],
+): boolean {
   if (hardcore) return assistance === null;
   if (assistance === null) return false;
-  return (assistance.filter === null || targetHasColor(assistance.filter, guesses, "green"))
-    && (assistance.negation === null || targetHasColor(assistance.negation, guesses, "red"));
+  const terminalWinningIndex = status === "won" ? guesses.length - 1 : -1;
+  return (assistance.filter === null
+    || (assistance.filter.guessIndex !== terminalWinningIndex && targetHasColor(assistance.filter, guesses, "green")))
+    && (assistance.negation === null
+      || (assistance.negation.guessIndex !== terminalWinningIndex && targetHasColor(assistance.negation, guesses, "red")));
 }
 
 function validStatus(round: RoundState): boolean {
@@ -194,7 +208,12 @@ function validStatus(round: RoundState): boolean {
   return round.mode === "practice" && winningIndex === -1;
 }
 
-export function saveCurrentRound(storage: Storage, identity: RoundStorageIdentity, round: RoundState): void {
+export function saveCurrentRound(
+  storage: Storage,
+  identity: RoundStorageIdentity,
+  round: RoundState,
+  practiceHardcoreChoice = round.mode === "practice" ? round.hardcore : null,
+): void {
   if (identity.mode !== round.mode) return;
   const value = {
     version: CURRENT_ROUND_VERSION,
@@ -202,6 +221,7 @@ export function saveCurrentRound(storage: Storage, identity: RoundStorageIdentit
     sourceRevision: identity.sourceRevision,
     ruleset: identity.ruleset,
     utcDate: identity.utcDate,
+    practiceHardcoreChoice: identity.mode === "practice" ? practiceHardcoreChoice : null,
     round: {
       mode: round.mode,
       hardcore: round.hardcore,
@@ -223,7 +243,7 @@ export function loadCurrentRound(
   cardsById: ReadonlyMap<string, CardIdentity>,
   pairGroupsByKey: ReadonlyMap<string, PairGroup>,
   expectedAnswer?: SelectedAnswer,
-): RoundState | null {
+): LoadedCurrentRound | null {
   const key = CURRENT_ROUND_KEYS[identity.mode];
   let raw: string | null;
   try { raw = storage.getItem(key); } catch { return null; }
@@ -236,14 +256,20 @@ export function loadCurrentRound(
       || envelope.sourceRevision !== identity.sourceRevision
       || envelope.ruleset !== identity.ruleset
       || envelope.utcDate !== identity.utcDate
+      || (identity.mode === "practice"
+        ? typeof envelope.practiceHardcoreChoice !== "boolean"
+        : envelope.practiceHardcoreChoice !== null)
+      || (identity.mode === "practice"
+        && parsedRound.status === "playing"
+        && envelope.practiceHardcoreChoice !== parsedRound.hardcore)
       || !validRoundIdentity(parsedRound, identity)
       || (expectedAnswer !== undefined && !sameAnswer(parsedRound.answer, expectedAnswer))
       || !canonicalAnswer(parsedRound.answer, cardsById, pairGroupsByKey)) throw new Error("Invalid stored round identity");
     const guesses = canonicalGuesses(parsedRound.guesses, parsedRound.answer, cardsById);
     if (guesses === null) throw new Error("Invalid stored guesses");
     const round = { ...parsedRound, guesses, error: null };
-    if (!validStatus(round) || !validAssistance(round.assistance, round.hardcore, guesses)) throw new Error("Invalid stored round state");
-    return round;
+    if (!validStatus(round) || !validAssistance(round.assistance, round.hardcore, guesses, round.status)) throw new Error("Invalid stored round state");
+    return { round, practiceHardcoreChoice: envelope.practiceHardcoreChoice };
   } catch {
     removeItem(storage, key);
     return null;

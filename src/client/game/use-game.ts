@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 
 import type { LoadedSnapshot } from "../api/load-snapshot.js";
 import { createDailyRandom, createPracticeRandom } from "../../shared/random.js";
-import { selectAnswer } from "../../shared/selection.js";
+import { selectAnswer, selectDistinctAnswer, type SelectedAnswer } from "../../shared/selection.js";
 import type { CandidateCategory, ConstraintOrbTarget, RevealOrbTarget } from "./assistance.js";
-import { createRoundState, gameReducer, type GameAction, type PlayMode, type RoundState } from "./game-reducer.js";
+import { createRoundState, gameReducer, isPracticeSettingsEditable, type GameAction, type PlayMode, type RoundState } from "./game-reducer.js";
 import { preloadAnswerImages } from "./preload-images.js";
 import {
   DAILY_RULESET_VERSION,
@@ -21,6 +21,7 @@ import {
 } from "./storage.js";
 
 export interface UseGameResult {
+  activeMode: PlayMode;
   round: RoundState;
   roundToken: number;
   dailyUtcDate: string;
@@ -35,6 +36,7 @@ export interface UseGameResult {
   setPracticeHardcoreChoice(hardcore: boolean): void;
   forfeitPractice(): void;
   nextPracticeRound(): void;
+  retryActiveMode(): void;
 }
 
 interface LegacyNextRound {
@@ -55,8 +57,9 @@ interface HookState {
 
 type HookAction =
   | { type: "switch-mode"; mode: PlayMode }
-  | { type: "round-ready"; mode: PlayMode; round: RoundState }
+  | { type: "round-ready"; mode: PlayMode; round: RoundState; practiceHardcoreChoice?: boolean }
   | { type: "round-failed"; mode: PlayMode; error: string }
+  | { type: "invalidate-dailies" }
   | { type: "transition"; mode: PlayMode; previous: RoundState; round: RoundState }
   | { type: "set-practice-choice"; hardcore: boolean };
 
@@ -88,13 +91,25 @@ function hookReducer(state: HookState, action: HookAction): HookState {
         errors,
         roundToken: state.roundToken + (replacesActiveRound || completesInitialLoad ? 1 : 0),
         practiceHardcoreChoice: action.mode === "practice" && previous === undefined
-          ? action.round.hardcore
+          ? action.practiceHardcoreChoice ?? action.round.hardcore
           : state.practiceHardcoreChoice,
       };
     }
     case "round-failed":
       if (state.errors[action.mode] === action.error) return state;
       return { ...state, errors: { ...state.errors, [action.mode]: action.error } };
+    case "invalidate-dailies": {
+      const rounds = new Map(state.rounds);
+      const hadActiveDaily = state.activeMode !== "practice" && rounds.has(state.activeMode);
+      rounds.delete("daily");
+      rounds.delete("hardcore-daily");
+      return {
+        ...state,
+        rounds,
+        errors: { ...state.errors, daily: null, "hardcore-daily": null },
+        roundToken: state.roundToken + (hadActiveDaily ? 1 : 0),
+      };
+    }
     case "transition":
       if (state.rounds.get(action.mode) !== action.previous || action.previous === action.round) return state;
       return { ...state, rounds: new Map(state.rounds).set(action.mode, action.round) };
@@ -123,9 +138,7 @@ function identityFor(mode: PlayMode, sourceRevision: string, date: string): Roun
   };
 }
 
-function errorMessage(caught: unknown): string {
-  return caught instanceof Error ? caught.message : "Unable to start a round.";
-}
+const MODE_PREPARATION_ERROR = "Unable to prepare this game mode.";
 
 export function useGame(snapshot: LoadedSnapshot): UseGameState {
   const [state, reactDispatch] = useReducer(hookReducer, {
@@ -142,10 +155,12 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     reactDispatch(action);
   }, []);
   const [activeUtcDate, setActiveUtcDate] = useState(() => utcDate());
+  const activeUtcDateRef = useRef(activeUtcDate);
   const generations = useRef<Record<PlayMode, number>>({ daily: 0, "hardcore-daily": 0, practice: 0 });
   const pending = useRef<Record<PlayMode, boolean>>({ daily: false, "hardcore-daily": false, practice: false });
-  const persistedRounds = useRef(new Map<PlayMode, RoundState>());
+  const persistedRounds = useRef(new Map<PlayMode, { round: RoundState; practiceHardcoreChoice: boolean | null }>());
   const recordedCompletions = useRef(new Set<string>());
+  const dailyAnswerPromises = useRef(new Map<string, Promise<SelectedAnswer>>());
   const groups = useMemo(() => ({
     baseGroups: snapshot.baseGroups,
     pairGroups: snapshot.pairGroups,
@@ -155,12 +170,32 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
   const storage = browserStorage();
   const revision = snapshot.manifest.sourceRevision;
 
+  const getDailyAnswer = useCallback((date: string): Promise<SelectedAnswer> => {
+    const key = `${date}:${revision}`;
+    const existing = dailyAnswerPromises.current.get(key);
+    if (existing) return existing;
+    const pendingAnswer = createDailyRandom(date, revision, "daily")
+      .then((source) => selectAnswer(groups, snapshot.cardsById, source));
+    dailyAnswerPromises.current.set(key, pendingAnswer);
+    void pendingAnswer.catch(() => {
+      if (dailyAnswerPromises.current.get(key) === pendingAnswer) dailyAnswerPromises.current.delete(key);
+    });
+    return pendingAnswer;
+  }, [groups, revision, snapshot.cardsById]);
+
   const startDaily = useCallback(async (mode: "daily" | "hardcore-daily", date: string) => {
     const generation = ++generations.current[mode];
     pending.current[mode] = true;
     try {
-      const source = await createDailyRandom(date, revision, mode);
-      const answer = selectAnswer(groups, snapshot.cardsById, source);
+      const dailyAnswer = await getDailyAnswer(date);
+      const answer = mode === "daily"
+        ? dailyAnswer
+        : selectDistinctAnswer(
+          groups,
+          snapshot.cardsById,
+          await createDailyRandom(date, revision, "hardcore-daily"),
+          dailyAnswer.selectedCardId,
+        );
       if (generation !== generations.current[mode]) return;
       const identity = identityFor(mode, revision, date);
       const restored = storage
@@ -170,7 +205,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
       dispatch({
         type: "round-ready",
         mode,
-        round: restored ?? createRoundState({
+        round: restored?.round ?? createRoundState({
           mode,
           hardcore: mode === "hardcore-daily",
           roundId,
@@ -178,15 +213,25 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
           answer,
         }),
       });
-    } catch (caught) {
-      if (generation === generations.current[mode]) dispatch({ type: "round-failed", mode, error: errorMessage(caught) });
+    } catch {
+      if (generation === generations.current[mode]) dispatch({ type: "round-failed", mode, error: MODE_PREPARATION_ERROR });
     } finally {
       if (generation === generations.current[mode]) pending.current[mode] = false;
     }
-  }, [dispatch, groups, revision, snapshot.cardsById, snapshot.pairGroupsByKey, storage]);
+  }, [dispatch, getDailyAnswer, groups, revision, snapshot.cardsById, snapshot.pairGroupsByKey, storage]);
 
-  const startPractice = useCallback(async (forceNew: boolean, hardcore: boolean) => {
+  const startPractice = useCallback(async (
+    forceNew: boolean,
+    hardcore: boolean,
+    expectedTerminal?: Readonly<{ roundId: string; status: "won" | "forfeited" }>,
+  ) => {
     const mode = "practice" as const;
+    const matchesExpectedTerminal = () => {
+      if (!expectedTerminal) return true;
+      const current = stateRef.current.rounds.get(mode);
+      return current?.roundId === expectedTerminal.roundId && current.status === expectedTerminal.status;
+    };
+    if (!matchesExpectedTerminal()) return;
     const generation = ++generations.current.practice;
     pending.current.practice = true;
     try {
@@ -198,13 +243,18 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
           snapshot.pairGroupsByKey,
         );
         if (restored) {
-          if (generation === generations.current.practice) dispatch({ type: "round-ready", mode, round: restored });
+          if (generation === generations.current.practice) dispatch({
+            type: "round-ready",
+            mode,
+            round: restored.round,
+            practiceHardcoreChoice: restored.practiceHardcoreChoice ?? restored.round.hardcore,
+          });
           return;
         }
       }
       const source = await Promise.resolve(createPracticeRandom());
       const answer = selectAnswer(groups, snapshot.cardsById, source);
-      if (generation !== generations.current.practice) return;
+      if (generation !== generations.current.practice || !matchesExpectedTerminal()) return;
       const uuid = crypto.randomUUID();
       dispatch({
         type: "round-ready",
@@ -217,8 +267,8 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
           answer,
         }),
       });
-    } catch (caught) {
-      if (generation === generations.current.practice) dispatch({ type: "round-failed", mode, error: errorMessage(caught) });
+    } catch {
+      if (generation === generations.current.practice) dispatch({ type: "round-failed", mode, error: MODE_PREPARATION_ERROR });
     } finally {
       if (generation === generations.current.practice) pending.current.practice = false;
     }
@@ -248,9 +298,12 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     if (!storage) return;
     for (const mode of ["daily", "hardcore-daily", "practice"] as const) {
       const round = state.rounds.get(mode);
-      if (!round || persistedRounds.current.get(mode) === round) continue;
-      saveCurrentRound(storage, identityFor(mode, revision, activeUtcDate), round);
-      persistedRounds.current.set(mode, round);
+      if (!round) continue;
+      const practiceHardcoreChoice = mode === "practice" ? state.practiceHardcoreChoice : null;
+      const persisted = persistedRounds.current.get(mode);
+      if (persisted?.round === round && persisted.practiceHardcoreChoice === practiceHardcoreChoice) continue;
+      saveCurrentRound(storage, identityFor(mode, revision, activeUtcDate), round, practiceHardcoreChoice);
+      persistedRounds.current.set(mode, { round, practiceHardcoreChoice });
       if (mode === "practice" || round.status !== "won") continue;
       const completionKey = `${mode}:${round.roundId}`;
       if (recordedCompletions.current.has(completionKey)) continue;
@@ -261,7 +314,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
       );
       recordedCompletions.current.add(completionKey);
     }
-  }, [activeUtcDate, revision, state.rounds, storage]);
+  }, [activeUtcDate, revision, state.practiceHardcoreChoice, state.rounds, storage]);
 
   const activeRound = state.rounds.get(state.activeMode) ?? null;
   useEffect(() => {
@@ -272,10 +325,17 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let timerGeneration = 0;
-    const checkUtcDate = () => setActiveUtcDate((current) => {
+    const checkUtcDate = () => {
       const next = utcDate();
-      return current === next ? current : next;
-    });
+      if (activeUtcDateRef.current === next) return;
+      activeUtcDateRef.current = next;
+      generations.current.daily += 1;
+      generations.current["hardcore-daily"] += 1;
+      pending.current.daily = false;
+      pending.current["hardcore-daily"] = false;
+      dispatch({ type: "invalidate-dailies" });
+      setActiveUtcDate(next);
+    };
     const armTimer = () => {
       if (disposed) return;
       if (timer !== null) clearTimeout(timer);
@@ -300,7 +360,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
       if (timer !== null) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [dispatch]);
 
   const applyToActive = useCallback((action: GameAction) => {
     const current = stateRef.current;
@@ -325,19 +385,48 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
 
   const setPracticeHardcoreChoice = useCallback((hardcore: boolean) => {
     const current = stateRef.current;
-    dispatch({ type: "set-practice-choice", hardcore });
     const previous = current.rounds.get("practice");
+    if (previous?.status === "playing" && !isPracticeSettingsEditable(previous)) return;
+    dispatch({ type: "set-practice-choice", hardcore });
     if (!previous) return;
     const round = gameReducer(previous, { type: "set-practice-hardcore", hardcore });
     if (round !== previous) dispatch({ type: "transition", mode: "practice", previous, round });
   }, [dispatch]);
 
   const nextPracticeRound = useCallback(() => {
-    if (stateRef.current.activeMode !== "practice") return;
-    return startPractice(true, stateRef.current.practiceHardcoreChoice);
+    const current = stateRef.current;
+    if (current.activeMode !== "practice") return;
+    const terminal = current.rounds.get("practice");
+    if (!terminal || terminal.status === "playing") return;
+    return startPractice(true, current.practiceHardcoreChoice, {
+      roundId: terminal.roundId,
+      status: terminal.status,
+    });
   }, [startPractice]);
 
+  const retryActiveMode = useCallback(() => {
+    const current = stateRef.current;
+    const mode = current.activeMode;
+    if (pending.current[mode]) return;
+    if (mode !== "practice") {
+      void startDaily(mode, activeUtcDate);
+      return;
+    }
+    const practice = current.rounds.get("practice");
+    if (!practice) {
+      void startPractice(false, current.practiceHardcoreChoice);
+      return;
+    }
+    if (practice.status !== "playing") {
+      void startPractice(true, current.practiceHardcoreChoice, {
+        roundId: practice.roundId,
+        status: practice.status,
+      });
+    }
+  }, [activeUtcDate, startDaily, startPractice]);
+
   const controls = {
+    activeMode: state.activeMode,
     roundToken: state.roundToken,
     dailyUtcDate: activeUtcDate,
     error: state.errors[state.activeMode],
@@ -351,6 +440,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     setPracticeHardcoreChoice,
     forfeitPractice: () => applyToActive({ type: "forfeit-practice" }),
     nextPracticeRound,
+    retryActiveMode,
     nextRound: nextPracticeRound,
   };
   return activeRound

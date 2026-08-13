@@ -4,7 +4,7 @@ import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { CardSearch } from "./components/CardSearch.js";
 import { GameGuide } from "./components/GameGuide.js";
 import { GuessGrid } from "./components/GuessGrid.js";
-import { FEATURE_LABELS } from "./components/FeatureTile.js";
+import { FEATURE_LABELS, keywordAccessibleValue } from "./components/FeatureTile.js";
 import { AnswerReveal } from "./components/AnswerReveal.js";
 import { SharePanel } from "./components/SharePanel.js";
 import { NameHint } from "./components/NameHint.js";
@@ -16,7 +16,8 @@ import { useGame } from "./game/use-game.js";
 import { isPracticeSettingsEditable, type PlayMode, type RoundState } from "./game/game-reducer.js";
 import { deriveNameHint } from "./game/name-hints.js";
 import type { CandidateCategory, ConstraintOrbTarget, OrbKind, RevealOrbTarget } from "./game/assistance.js";
-import { FEATURE_ORDER } from "../shared/domain.js";
+import { FEATURE_ORDER, type CardIdentity } from "../shared/domain.js";
+import { formatFeatureValue } from "../shared/comparison.js";
 
 function ignoreCandidateVisibility(): void {}
 
@@ -59,6 +60,7 @@ function validConstraintTarget(round: RoundState, target: Extract<OrbTargetDescr
 
 function resolveOrbUse(
   round: RoundState,
+  answerCard: CardIdentity,
   orb: OrbKind,
   target: OrbTargetDescriptor,
   consumers: OrbConsumers,
@@ -73,7 +75,19 @@ function resolveOrbUse(
         return rejected("Reveal Orb can only be used on a feature heading.");
       }
       consumers.consumeReveal({ feature: target.feature });
-      return accepted(`Reveal Orb showed ${FEATURE_LABELS[target.feature]}.`);
+      {
+        const answerValue = formatFeatureValue(
+          answerCard.base[target.feature],
+          answerCard.upgraded[target.feature],
+        );
+        const accessibleValue = target.feature === "cardClass"
+          || target.feature === "cardType"
+          || target.feature === "mana"
+          || target.feature === "rarity"
+          ? answerValue
+          : keywordAccessibleValue(answerValue);
+        return accepted(`Reveal Orb showed ${FEATURE_LABELS[target.feature]}: ${accessibleValue}.`);
+      }
     case "filter":
       if (target.kind !== "tile" || !validConstraintTarget(round, target, "green")) {
         return rejected("Filter Orb requires a revealed green feature tile.");
@@ -188,13 +202,16 @@ function RoundGame({
   };
   const assistance = round.assistance ?? null;
   const interactionDisabled = isRevealing || round.status !== "playing";
+  const answerCard = snapshot.cardsById.get(round.answer.selectedCardId);
 
   return <OrbInteractionProvider
     key={round.roundId}
     roundKey={round.roundId}
     assistance={assistance}
     disabled={interactionDisabled}
-    onUse={(orb, target) => resolveOrbUse(round, orb, target, consumers)}
+    onUse={(orb, target) => answerCard
+      ? resolveOrbUse(round, answerCard, orb, target, consumers)
+      : rejected("Reveal Orb is unavailable for this round.")}
   >
     <RoundGameBoard
       round={round}
@@ -216,9 +233,7 @@ function RoundGame({
 
 function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
   const game = useGame(snapshot);
-  if (game.error) return <p role="alert">Unable to start the round: {game.error}</p>;
-  if (game.status === "loading" || !game.round) return <p role="status">Preparing today&apos;s card…</p>;
-  const { round } = game;
+  const activeMode = game.activeMode ?? game.round?.mode ?? "daily";
   const modeLabels: Readonly<Record<PlayMode, string>> = {
     daily: "Daily",
     "hardcore-daily": "Hardcore Daily",
@@ -226,16 +241,19 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
   };
   return <section className="game-panel" aria-label="Card guessing controls">
     <nav className="mode-tabs" aria-label="Round mode">
-      {(["daily", "hardcore-daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={round.mode === mode ? "page" : undefined} className={round.mode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{modeLabels[mode]}</button>)}
+      {(["daily", "hardcore-daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={activeMode === mode ? "page" : undefined} className={activeMode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{modeLabels[mode]}</button>)}
     </nav>
     <GameGuide />
-    <RoundGame
+    {game.error ? <section className="load-error mode-error" role="alert">
+      <p>Unable to prepare this game mode.</p>
+      <button type="button" onClick={() => game.retryActiveMode()}>Retry</button>
+    </section> : game.status === "loading" || !game.round ? <p role="status">Preparing today&apos;s card…</p> : <RoundGame
       key={game.roundToken}
-      round={round}
+      round={game.round}
       roundKey={game.roundToken}
       snapshot={snapshot}
       utcDate={game.dailyUtcDate}
-      practiceHardcoreChoice={game.practiceHardcoreChoice ?? round.hardcore}
+      practiceHardcoreChoice={game.practiceHardcoreChoice ?? game.round.hardcore}
       onSubmit={game.submit}
       onConsumeReveal={game.consumeReveal}
       onConsumeFilter={game.consumeFilter}
@@ -244,7 +262,7 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
       onPracticeHardcoreChange={game.setPracticeHardcoreChoice ?? ignoreCandidateVisibility}
       onForfeitPractice={game.forfeitPractice ?? ignoreCandidateVisibility}
       onNextRound={game.nextPracticeRound ?? game.nextRound}
-    />
+    />}
   </section>;
 }
 

@@ -14,6 +14,15 @@ export function nextIndex(source: RandomSource, maxExclusive: number): number {
   return value % maxExclusive;
 }
 
+export function shuffleWithSource<T>(values: readonly T[], source: RandomSource): T[] {
+  const shuffled = [...values];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = nextIndex(source, index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex]!, shuffled[index]!];
+  }
+  return shuffled;
+}
+
 export async function createDailyRandom(
   date: string,
   revision: string,

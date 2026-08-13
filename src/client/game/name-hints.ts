@@ -1,3 +1,5 @@
+import { shuffleWithSource, type RandomSource } from "../../shared/random.js";
+
 export interface NameHintCharacter {
   value: string;
   revealed: boolean;
@@ -28,25 +30,21 @@ function fnv1a(seed: string): number {
   return hash >>> 0;
 }
 
-function createSeededRandom(seed: string): () => number {
+function createSeededRandom(seed: string): RandomSource {
   let state = fnv1a(seed);
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let value = state;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-    return (value ^ (value >>> 14)) >>> 0;
+  return {
+    nextUint32() {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let value = state;
+      value = Math.imul(value ^ (value >>> 15), value | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return (value ^ (value >>> 14)) >>> 0;
+    },
   };
 }
 
 function shuffledPositions(positions: NamePosition[], seed: string): NamePosition[] {
-  const shuffled = [...positions];
-  const nextUint32 = createSeededRandom(seed);
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    const swapIndex = nextUint32() % (index + 1);
-    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex]!, shuffled[index]!];
-  }
-  return shuffled;
+  return shuffleWithSource(positions, createSeededRandom(seed));
 }
 
 export function deriveNameHint(name: string, wrongGuessCount: number, seed: string): NameHintView | null {

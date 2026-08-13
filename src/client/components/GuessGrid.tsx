@@ -44,10 +44,10 @@ function FeatureHeader({ feature, selectedAnswer, revealed }: {
         ? <KeywordStateIcons displayValue={displayValue as KeywordStateDisplayValue} />
         : displayValue}
     </span>}
-    {binding.valid && <button
+    {binding.active && <button
       {...binding.targetProps}
       type="button"
-      className="guess-grid__header-target orb-target--active orb-target--valid"
+      className={`guess-grid__header-target orb-target--active${binding.valid ? " orb-target--valid" : ""}`}
     />}
   </div>;
 }

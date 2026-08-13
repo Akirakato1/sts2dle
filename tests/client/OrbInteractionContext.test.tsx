@@ -240,6 +240,24 @@ describe("OrbInteractionProvider", () => {
     expect(filter).toHaveAttribute("aria-pressed", "true");
   });
 
+  test("suppresses the compatibility click after an invalid drag returns the selected orb", () => {
+    const onUse = accepted();
+    renderHarness({ onUse });
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    fireEvent.click(filter);
+
+    fireEvent.pointerDown(filter, { pointerId: 6, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(filter, { pointerId: 6, clientX: 30, clientY: 30 });
+    fireEvent.pointerUp(filter, { pointerId: 6, clientX: 90, clientY: 30 });
+    fireEvent.click(filter);
+
+    expect(onUse).not.toHaveBeenCalled();
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Yellow mana tile is an invalid target for the Filter Orb. Orb returned.",
+    );
+  });
+
   test.each([
     ["empty release", "pointerUp", 30],
     ["invalid release", "pointerUp", 90],

@@ -379,8 +379,9 @@ export function OrbInteractionProvider({
       return;
     }
 
+    if (reason === "up") suppressCompatibilityClick();
+
     if (reason === "up" && !drag.dragging) {
-      suppressCompatibilityClick();
       toggleSelection(drag.orb, drag.epoch);
       return;
     }

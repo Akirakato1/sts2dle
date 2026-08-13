@@ -127,7 +127,10 @@ describe("current round storage", () => {
     const storage = new MemoryStorage();
     const source = round(mode, mode === "practice" ? "forfeited" : "won");
     saveCurrentRound(storage, identities[mode], source);
-    expect(loadCurrentRound(storage, identities[mode], cardsById, pairGroupsByKey, answer)).toEqual(source);
+    expect(loadCurrentRound(storage, identities[mode], cardsById, pairGroupsByKey, answer)).toEqual({
+      round: source,
+      practiceHardcoreChoice: mode === "practice" ? source.hardcore : null,
+    });
     expect(storage.getItem(CURRENT_ROUND_KEYS[mode])).not.toContain("error");
   });
 
@@ -135,7 +138,27 @@ describe("current round storage", () => {
     const storage = new MemoryStorage();
     const source = round("practice", "won");
     saveCurrentRound(storage, identities.practice, source);
-    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer)).toEqual(source);
+    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer)).toEqual({
+      round: source,
+      practiceHardcoreChoice: source.hardcore,
+    });
+  });
+
+  test("round-trips the pending next Practice Hardcore choice in the fixed Practice envelope", () => {
+    const storage = new MemoryStorage();
+    const source = round("practice", "forfeited");
+
+    saveCurrentRound(storage, identities.practice, source, true);
+
+    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer))
+      .toEqual({ round: source, practiceHardcoreChoice: true });
+    expect(stored(storage, "practice").practiceHardcoreChoice).toBe(true);
+  });
+
+  test("rejects a missing or malformed pending Practice choice without touching other storage", () => {
+    assertRejected("practice", (value) => { delete value.practiceHardcoreChoice; }, round("practice", "forfeited"));
+    assertRejected("practice", (value) => { value.practiceHardcoreChoice = "yes"; }, round("practice", "forfeited"));
+    assertRejected("practice", (value) => { value.practiceHardcoreChoice = !value.round.hardcore; }, round("practice"));
   });
 
   test("rejects strict envelope identity and mode inconsistencies", () => {
@@ -200,6 +223,22 @@ describe("current round storage", () => {
     assertRejected("daily", (value) => { value.round.assistance.visibility.extra = true; });
     assertRejected("daily", (value) => { delete value.round.assistance.visibility.green; });
     assertRejected("hardcore-daily", (value) => { value.round.assistance = createDefaultAssistance(); });
+  });
+
+  test("rejects a constraint orb target on the terminal winning guess but restores a pre-win target", () => {
+    const won = round("daily", "won");
+    assertRejected("daily", (value) => {
+      value.round.assistance.filter = {
+        guessIndex: 1,
+        cardId: equivalentCard.id,
+        feature: "mana",
+      };
+    }, won);
+
+    const storage = new MemoryStorage();
+    saveCurrentRound(storage, identities.daily, won);
+    expect(loadCurrentRound(storage, identities.daily, cardsById, pairGroupsByKey, answer)?.round.assistance?.filter)
+      .toEqual({ guessIndex: 0, cardId: guessCard.id, feature: "retain" });
   });
 
   test("removes only exact legacy application round keys", () => {

@@ -139,6 +139,7 @@ describe("App snapshot cleanup", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reveal Orb, available" }));
     fireEvent.click(screen.getByRole("button", { name: /Mana feature heading.*Use Reveal Orb/ }));
     expect(consumeReveal).toHaveBeenCalledWith({ feature: "mana" });
+    expect(screen.getByRole("status")).toHaveTextContent("Reveal Orb showed Mana: 1.");
 
     fireEvent.click(screen.getByRole("button", { name: "Filter Orb, available" }));
     fireEvent.click(screen.getByRole("button", { name: /Type green result tile.*Use Filter Orb/ }));
@@ -147,6 +148,18 @@ describe("App snapshot cleanup", () => {
     fireEvent.click(screen.getByRole("button", { name: "Negation Orb, available" }));
     fireEvent.click(screen.getByRole("button", { name: /Class red result tile.*Use Negation Orb/ }));
     expect(consumeNegation).toHaveBeenCalledWith({ guessIndex: 0, cardId: "apparition", feature: "cardClass" });
+  });
+
+  test("announces a revealed keyword pair with accessible absent and present wording", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound()));
+
+    render(<App />);
+    await screen.findByRole("combobox");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Orb, available" }));
+    fireEvent.click(screen.getByRole("button", { name: /Eternal feature heading.*Use Reveal Orb/ }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Reveal Orb showed Eternal: absent.");
   });
 
   test("keeps a stale Filter orb selected and announces the fixed semantic rejection", async () => {
@@ -168,6 +181,22 @@ describe("App snapshot cleanup", () => {
     expect(consumeFilter).not.toHaveBeenCalled();
     expect(filter).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("status")).toHaveTextContent("Filter Orb requires a revealed green feature tile.");
+  });
+
+  test("keeps Filter selected when a real red tile rejects click activation", async () => {
+    const consumeFilter = vi.fn();
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound({ guesses: [mixedGuess] }), { consumeFilter }));
+
+    render(<App />);
+    await screen.findByRole("combobox");
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    fireEvent.click(filter);
+    fireEvent.click(screen.getByRole("button", { name: /Class red result tile.*Invalid target for Filter Orb/ }));
+
+    expect(consumeFilter).not.toHaveBeenCalled();
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("Class red result tile is an invalid target for the Filter Orb.");
   });
 
   test("renders durable bubble and exact badges while red classification overrides green", async () => {
@@ -314,6 +343,57 @@ describe("App snapshot cleanup", () => {
     expect(setMode).toHaveBeenCalledWith("hardcore-daily");
     expect(screen.queryByRole("checkbox", { name: "Hardcore Practice" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "End game" })).not.toBeInTheDocument();
+  });
+
+  test("keeps mode navigation and a sanitized Retry action when active-mode setup fails", async () => {
+    const setMode = vi.fn();
+    const retryActiveMode = vi.fn();
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue({
+      status: "loading",
+      activeMode: "daily",
+      round: null,
+      roundToken: 3,
+      dailyUtcDate: "2026-08-12",
+      error: "Unable to prepare this game mode.",
+      practiceHardcoreChoice: false,
+      setMode,
+      retryActiveMode,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("navigation", { name: "Round mode" })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("Unable to prepare this game mode.");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("BEAT_DOWN");
+    fireEvent.click(screen.getByRole("button", { name: "Hardcore Daily" }));
+    expect(setMode).toHaveBeenCalledWith("hardcore-daily");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retryActiveMode).toHaveBeenCalledOnce();
+  });
+
+  test("keeps navigation but removes the old round controls and share provider while a mode reloads", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue({
+      status: "loading",
+      activeMode: "hardcore-daily",
+      round: null,
+      roundToken: 4,
+      dailyUtcDate: "2026-08-13",
+      error: null,
+      practiceHardcoreChoice: false,
+      setMode: vi.fn(),
+      retryActiveMode: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("navigation", { name: "Round mode" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Hardcore Daily" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("status")).toHaveTextContent("Preparing today's card");
+    expect(screen.queryByRole("combobox", { name: "Guess a card" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("main", { name: "Card guessing game" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy .* result/ })).not.toBeInTheDocument();
   });
 
   test("derives a masked selected-name hint from wrong guesses only in assisted rounds", async () => {

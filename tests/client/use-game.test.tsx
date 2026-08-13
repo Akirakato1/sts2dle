@@ -103,6 +103,22 @@ describe("useGame", () => {
     expect(localStorage.getItem(CURRENT_ROUND_KEYS.practice)).not.toBeNull();
   });
 
+  test("rerolls Hardcore deterministically when its first draw collides with Daily", async () => {
+    vi.mocked(createDailyRandom).mockImplementation(async (_date, _revision, namespace) => {
+      if (namespace === "daily") return { nextUint32: () => 0 };
+      const values = [0, 0, 1, 0];
+      return { nextUint32: () => values.shift() ?? 0 };
+    });
+
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    expect(game.result.current.round?.answer.selectedCardId).toBe(first.id);
+
+    act(() => game.result.current.setMode("hardcore-daily"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("hardcore-daily"));
+    expect(game.result.current.round?.answer.selectedCardId).toBe(second.id);
+  });
+
   test.each(["daily", "hardcore-daily", "practice"] as const)("restores persisted %s progress on refresh", async (mode) => {
     const daily = mode !== "practice";
     const utcDate = daily ? "2026-08-12" : null;
@@ -154,6 +170,8 @@ describe("useGame", () => {
     act(() => game.result.current.consumeReveal({ feature: "mana" }));
     act(() => game.result.current.setPracticeHardcoreChoice(true));
     expect(game.result.current.round?.hardcore).toBe(false);
+    expect(game.result.current.practiceHardcoreChoice).toBe(false);
+    expect(JSON.parse(localStorage.getItem(CURRENT_ROUND_KEYS.practice)!).practiceHardcoreChoice).toBe(false);
     act(() => game.result.current.forfeitPractice());
     act(() => game.result.current.setPracticeHardcoreChoice(true));
     expect(game.result.current.round?.hardcore).toBe(false);
@@ -161,6 +179,25 @@ describe("useGame", () => {
     await waitFor(() => expect(game.result.current.round?.roundId).toBe(`practice:${uuids[1]}`));
     expect(game.result.current.round?.hardcore).toBe(true);
     expect(game.result.current.round?.assistance).toBeNull();
+  });
+
+  test("restores a terminal Practice next-round choice without mutating the completed round", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    act(() => game.result.current.setMode("practice"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
+    act(() => game.result.current.forfeitPractice());
+    act(() => game.result.current.setPracticeHardcoreChoice(true));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(CURRENT_ROUND_KEYS.practice)!).practiceHardcoreChoice).toBe(true));
+    const completedRoundId = game.result.current.round!.roundId;
+    game.unmount();
+
+    const restored = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(restored.result.current.round?.mode).toBe("daily"));
+    act(() => restored.result.current.setMode("practice"));
+    await waitFor(() => expect(restored.result.current.round?.roundId).toBe(completedRoundId));
+    expect(restored.result.current.round?.hardcore).toBe(false);
+    expect(restored.result.current.practiceHardcoreChoice).toBe(true);
   });
 
   test("roundToken changes only for mode switches, Daily replacement, and new Practice", async () => {
@@ -172,6 +209,7 @@ describe("useGame", () => {
     expect(game.result.current.roundToken).toBe(initial);
     act(() => game.result.current.setMode("practice"));
     expect(game.result.current.roundToken).toBe(initial + 1);
+    act(() => game.result.current.forfeitPractice());
     await act(async () => game.result.current.nextPracticeRound());
     await waitFor(() => expect(game.result.current.roundToken).toBe(initial + 2));
   });
@@ -199,6 +237,69 @@ describe("useGame", () => {
     act(() => game.result.current.setMode("daily"));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(game.result.current.round?.roundId).toBe("daily:2026-08-13:revision");
+  });
+
+  test("UTC rollover immediately invalidates an active Daily until the new answer is ready", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T23:59:59.900Z"));
+    const nextDaily = deferred<{ nextUint32(): number }>();
+    const nextHardcore = deferred<{ nextUint32(): number }>();
+    vi.mocked(createDailyRandom).mockImplementation((_date, _revision, namespace) => {
+      if (_date === "2026-08-12") return Promise.resolve({ nextUint32: () => namespace === "daily" ? 0 : 1 });
+      return namespace === "daily" ? nextDaily.promise : nextHardcore.promise;
+    });
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(game.result.current.round?.roundId).toBe("daily:2026-08-12:revision");
+
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+
+    expect(game.result.current.dailyUtcDate).toBe("2026-08-13");
+    expect(game.result.current.status).toBe("loading");
+    expect(game.result.current.round).toBeNull();
+    act(() => game.result.current.submit(first.id));
+    expect(game.result.current.round).toBeNull();
+
+    await act(async () => nextDaily.resolve({ nextUint32: () => 1 }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(game.result.current.round?.roundId).toBe("daily:2026-08-13:revision");
+    await act(async () => nextHardcore.resolve({ nextUint32: () => 0 }));
+  });
+
+  test("visibility rollover ignores an old-date completion and keeps the selected Daily mode disabled", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+    const oldHardcore = deferred<{ nextUint32(): number }>();
+    const nextDaily = deferred<{ nextUint32(): number }>();
+    const nextHardcore = deferred<{ nextUint32(): number }>();
+    vi.mocked(createDailyRandom).mockImplementation((date, _revision, namespace) => {
+      if (date === "2026-08-12" && namespace === "daily") return Promise.resolve({ nextUint32: () => 0 });
+      if (date === "2026-08-12") return oldHardcore.promise;
+      return namespace === "daily" ? nextDaily.promise : nextHardcore.promise;
+    });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    const game = renderHook(() => useGame(snapshot));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(game.result.current.round?.roundId).toBe("daily:2026-08-12:revision");
+
+    vi.setSystemTime(new Date("2026-08-13T12:00:00Z"));
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    act(() => game.result.current.setMode("hardcore-daily"));
+    expect(game.result.current.dailyUtcDate).toBe("2026-08-13");
+    expect(game.result.current.status).toBe("loading");
+    expect(game.result.current.round).toBeNull();
+
+    await act(async () => oldHardcore.resolve({ nextUint32: () => 1 }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(game.result.current.status).toBe("loading");
+    expect(game.result.current.round).toBeNull();
+
+    await act(async () => nextDaily.resolve({ nextUint32: () => 1 }));
+    await act(async () => nextHardcore.resolve({ nextUint32: () => 0 }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(game.result.current.round?.roundId).toBe("hardcore-daily:2026-08-13:revision");
   });
 
   test("Daily and Hardcore wins update separate streak keys", async () => {
@@ -272,6 +373,7 @@ describe("useGame", () => {
     await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
     act(() => game.result.current.setMode("practice"));
     await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
+    act(() => game.result.current.forfeitPractice());
     const initialAllocations = vi.mocked(crypto.randomUUID).mock.calls.length;
     const staleSource = deferred<{ nextUint32(): number }>();
     const latestSource = deferred<{ nextUint32(): number }>();
@@ -285,6 +387,20 @@ describe("useGame", () => {
     await act(async () => latestSource.resolve({ nextUint32: () => 1 }));
     expect(crypto.randomUUID).toHaveBeenCalledTimes(initialAllocations + 1);
     expect(game.result.current.round?.roundId).toBe(`practice:${uuids[initialAllocations]}`);
+  });
+
+  test("ignores New Practice Round while the current Practice round is still playing", async () => {
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    act(() => game.result.current.setMode("practice"));
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
+    const roundId = game.result.current.round!.roundId;
+    vi.mocked(createPracticeRandom).mockClear();
+
+    act(() => game.result.current.nextPracticeRound());
+
+    expect(createPracticeRandom).not.toHaveBeenCalled();
+    expect(game.result.current.round?.roundId).toBe(roundId);
   });
 
   test("StrictMode reducer replay persists one transition and records one completion", async () => {
@@ -323,9 +439,10 @@ describe("useGame", () => {
     ));
     const game = renderHook(() => useGame(snapshot));
     await act(async () => dailySource.reject(new Error("daily failed")));
-    expect(game.result.current.error).toBe("daily failed");
+    expect(game.result.current.error).toBe("Unable to prepare this game mode.");
+    expect(game.result.current.error).not.toContain("daily failed");
     await act(async () => hardcoreSource.resolve({ nextUint32: () => 1 }));
-    expect(game.result.current.error).toBe("daily failed");
+    expect(game.result.current.error).toBe("Unable to prepare this game mode.");
   });
 
   test("switching to an inactive failed mode exposes its error and retries it", async () => {
@@ -340,9 +457,28 @@ describe("useGame", () => {
     await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
     await waitFor(() => expect(hardcoreCalls).toBe(1));
     act(() => game.result.current.setMode("hardcore-daily"));
-    expect(game.result.current.error).toBe("hardcore failed");
+    expect(game.result.current.error).toBe("Unable to prepare this game mode.");
     await waitFor(() => expect(game.result.current.round?.mode).toBe("hardcore-daily"));
     expect(hardcoreCalls).toBe(2);
+    expect(game.result.current.error).toBeNull();
+  });
+
+  test("retries a failed active mode without exposing the thrown answer identifier", async () => {
+    let dailyCalls = 0;
+    vi.mocked(createDailyRandom).mockImplementation(async (_date, _revision, mode) => {
+      if (mode === "hardcore-daily") return { nextUint32: () => 1 };
+      dailyCalls += 1;
+      if (dailyCalls === 1) throw new Error("secret-card-id:BEAT_DOWN");
+      return { nextUint32: () => 0 };
+    });
+    const game = renderHook(() => useGame(snapshot));
+    await waitFor(() => expect(game.result.current.error).toBe("Unable to prepare this game mode."));
+    expect(game.result.current.error).not.toContain("BEAT_DOWN");
+
+    act(() => game.result.current.retryActiveMode());
+
+    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
+    expect(dailyCalls).toBe(2);
     expect(game.result.current.error).toBeNull();
   });
 });

@@ -26,3 +26,23 @@ export function selectAnswer(
   if (!pairGroup) throw new Error(`Missing pair group: ${selectedPairKey}`);
   return { baseGroupKey: baseGroup.key, selectedCardId, pairKey: selectedPairKey, acceptedCardIds: pairGroup.cardIds };
 }
+
+const MAX_DISTINCT_SELECTION_ATTEMPTS = 1024;
+
+export function selectDistinctAnswer(
+  groups: CardGroups,
+  cardsById: ReadonlyMap<string, CardIdentity>,
+  source: RandomSource,
+  excludedCardId: string,
+): SelectedAnswer {
+  try {
+    const hasAlternative = groups.baseGroups.some((group) => group.cardIds.some((cardId) => cardId !== excludedCardId));
+    if (hasAlternative) {
+      for (let attempt = 0; attempt < MAX_DISTINCT_SELECTION_ATTEMPTS; attempt += 1) {
+        const answer = selectAnswer(groups, cardsById, source);
+        if (answer.selectedCardId !== excludedCardId) return answer;
+      }
+    }
+  } catch { /* Collapse corrupt data and random-source failures to the fixed public error below. */ }
+  throw new RangeError("Cannot select a distinct answer");
+}

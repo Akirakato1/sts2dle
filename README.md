@@ -4,7 +4,7 @@ STS-dle is an unofficial Slay the Spire 2 card-deduction game. Daily and Practic
 
 ## Gameplay
 
-Daily offers the shared UTC-date puzzle with three one-use assistance orbs and progressive card-name hints. Hardcore Daily is a separate UTC-date puzzle without orbs or name hints. Practice provides unlimited random rounds and lets you choose Normal or Hardcore before play begins; after the first accepted guess or orb use, that choice is locked for the round. Use **End game** to forfeit a Practice round, reveal its accepted answers, and then start a **New Practice Round** with the next selected setting.
+Daily offers the shared UTC-date puzzle with three one-use assistance orbs and progressive card-name hints. Hardcore Daily is a separate UTC-date puzzle without orbs or name hints. Practice provides unlimited random rounds and lets you choose Normal or Hardcore before play begins; after the first accepted guess or orb use, that choice is locked for the round. Use **End game** to forfeit a Practice round, reveal its accepted answers, and then start a **New Practice Round** with the next selected setting. A terminal round's next setting is saved locally across reloads without changing the completed round.
 
 Round progress and Daily statistics are persisted only in the local browser. STS-dle has no account or database for player progress, and Practice results are not shareable.
 

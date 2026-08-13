@@ -134,7 +134,7 @@ describe("FeatureTile", () => {
     });
   });
 
-  test("does not expose yellow or still-hidden animated tiles as orb target controls", () => {
+  test("exposes yellow and hidden tiles as rejected controls while a Filter Orb is selected", () => {
     let reveal: FrameRequestCallback | undefined;
     vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => {
       reveal = callback;
@@ -154,7 +154,11 @@ describe("FeatureTile", () => {
     </OrbInteractionProvider>);
 
     fireEvent.click(screen.getByRole("button", { name: "Filter Orb, available" }));
-    expect(view.container.querySelectorAll(".feature-tile__target")).toHaveLength(0);
+    const invalidTargets = screen.getAllByRole("button", { name: /Invalid target for Filter Orb/ });
+    expect(invalidTargets).toHaveLength(2);
+    fireEvent.click(invalidTargets[0]!);
+    expect(screen.getByRole("status")).toHaveTextContent("yellow result tile is an invalid target for the Filter Orb");
+    expect(screen.getByRole("button", { name: "Filter Orb, available" })).toHaveAttribute("aria-pressed", "true");
     expect(reveal).toBeTypeOf("function");
   });
 

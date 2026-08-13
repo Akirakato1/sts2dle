@@ -48,6 +48,6 @@ describe("GameGuide", () => {
     expect(disclosure).toHaveTextContent(/Practice.*locked.*first guess or orb/i);
     expect(disclosure).toHaveTextContent("The current Practice round persists locally in this browser.");
     expect(disclosure).toHaveTextContent(/End game.*forfeit.*New Practice Round/i);
-    expect(disclosure).toHaveTextContent("After a win or forfeit, the terminal toggle selects the setting used when New Practice Round is activated and does not mutate the completed round.");
+    expect(disclosure).toHaveTextContent("After a win or forfeit, the terminal toggle selects the setting used when New Practice Round is activated, is saved locally across reloads, and does not mutate the completed round.");
   });
 });

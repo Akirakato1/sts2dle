@@ -7,7 +7,7 @@ import {
   type PairGroup,
   type SnapshotManifest,
 } from "../../src/shared/domain.js";
-import { compareGuess } from "../../src/shared/comparison.js";
+import { compareGuess, formatFeatureValue } from "../../src/shared/comparison.js";
 import { createDailyRandom } from "../../src/shared/random.js";
 import { selectAnswer, type SelectedAnswer } from "../../src/shared/selection.js";
 import {
@@ -352,8 +352,10 @@ function expectedHintLabel(name: string, wrongGuessCount: number, hintSeed: stri
 }
 
 async function storedRound(page: Page, key: string): Promise<{
+  practiceHardcoreChoice: boolean | null;
   round: {
     roundId: string;
+    hardcore: boolean;
     answer: SelectedAnswer;
     guesses: Array<{ cardId: string }>;
     assistance: null | {
@@ -511,16 +513,28 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
   await search.press("Escape");
 
   const revealFeature: FeatureName = "mana";
+  const selectedAnswerCard = model.cards.find((card) => card.id === model.dailyAnswer.selectedCardId)!;
   const revealHeader = page.locator(`.guess-grid__header[data-feature="${revealFeature}"]`);
   await dragOrbTo(page, "Reveal", revealHeader);
   await expectAnimatedPoof(page, "reveal");
-  await expect(page.getByRole("status")).toContainText(`Reveal Orb showed ${FEATURE_LABELS[revealFeature]}.`);
+  await expect(page.getByRole("status")).toContainText(
+    `Reveal Orb showed ${FEATURE_LABELS[revealFeature]}: ${formatFeatureValue(
+      selectedAnswerCard.base[revealFeature],
+      selectedAnswerCard.upgraded[revealFeature],
+    )}.`,
+  );
   await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
   await expect(page.getByLabel("Reveal Orb, used")).toBeVisible();
 
   const { guess, greenFeature, redFeature, dualCandidate } = model.orbFixture;
   await submitGuessAndWait(page, guess);
   const row = guessRow(page, guess);
+
+  await dragOrbTo(page, "Filter", row.getByRole("cell", { name: new RegExp(`^${FEATURE_LABELS[redFeature]}:.*Result: red`) }));
+  await expect(page.getByRole("status")).toContainText(
+    `${FEATURE_LABELS[redFeature]} red result tile is an invalid target for the Filter Orb. Orb returned.`,
+  );
+  await expect(page.getByRole("button", { name: "Filter Orb, available" })).toBeVisible();
 
   const filterButton = page.getByRole("button", { name: "Filter Orb, available" });
   await filterButton.click();
@@ -622,6 +636,21 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
   ]);
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
+});
+
+test("pointer-selects a search option above multiple guess rows on a narrow viewport", async ({ page, request }) => {
+  const model = await loadFixtureModel(request);
+  await prepareOfflinePage(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
+  for (const card of model.dailyWrongGuesses.slice(0, 4)) await submitGuessAndWait(page, card);
+  const pointerGuess = model.dailyWrongGuesses[4]!;
+  await page.getByRole("combobox", { name: "Guess a card" }).fill(pointerGuess.name);
+
+  await cardOption(page, pointerGuess).click();
+
+  await expect(guessRow(page, pointerGuess)).toBeVisible();
 });
 
 test("Normal Daily reveals exact deterministic name masks at 5, 6, 7, later initials, and a post-initial position", async ({ page, request }) => {
@@ -766,6 +795,15 @@ test("Practice locks its setting after a guess or orb, restores the round, and r
 
   await expect(hardcoreToggle).toBeEnabled();
   await hardcoreToggle.uncheck();
+  const terminalPractice = await storedRound(page, "stsdle:round:practice:v1");
+  expect(terminalPractice.round.hardcore).toBe(true);
+  expect(terminalPractice.practiceHardcoreChoice).toBe(false);
+  await page.reload();
+  await page.getByRole("button", { name: "Practice" }).click();
+  await expect(hardcoreToggle).toBeEnabled();
+  await expect(hardcoreToggle).not.toBeChecked();
+  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId)
+    .toBe(terminalPractice.round.roundId);
   await page.getByRole("button", { name: "New Practice Round" }).click();
   await expect(hardcoreToggle).not.toBeChecked();
   await expect(page.getByRole("region", { name: "Orb inventory" })).toBeVisible();
@@ -856,10 +894,12 @@ test("keyboard orb use exposes pressed, status, classification, bubble, and badg
   const revealTarget = revealHeader.getByRole("button", { name: "Mana feature heading. Use Reveal Orb." });
   await revealTarget.focus();
   await revealTarget.press("Enter");
-  await expect(page.locator(".orb-announcement")).toHaveText("Reveal Orb showed Mana.");
+  const answerCard = model.cards.find((card) => card.id === model.dailyAnswer.selectedCardId)!;
+  await expect(page.locator(".orb-announcement")).toHaveText(
+    `Reveal Orb showed Mana: ${formatFeatureValue(answerCard.base.mana, answerCard.upgraded.mana)}.`,
+  );
   await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
 
-  const answerCard = model.cards.find((card) => card.id === model.dailyAnswer.selectedCardId)!;
   await openEmptySearch(page);
   await expect(cardOption(page, answerCard)).toHaveAccessibleName(/matches Filter Orb$/);
   await expect(cardOption(page, dualCandidate)).toHaveAccessibleName(/excluded by Negation Orb$/);
@@ -1070,6 +1110,7 @@ for (const viewport of [
     await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
     for (const card of model.dailyWrongGuesses.slice(0, 5)) await submitGuessAndWait(page, card);
     await expect(page.locator(".name-hint")).toBeVisible();
+    await page.getByRole("button", { name: "Reveal Orb, available" }).click();
     await openEmptySearch(page);
     await expect(page.locator(".card-search__options")).toBeVisible();
     const scroller = page.locator(".guess-grid-scroll");
@@ -1103,6 +1144,7 @@ for (const viewport of [
         candidateClientHeight: candidateList.clientHeight,
         candidateScrollHeight: candidateList.scrollHeight,
         candidateOverflowY: getComputedStyle(candidateList).overflowY,
+        headerTargetHeight: document.querySelector<HTMLElement>(".guess-grid__header-target")!.getBoundingClientRect().height,
       };
     });
     expect(dimensions.pageScrollWidth).toBeLessThanOrEqual(dimensions.pageClientWidth);
@@ -1116,6 +1158,7 @@ for (const viewport of [
     expect(dimensions.candidateClientHeight).toBeLessThanOrEqual(308);
     expect(dimensions.candidateScrollHeight).toBeGreaterThan(dimensions.candidateClientHeight);
     expect(dimensions.candidateOverflowY).toBe("auto");
+    expect(dimensions.headerTargetHeight).toBeGreaterThanOrEqual(44);
     if (viewport.scrollerOverflows) {
       expect(dimensions.scrollerScrollWidth).toBeGreaterThan(dimensions.scrollerClientWidth);
     } else {

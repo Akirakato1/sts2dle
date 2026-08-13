@@ -121,10 +121,10 @@ export function FeatureTile({
     {orbBadge && <span className={`feature-tile__orb-badge feature-tile__orb-badge--${orbBadge}`} role="img" aria-label={`${orbBadge === "filter" ? "Filter" : "Negation"} Orb used here`}>
       <OrbVisual compact kind={orbBadge} />
     </span>}
-    {binding.valid && <button
+    {binding.active && <button
       {...binding.targetProps}
       type="button"
-      className="feature-tile__target orb-target--active orb-target--valid"
+      className={`feature-tile__target orb-target--active${binding.valid ? " orb-target--valid" : ""}`}
     />}
   </div>;
 }

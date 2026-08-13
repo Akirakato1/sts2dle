@@ -29,7 +29,7 @@ export function GameGuide() {
       <p>Each subsequent wrong guess reveals the first character of one later word until all word initials are shown. After that, each wrong guess reveals exactly one deterministic seeded unrevealed Unicode code-point position until none remain.</p>
       <p>Hardcore Daily is a separate daily round with no orbs or name hints.</p>
       <p>The current Practice round persists locally in this browser. Its Hardcore choice is locked after the first guess or orb. Use End game to forfeit and reveal the answers, then choose New Practice Round.</p>
-      <p>After a win or forfeit, the terminal toggle selects the setting used when New Practice Round is activated and does not mutate the completed round.</p>
+      <p>After a win or forfeit, the terminal toggle selects the setting used when New Practice Round is activated, is saved locally across reloads, and does not mutate the completed round.</p>
     </details>
   </section>;
 }
