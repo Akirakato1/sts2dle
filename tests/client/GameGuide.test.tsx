@@ -40,15 +40,24 @@ describe("GameGuide", () => {
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
-  test("focuses the close button, wraps Tab, and closes with Escape", async () => {
+  test("prevents forward and reverse Tab from escaping the close-button-only dialog", async () => {
     render(<GameGuide />);
     const trigger = screen.getByRole("button", { name: "How to play" });
 
     fireEvent.click(trigger);
     const close = screen.getByRole("button", { name: "Close help" });
     expect(close).toHaveFocus();
-    fireEvent.keyDown(document, { key: "Tab" });
+
+    const forwardTab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
+    document.dispatchEvent(forwardTab);
+    expect(forwardTab.defaultPrevented).toBe(true);
     expect(close).toHaveFocus();
+
+    const reverseTab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab", shiftKey: true });
+    document.dispatchEvent(reverseTab);
+    expect(reverseTab.defaultPrevented).toBe(true);
+    expect(close).toHaveFocus();
+
     fireEvent.keyDown(document, { key: "Escape" });
 
     expect(screen.queryByRole("dialog", { name: "How to play" })).not.toBeInTheDocument();
