@@ -149,7 +149,7 @@ describe("deployment bundle staging", () => {
     expect(await readFile(join(externalChild, "sentinel.txt"), "utf8")).toBe("outside");
   });
 
-  it("revalidates the staging parent immediately before mkdir", async () => {
+  it("revalidates the staging parent after the absence check and before mkdir", async () => {
     const source = await createValidSource("5a".repeat(32));
     const root = await createTemporaryDirectory();
     const ownedParent = join(root, "owned-parent");
@@ -159,18 +159,30 @@ describe("deployment bundle staging", () => {
     await mkdir(external);
     await writeFile(join(external, "sentinel.txt"), "outside", "utf8");
     const staging = join(ownedParent, "release.staging");
+    let absenceCheckCompleted = false;
+    let mkdirCalls = 0;
     await expect(stageDeploymentBundle(
       source.dataDir,
       staging,
       validationOptions,
       {
+        afterPathMissing: async () => {
+          absenceCheckCompleted = true;
+        },
         beforeMutation: async () => {
+          if (!absenceCheckCompleted) return;
           await rename(ownedParent, displacedParent);
           await symlink(external, ownedParent, "junction");
+        },
+        createDirectory: async (path: string) => {
+          mkdirCalls += 1;
+          await mkdir(path);
         },
       },
     )).rejects.toThrow("Unable to stage deployment bundle");
 
+    expect(absenceCheckCompleted).toBe(true);
+    expect(mkdirCalls).toBe(0);
     expect(await readFile(join(external, "sentinel.txt"), "utf8")).toBe("outside");
     await expect(pathExists(join(external, "release.staging"))).resolves.toBe(false);
     await expect(pathExists(join(displacedParent, "release.staging"))).resolves.toBe(false);

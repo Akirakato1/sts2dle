@@ -36,6 +36,12 @@ export interface PublishOperations {
   ) => Promise<unknown>;
 }
 
+export interface StageOperations {
+  afterPathMissing?: () => Promise<void>;
+  beforeMutation?: () => Promise<void>;
+  createDirectory?: (path: string) => Promise<void>;
+}
+
 export interface PublishedBundle {
   active: ActiveSnapshot;
   finalize(): Promise<void>;
@@ -52,6 +58,12 @@ interface ResolvedPublishOperations {
     dataDir: string,
     options: SnapshotValidationOptions,
   ): Promise<unknown>;
+}
+
+interface ResolvedStageOperations {
+  afterPathMissing(): Promise<void>;
+  beforeMutation(): Promise<void>;
+  createDirectory(path: string): Promise<void>;
 }
 
 interface DirectoryIdentity {
@@ -101,6 +113,12 @@ const DEFAULT_PUBLISH_OPERATIONS: ResolvedPublishOperations = {
   validatePublishedBundle: async () => undefined,
 };
 
+const DEFAULT_STAGE_OPERATIONS: ResolvedStageOperations = {
+  afterPathMissing: async () => undefined,
+  beforeMutation: async () => undefined,
+  createDirectory: mkdir,
+};
+
 export async function readDeploymentRevision(dataDir: string): Promise<string | null> {
   try {
     const active = await loadSafeActiveSnapshot(dataDir);
@@ -121,7 +139,7 @@ export async function stageDeploymentBundle(
   sourceDataDir: string,
   stagingDir: string,
   options: SnapshotValidationOptions,
-  operations: Pick<PublishOperations, "beforeMutation"> = {},
+  operations: StageOperations = {},
 ): Promise<ActiveSnapshot> {
   let sourceActive: ActiveSnapshot | null;
   try {
@@ -137,8 +155,11 @@ export async function stageDeploymentBundle(
     await loadActivatedSnapshot(sourceActive.path, options);
 
     const stagingTarget = await resolveNewDirectChild(stagingDir);
-    const beforeMutation = operations.beforeMutation ?? DEFAULT_PUBLISH_OPERATIONS.beforeMutation;
-    ownedStaging = await createOwnedDirectory(stagingTarget, beforeMutation);
+    const stageOperations: ResolvedStageOperations = {
+      ...DEFAULT_STAGE_OPERATIONS,
+      ...withoutUndefined(operations),
+    };
+    ownedStaging = await createOwnedDirectory(stagingTarget, stageOperations);
     const snapshotsTarget = createSiblingTarget(asOwnedParent(ownedStaging), "snapshots");
     const resolvedSnapshots = await createOwnedDirectory(snapshotsTarget);
     const stagedSnapshotPath = join(resolvedSnapshots.path, sourceActive.buildId);
@@ -599,12 +620,14 @@ function asOwnedParent(directory: OwnedDirectory): OwnedParent {
 
 async function createOwnedDirectory(
   target: DirectChildTarget,
-  beforeMutation: () => Promise<void> = DEFAULT_PUBLISH_OPERATIONS.beforeMutation,
+  operations: ResolvedStageOperations = DEFAULT_STAGE_OPERATIONS,
 ): Promise<OwnedDirectory> {
-  await beforeMutation();
-  await revalidateOwnedParent(target.parent);
   await assertPathMissing(target.path);
-  await mkdir(target.path);
+  await operations.afterPathMissing();
+  await operations.beforeMutation();
+  await revalidateOwnedParent(target.parent);
+  const creation = operations.createDirectory(target.path);
+  await creation;
   return resolveOwnedDirectory(target.path, target.parent, target.name);
 }
 
