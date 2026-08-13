@@ -256,9 +256,11 @@ describe("App snapshot cleanup", () => {
     let resolve!: (value: typeof searchSnapshot) => void;
     loads.mockImplementation(() => new Promise<typeof searchSnapshot>((resolveLoad) => { resolve = resolveLoad; }));
 
-    render(<App />);
+    const view = render(<App />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading card data");
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "How to play" }).closest(".hero")).toBeTruthy();
+    expect(view.container.querySelector(".game-panel .game-guide")).toBeNull();
     resolve(searchSnapshot);
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Preparing today's card"));
   });
@@ -283,7 +285,7 @@ describe("App snapshot cleanup", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Loading card data");
   });
 
-  test("shows the result legend and collapsed play rules with the active game", async () => {
+  test("keeps help in the hero and opens its legend modal with the active game", async () => {
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue({
       round: {
@@ -300,10 +302,13 @@ describe("App snapshot cleanup", () => {
       nextRound: vi.fn(),
     });
 
-    render(<App />);
-
-    expect(await screen.findByText("Both base and upgraded features match")).toBeVisible();
-    expect(screen.getByText("How to play").closest("details")).not.toHaveAttribute("open");
+    const view = render(<App />);
+    const trigger = await screen.findByRole("button", { name: "How to play" });
+    expect(trigger.closest(".hero")).toBeTruthy();
+    expect(view.container.querySelector(".game-panel .game-guide")).toBeNull();
+    expect(screen.queryByText("Both base and upgraded features match")).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: "How to play" })).toBeVisible();
   });
 
   test("renders exactly Daily, Hardcore Daily, and Practice mode tabs", async () => {
@@ -364,6 +369,7 @@ describe("App snapshot cleanup", () => {
     render(<App />);
 
     expect(await screen.findByRole("navigation", { name: "Round mode" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "How to play" }).closest(".hero")).toBeTruthy();
     expect(screen.getByRole("alert")).toHaveTextContent("Unable to prepare this game mode.");
     expect(screen.getByRole("alert")).not.toHaveTextContent("BEAT_DOWN");
     fireEvent.click(screen.getByRole("button", { name: "Hardcore Daily" }));

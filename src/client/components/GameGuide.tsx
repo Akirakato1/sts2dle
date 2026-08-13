@@ -1,4 +1,7 @@
-import React from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+
+import { KeywordStateIcons } from "./KeywordStateIcons.js";
+import { ORB_LABELS, OrbVisual } from "./OrbVisual.js";
 
 const RESULT_LEGEND = [
   ["green", "Both base and upgraded features match"],
@@ -6,30 +9,113 @@ const RESULT_LEGEND = [
   ["red", "Neither version matches"],
 ] as const;
 
-export function GameGuide() {
-  return <section className="game-guide" aria-label="Guess result legend and rules">
-    <ul className="result-legend">
-      {RESULT_LEGEND.map(([color, meaning]) => <li key={color}>
-        <span className={`result-legend__swatch result-legend__swatch--${color}`} aria-hidden="true" />
-        <span>{meaning}</span>
-      </li>)}
-    </ul>
-    <details className="game-rules">
-      <summary>How to play</summary>
-      <p>Guess a base card name. Each guess compares the guessed base to the answer base and the guessed upgraded card to the answer upgraded card: base-to-base and upgraded-to-upgraded.</p>
-      <p>An X means keyword absent; a checkmark means keyword present.</p>
-      <p>Cards with identical complete paired feature sets are accepted as equivalent answers.</p>
-      <p>Daily uses the UTC date, restores your progress, and produces a share result after a win.</p>
-      <p>Practice provides unlimited random rounds and no share result.</p>
-      <p>Each orb is a one-use aid and is permanently consumed for that round. Use an orb by drag and drop, or with click, tap, or keyboard controls.</p>
-      <p>Reveal Orb targets a feature header and shows the answer&apos;s full base and upgraded pair. Filter Orb targets a green result and marks candidates with that exact pair in green. Negation Orb targets a red result to exclude that pair; red exclusion takes priority over green. Reveal bubbles and Filter or Negation badges persist on their chosen targets for the round.</p>
-      <p>Candidate controls are advisory: colored candidates remain guessable, and the category checkboxes only hide list rows without changing which names are accepted. If filtering produces an empty candidate list, focus remains on the search field and the empty candidate list is announced.</p>
-      <p>The name-hint mask uses the deterministically selected answer name. Equivalent answers with the same complete paired-feature set remain accepted.</p>
-      <p>After five wrong guesses, the selected answer name appears as blank continuous word boxes. After six wrong guesses, the mask is unchanged. At seven wrong guesses, the first character of the first word appears.</p>
-      <p>Each subsequent wrong guess reveals the first character of one later word until all word initials are shown. After that, each wrong guess reveals exactly one deterministic seeded unrevealed Unicode code-point position until none remain.</p>
-      <p>Hardcore Daily is a separate daily round with no orbs or name hints.</p>
-      <p>The current Practice round persists locally in this browser. Its Hardcore choice is locked after the first guess or orb. Use End game to forfeit and reveal the answers, then choose New Practice Round.</p>
-      <p>After a win or forfeit, the terminal toggle selects the setting used when New Practice Round is activated, is saved locally across reloads, and does not mutate the completed round.</p>
-    </details>
+const ORB_GUIDE = [
+  ["reveal", "Show the answer's base and upgraded pair for a feature header."],
+  ["filter", "Mark candidates that match a green feature pair."],
+  ["negation", "Exclude candidates that match a red feature pair; red takes priority."],
+] as const;
+
+export function GameGuide(): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  const closeGuide = useCallback(() => {
+    setOpen(false);
+    queueMicrotask(() => triggerRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeGuide();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? [])];
+      if (focusable.length === 0) return;
+      const first = focusable[0]!;
+      const last = focusable.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [closeGuide, open]);
+
+  return <section className="game-guide" aria-label="Game help">
+    <button ref={triggerRef} type="button" className="game-guide__trigger" onClick={() => setOpen(true)}>
+      <span aria-hidden="true">?</span><span>How to play</span>
+    </button>
+    {open && <div className="game-guide__backdrop" onClick={(event) => {
+      if (event.target === event.currentTarget) closeGuide();
+    }}>
+      <div ref={dialogRef} className="game-guide__dialog" role="dialog" aria-modal="true" aria-labelledby="how-to-play-title">
+        <header className="game-guide__dialog-header">
+          <h2 id="how-to-play-title">How to play</h2>
+          <button ref={closeRef} type="button" className="game-guide__close" aria-label="Close help" onClick={closeGuide}>×</button>
+        </header>
+        <div className="game-guide__sections">
+          <section>
+            <h3>Basics</h3>
+            <ul>
+              <li>Guess a base card name; base and upgraded cards compare as a pair.</li>
+              <li>Cards with identical complete paired features are equivalent answers.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Result colors</h3>
+            <ul className="result-legend">
+              {RESULT_LEGEND.map(([color, meaning]) => <li key={color}>
+                <span className={`result-legend__swatch result-legend__swatch--${color}`} aria-hidden="true" />
+                <span>{meaning}</span>
+              </li>)}
+            </ul>
+          </section>
+          <section>
+            <h3>Keyword icons</h3>
+            <ul className="game-guide__icon-list">
+              <li><KeywordStateIcons displayValue="false" /> Absent</li>
+              <li><KeywordStateIcons displayValue="true" /> Present</li>
+              <li><KeywordStateIcons displayValue="false → true" /> Added on upgrade</li>
+              <li><KeywordStateIcons displayValue="true → false" /> Removed on upgrade</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Orbs and filtering</h3>
+            <ul className="game-guide__orb-list">
+              {ORB_GUIDE.map(([kind, description]) => <li key={kind}>
+                <OrbVisual kind={kind} compact /> <strong>{ORB_LABELS[kind]} Orb.</strong> {description}
+              </li>)}
+            </ul>
+          </section>
+          <section>
+            <h3>Name hints</h3>
+            <ul>
+              <li>Hints reveal the selected answer name after incorrect guesses.</li>
+              <li>They are advisory and do not change which equivalent answers are accepted.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Modes</h3>
+            <ul>
+              <li>Daily uses the UTC date, restores progress, and shares a win result.</li>
+              <li>Practice provides unlimited random rounds; Hardcore Daily has no orbs or name hints.</li>
+            </ul>
+          </section>
+        </div>
+      </div>
+    </div>}
   </section>;
 }

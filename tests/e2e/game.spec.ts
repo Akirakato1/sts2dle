@@ -933,20 +933,14 @@ test("Daily and Practice complete the full paired-card experience without leakin
   );
   await expect(attribution).toContainText(/unofficial fan project/i);
   await expect(attribution).toContainText(/not affiliated with or endorsed by Mega Crit/i);
-  for (const meaning of [
-    "Both base and upgraded features match",
-    "Exactly one version matches",
-    "Neither version matches",
-  ]) await expect(page.getByText(meaning, { exact: true })).toBeVisible();
-  const rules = page.getByText("How to play", { exact: true }).locator("..");
-  await expect(rules).not.toHaveAttribute("open");
-  await page.getByText("How to play", { exact: true }).click();
-  await expect(rules).toHaveAttribute("open");
-  await expect(rules).toContainText("Guess a base card name. Each guess compares the guessed base to the answer base and the guessed upgraded card to the answer upgraded card: base-to-base and upgraded-to-upgraded.");
-  await expect(rules).toContainText("An X means keyword absent; a checkmark means keyword present.");
-  await expect(rules).toContainText("Cards with identical complete paired feature sets are accepted as equivalent answers.");
-  await expect(rules).toContainText("Daily uses the UTC date, restores your progress, and produces a share result after a win.");
-  await expect(rules).toContainText("Practice provides unlimited random rounds and no share result.");
+  await expect(page.getByText("Both base and upgraded features match", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "How to play" }).click();
+  const help = page.getByRole("dialog", { name: "How to play" });
+  await expect(help).toBeVisible();
+  await expect(help.getByText("Both base and upgraded features match", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(help).toBeHidden();
+  await expect(page.getByRole("button", { name: "How to play" })).toBeFocused();
   const dailyTab = page.getByRole("button", { name: "Daily", exact: true });
   await expectAccessibleTarget(dailyTab);
   await page.keyboard.press("Tab");
