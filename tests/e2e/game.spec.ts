@@ -21,7 +21,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 const FIXED_NOW = new Date("2026-08-12T12:00:00.000Z");
 const FIXED_UTC_DATE = FIXED_NOW.toISOString().slice(0, 10);
-const APP_ROOT = "http://127.0.0.1:3000/";
+const APP_ROOT = `${process.env.STSDLE_E2E_ORIGIN ?? "http://127.0.0.1:3000"}/`;
 const PRACTICE_ROUND_IDS = [
   "practice:00000000-0000-4000-8000-000000000001",
   "practice:00000000-0000-4000-8000-000000000002",
@@ -1161,6 +1161,18 @@ for (const viewport of [
     await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
     for (const card of model.dailyWrongGuesses.slice(0, 5)) await submitGuessAndWait(page, card);
     await expect(page.locator(".name-hint")).toBeVisible();
+    const gridGeometry = await page.evaluate(() => {
+      const grid = document.querySelector<HTMLElement>(".guess-grid")!;
+      const header = document.querySelector<HTMLElement>(".guess-grid__header")!;
+      const gridStyle = getComputedStyle(grid);
+      return {
+        paddingTop: Number.parseFloat(gridStyle.paddingTop),
+        paddingLeft: Number.parseFloat(gridStyle.paddingLeft),
+        headerHeight: header.getBoundingClientRect().height,
+      };
+    });
+    expect(Math.abs(gridGeometry.paddingTop - gridGeometry.paddingLeft)).toBeLessThanOrEqual(.5);
+    expect(gridGeometry.headerHeight).toBeGreaterThanOrEqual(44);
     const centered = await page.evaluate(() => {
       const centerX = (selector: string) => {
         const rect = document.querySelector(selector)!.getBoundingClientRect();
@@ -1262,7 +1274,31 @@ for (const viewport of [
     expect(modalGeometry.pageScrollHeight).toBe(documentSizeBeforeHelp.height);
     await help.getByRole("button", { name: "Close help" }).click();
     await expect(help).toBeHidden();
+    const revealHeader = page.locator('.guess-grid__header[data-feature="mana"]');
     await page.getByRole("button", { name: "Reveal Orb, available" }).click();
+    const revealTarget = revealHeader.getByRole("button", { name: "Mana feature heading. Use Reveal Orb." });
+    const headerTargetHeight = await revealTarget.evaluate((element) => element.getBoundingClientRect().height);
+    const headerBeforeReveal = await revealHeader.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: rect.top, height: rect.height };
+    });
+    await revealTarget.click();
+    const revealBubble = revealHeader.getByRole("note", { name: /^Answer:/ });
+    await expect(revealBubble).toBeVisible();
+    const headerAfterReveal = await revealHeader.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const bubbleRect = element.querySelector<HTMLElement>(".guess-grid__reveal-bubble")!.getBoundingClientRect();
+      return {
+        top: rect.top,
+        height: rect.height,
+        centerDeltaX: bubbleRect.left + bubbleRect.width / 2 - (rect.left + rect.width / 2),
+        centerDeltaY: bubbleRect.top + bubbleRect.height / 2 - (rect.top + rect.height / 2),
+      };
+    });
+    expect(Math.abs(headerAfterReveal.top - headerBeforeReveal.top)).toBeLessThanOrEqual(.5);
+    expect(Math.abs(headerAfterReveal.height - headerBeforeReveal.height)).toBeLessThanOrEqual(.5);
+    expect(Math.abs(headerAfterReveal.centerDeltaX)).toBeLessThanOrEqual(.5);
+    expect(Math.abs(headerAfterReveal.centerDeltaY)).toBeLessThanOrEqual(.5);
     await openEmptySearch(page);
     await expect(page.locator(".card-search__options")).toBeVisible();
     const scroller = page.locator(".guess-grid-scroll");
@@ -1296,7 +1332,6 @@ for (const viewport of [
         candidateClientHeight: candidateList.clientHeight,
         candidateScrollHeight: candidateList.scrollHeight,
         candidateOverflowY: getComputedStyle(candidateList).overflowY,
-        headerTargetHeight: document.querySelector<HTMLElement>(".guess-grid__header-target")!.getBoundingClientRect().height,
       };
     });
     expect(dimensions.pageScrollWidth).toBeLessThanOrEqual(dimensions.pageClientWidth);
@@ -1310,7 +1345,7 @@ for (const viewport of [
     expect(dimensions.candidateClientHeight).toBeLessThanOrEqual(308);
     expect(dimensions.candidateScrollHeight).toBeGreaterThan(dimensions.candidateClientHeight);
     expect(dimensions.candidateOverflowY).toBe("auto");
-    expect(dimensions.headerTargetHeight).toBeGreaterThanOrEqual(44);
+    expect(headerTargetHeight).toBeGreaterThanOrEqual(44);
     if (viewport.scrollerOverflows) {
       expect(dimensions.scrollerScrollWidth).toBeGreaterThan(dimensions.scrollerClientWidth);
     } else {

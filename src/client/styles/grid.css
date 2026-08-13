@@ -15,7 +15,7 @@
 }
 
 .guess-grid-scroll .guess-grid {
-  padding: 3rem .45rem .45rem;
+  padding: .45rem;
 }
 
 .guess-grid__row {
@@ -43,8 +43,9 @@
 
 .guess-grid__reveal-bubble {
   position: absolute;
-  z-index: 4;
-  bottom: calc(100% + .4rem);
+  z-index: 8;
+  top: 50%;
+  bottom: auto;
   left: 50%;
   display: inline-flex;
   width: max-content;
@@ -61,20 +62,7 @@
   font-size: .72rem;
   line-height: 1.15;
   text-transform: none;
-  transform: translateX(-50%);
-}
-
-.guess-grid__reveal-bubble::after {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  width: .55rem;
-  height: .55rem;
-  border-right: 1px solid #b49bf1;
-  border-bottom: 1px solid #b49bf1;
-  background: #352d62;
-  content: "";
-  transform: translate(-50%, -50%) rotate(45deg);
+  transform: translate(-50%, -50%);
 }
 
 .guess-grid__header-target,

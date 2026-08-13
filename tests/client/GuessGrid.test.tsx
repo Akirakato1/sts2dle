@@ -138,6 +138,7 @@ describe("GuessGrid", () => {
 
     const eternalHeader = document.querySelector<HTMLElement>('[role="columnheader"][data-feature="eternal"]')!;
     const bubble = within(eternalHeader).getByRole("note", { name: "Answer: absent to present" });
+    expect(eternalHeader).toContainElement(bubble);
     expect(view.container.querySelectorAll(".guess-grid__reveal-bubble")).toHaveLength(1);
     expect([...bubble.querySelectorAll("svg")].map((icon) => icon.dataset.icon)).toEqual(["x", "check"]);
 
