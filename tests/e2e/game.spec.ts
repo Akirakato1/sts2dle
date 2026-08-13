@@ -1113,14 +1113,20 @@ for (const viewport of [
       const labels = [...visibility.querySelectorAll(".candidate-visibility__label")];
       const left = Math.min(...labels.map((label) => label.getBoundingClientRect().left));
       const right = Math.max(...labels.map((label) => label.getBoundingClientRect().right));
+      const hint = document.querySelector(".name-hint")!;
+      const words = [...hint.querySelectorAll(".name-hint__word")];
+      const wordLeft = Math.min(...words.map((word) => word.getBoundingClientRect().left));
+      const wordRight = Math.max(...words.map((word) => word.getBoundingClientRect().right));
       return {
         search: centerX(".card-search"),
         hint: centerX(".name-hint"),
+        words: (wordLeft + wordRight) / 2,
         visibility: centerX(".candidate-visibility"),
         labels: (left + right) / 2,
       };
     });
-    expect(Math.abs(centered.search - centered.hint)).toBeLessThanOrEqual(1);
+    expect(Math.abs(centered.search - centered.words)).toBeLessThanOrEqual(1);
+    expect(Math.abs(centered.hint - centered.words)).toBeLessThanOrEqual(1);
     expect(Math.abs(centered.visibility - centered.labels)).toBeLessThanOrEqual(2);
     await page.getByRole("button", { name: "Reveal Orb, available" }).click();
     await openEmptySearch(page);
