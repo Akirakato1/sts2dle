@@ -148,6 +148,33 @@ describe("deployment bundle staging", () => {
     expect(await readdir(escapedStagingTarget)).toEqual([]);
     expect(await readFile(join(externalChild, "sentinel.txt"), "utf8")).toBe("outside");
   });
+
+  it("revalidates the staging parent immediately before mkdir", async () => {
+    const source = await createValidSource("5a".repeat(32));
+    const root = await createTemporaryDirectory();
+    const ownedParent = join(root, "owned-parent");
+    const displacedParent = join(root, "displaced-parent");
+    const external = join(root, "external-parent");
+    await mkdir(ownedParent);
+    await mkdir(external);
+    await writeFile(join(external, "sentinel.txt"), "outside", "utf8");
+    const staging = join(ownedParent, "release.staging");
+    await expect(stageDeploymentBundle(
+      source.dataDir,
+      staging,
+      validationOptions,
+      {
+        beforeMutation: async () => {
+          await rename(ownedParent, displacedParent);
+          await symlink(external, ownedParent, "junction");
+        },
+      },
+    )).rejects.toThrow("Unable to stage deployment bundle");
+
+    expect(await readFile(join(external, "sentinel.txt"), "utf8")).toBe("outside");
+    await expect(pathExists(join(external, "release.staging"))).resolves.toBe(false);
+    await expect(pathExists(join(displacedParent, "release.staging"))).resolves.toBe(false);
+  });
 });
 
 describe("transactional deployment bundle publication", () => {
@@ -346,6 +373,43 @@ describe("transactional deployment bundle publication", () => {
     await expect(pathExists(join(displacedParent, "release.staging"))).resolves.toBe(true);
   });
 
+  it("revalidates the destination parent after EPERM before retrying rename", async () => {
+    const root = await createTemporaryDirectory();
+    const ownedParent = join(root, "owned-parent");
+    const displacedParent = join(root, "displaced-parent");
+    const external = join(root, "external-parent");
+    await mkdir(ownedParent);
+    await mkdir(external);
+    await writeFile(join(external, "sentinel.txt"), "outside", "utf8");
+    const destination = join(ownedParent, "snapshot-data");
+    const oldSource = await createValidSource("e2".repeat(32));
+    const newSource = await createValidSource("f3".repeat(32));
+    await installDestination(oldSource.dataDir, destination, ownedParent, "initial.staging");
+    const staging = join(ownedParent, "release.staging");
+    await stageDeploymentBundle(newSource.dataDir, staging, validationOptions);
+    let renameCalls = 0;
+
+    await expect(beginDeploymentBundlePublish(staging, destination, validationOptions, {
+      renameDirectory: async () => {
+        renameCalls += 1;
+        throw nodeError("EPERM", "retry-token");
+      },
+      wait: async () => {
+        await rename(ownedParent, displacedParent);
+        await symlink(external, ownedParent, "junction");
+      },
+    })).rejects.toSatisfy((error: unknown) => {
+      expect(reachableErrorText(error)).not.toContain("retry-token");
+      expect(reachableErrorText(error)).not.toContain(destination);
+      return true;
+    });
+
+    expect(renameCalls).toBe(1);
+    expect(await readFile(join(external, "sentinel.txt"), "utf8")).toBe("outside");
+    expect(await readDeploymentRevision(join(displacedParent, "snapshot-data"))).toBe("e2".repeat(32));
+    await expect(pathExists(join(displacedParent, "release.staging"))).resolves.toBe(true);
+  });
+
   it("revalidates the destination parent before rollback mutations", async () => {
     const root = await createTemporaryDirectory();
     const ownedParent = join(root, "owned-parent");
@@ -524,6 +588,16 @@ describe("transactional deployment bundle publication", () => {
       return true;
     });
     expect(await artifactNames(root, destination)).toHaveLength(1);
+    const destinationBeforeOpposite = await fingerprintTree(destination);
+    const artifactsBeforeOpposite = await fingerprintArtifacts(root, destination);
+    await expect(published.rollback()).rejects.toSatisfy((error: unknown) => {
+      expect((error as Error).message).toBe("Deployment bundle settlement action is locked");
+      expect(reachableErrorText(error)).not.toContain(destination);
+      expect(reachableErrorText(error)).not.toContain("secret-token");
+      return true;
+    });
+    expect(await fingerprintTree(destination)).toEqual(destinationBeforeOpposite);
+    expect(await fingerprintArtifacts(root, destination)).toEqual(artifactsBeforeOpposite);
     await expect(published.finalize()).resolves.toBeUndefined();
     await expect(published.finalize()).resolves.toBeUndefined();
     expect(removeCalls).toBe(2);
@@ -559,6 +633,15 @@ describe("transactional deployment bundle publication", () => {
     });
     await expect(pathExists(destination)).resolves.toBe(false);
     expect(await artifactNames(root, destination)).toHaveLength(2);
+    const artifactsBeforeOpposite = await fingerprintArtifacts(root, destination);
+    await expect(published.finalize()).rejects.toSatisfy((error: unknown) => {
+      expect((error as Error).message).toBe("Deployment bundle settlement action is locked");
+      expect(reachableErrorText(error)).not.toContain(destination);
+      expect(reachableErrorText(error)).not.toContain("rollback-token");
+      return true;
+    });
+    await expect(pathExists(destination)).resolves.toBe(false);
+    expect(await fingerprintArtifacts(root, destination)).toEqual(artifactsBeforeOpposite);
     failRestore = false;
     await expect(published.rollback()).resolves.toBeUndefined();
     await expect(published.rollback()).resolves.toBeUndefined();
@@ -659,6 +742,14 @@ async function fingerprintTree(root: string, relativePath = ""): Promise<Record<
     const relativeName = relativePath ? `${relativePath}/${entry.name}` : entry.name;
     if (entry.isDirectory()) Object.assign(result, await fingerprintTree(root, relativeName));
     else result[relativeName] = createHash("sha256").update(await readFile(join(directory, entry.name))).digest("hex");
+  }
+  return result;
+}
+
+async function fingerprintArtifacts(parent: string, destination: string): Promise<Record<string, Record<string, string>>> {
+  const result: Record<string, Record<string, string>> = {};
+  for (const name of await artifactNames(parent, destination)) {
+    result[name] = await fingerprintTree(join(parent, name));
   }
   return result;
 }

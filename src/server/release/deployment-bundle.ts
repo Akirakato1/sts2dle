@@ -121,6 +121,7 @@ export async function stageDeploymentBundle(
   sourceDataDir: string,
   stagingDir: string,
   options: SnapshotValidationOptions,
+  operations: Pick<PublishOperations, "beforeMutation"> = {},
 ): Promise<ActiveSnapshot> {
   let sourceActive: ActiveSnapshot | null;
   try {
@@ -136,7 +137,8 @@ export async function stageDeploymentBundle(
     await loadActivatedSnapshot(sourceActive.path, options);
 
     const stagingTarget = await resolveNewDirectChild(stagingDir);
-    ownedStaging = await createOwnedDirectory(stagingTarget);
+    const beforeMutation = operations.beforeMutation ?? DEFAULT_PUBLISH_OPERATIONS.beforeMutation;
+    ownedStaging = await createOwnedDirectory(stagingTarget, beforeMutation);
     const snapshotsTarget = createSiblingTarget(asOwnedParent(ownedStaging), "snapshots");
     const resolvedSnapshots = await createOwnedDirectory(snapshotsTarget);
     const stagedSnapshotPath = join(resolvedSnapshots.path, sourceActive.buildId);
@@ -320,9 +322,14 @@ function createPublishedBundleTransaction(
   operations: ResolvedPublishOperations,
 ): PublishedBundle {
   let lifecycle: "active" | "finalized" | "rolled-back" = "active";
+  let settlementDirection: "finalize" | "rollback" | undefined;
   let settlement: Promise<void> | undefined;
   const settle = (action: "finalize" | "rollback"): Promise<void> => {
     if (lifecycle !== "active") return Promise.resolve();
+    settlementDirection ??= action;
+    if (settlementDirection !== action) {
+      return Promise.reject(fixedError("Deployment bundle settlement action is locked", undefined));
+    }
     if (settlement) return settlement;
     settlement = (async () => {
       if (action === "finalize") {
@@ -590,7 +597,11 @@ function asOwnedParent(directory: OwnedDirectory): OwnedParent {
   };
 }
 
-async function createOwnedDirectory(target: DirectChildTarget): Promise<OwnedDirectory> {
+async function createOwnedDirectory(
+  target: DirectChildTarget,
+  beforeMutation: () => Promise<void> = DEFAULT_PUBLISH_OPERATIONS.beforeMutation,
+): Promise<OwnedDirectory> {
+  await beforeMutation();
   await revalidateOwnedParent(target.parent);
   await assertPathMissing(target.path);
   await mkdir(target.path);
