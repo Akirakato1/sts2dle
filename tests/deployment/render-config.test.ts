@@ -3,6 +3,16 @@ import { describe, expect, test } from "vitest";
 
 const readRoot = (path: string) => readFile(new URL(`../../${path}`, import.meta.url), "utf8");
 
+const environmentValues = (blueprint: string, key: string) => {
+  const lines = blueprint.split(/\r?\n/);
+  return lines.flatMap((line, index) => {
+    if (line !== `      - key: ${key}`) return [];
+    const valueLine = lines[index + 1];
+    if (!valueLine?.startsWith("        value: ")) return [];
+    return [valueLine.slice("        value: ".length).replace(/^"|"$/g, "")];
+  });
+};
+
 describe("Render deployment configuration", () => {
   test("builds the app with matching Playwright Chromium and starts the server", async () => {
     const dockerfile = await readRoot("Dockerfile");
@@ -15,6 +25,19 @@ describe("Render deployment configuration", () => {
 
   test("uses one health-checked web service with persistent synchronized data", async () => {
     const blueprint = await readRoot("render.yaml");
+    const serviceTypes = blueprint.split(/\r?\n/)
+      .flatMap((line) => /^  - type: (.+)$/.exec(line)?.[1] ?? []);
+    expect(serviceTypes).toEqual(["web"]);
+    expect(blueprint).toContain("    plan: starter");
+    expect(environmentValues(blueprint, "STSDLE_ARTWORK_CONCURRENCY")).toEqual(["4"]);
+    for (const originsKey of [
+      "STSDLE_ARTWORK_ALLOWED_ORIGINS",
+      "STSDLE_FULL_CARD_ALLOWED_ORIGINS",
+    ]) {
+      expect(environmentValues(blueprint, originsKey)).toEqual([
+        "https://spire-codex.com,https://cdn.spire-codex.com",
+      ]);
+    }
     for (const required of [
       "type: web", "runtime: docker", "healthCheckPath: /health",
       "mountPath: /var/data", "sizeGB: 1", "key: STSDLE_HOST", "value: 0.0.0.0",
