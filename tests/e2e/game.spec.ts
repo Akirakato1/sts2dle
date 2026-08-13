@@ -1216,6 +1216,7 @@ for (const viewport of [
     const helpTrigger = page.locator(".game-guide__trigger");
     await expect(helpTrigger).toHaveAttribute("aria-label", "How to play");
     await expect(helpTrigger).toHaveAccessibleName("How to play");
+    await expect(helpTrigger).toHaveText("");
     const documentSizeBeforeHelp = await page.evaluate(() => ({
       width: document.documentElement.scrollWidth,
       height: document.documentElement.scrollHeight,
@@ -1241,10 +1242,54 @@ for (const viewport of [
       .toBeGreaterThan(triggerGeometry.shell.left + triggerGeometry.shell.width / 2);
     expect(Math.abs(triggerGeometry.shell.right - triggerGeometry.rect.right)).toBeLessThanOrEqual(1);
     expect(Math.abs(triggerGeometry.heroTop - triggerGeometry.rect.top)).toBeLessThanOrEqual(1);
+    const triggerVisualGeometry = await helpTrigger.evaluate((element) => {
+      const art = element.querySelector<HTMLElement>(".game-guide__trigger-art")!;
+      const frame = element.getBoundingClientRect();
+      const artwork = art.getBoundingClientRect();
+      const artStyle = getComputedStyle(art);
+      return {
+        frame: {
+          width: frame.width,
+          height: frame.height,
+          x: frame.x + frame.width / 2,
+          y: frame.y + frame.height / 2,
+        },
+        artwork: {
+          x: artwork.x + artwork.width / 2,
+          y: artwork.y + artwork.height / 2,
+        },
+        radius: getComputedStyle(element).borderRadius,
+        maskImage: artStyle.maskImage || artStyle.getPropertyValue("-webkit-mask-image"),
+      };
+    });
+    expect(triggerVisualGeometry.frame.width).toBe(48);
+    expect(triggerVisualGeometry.frame.height).toBe(48);
+    expect(triggerVisualGeometry.radius).toBe("50%");
+    expect(triggerVisualGeometry.maskImage).toContain("/assets/map_unknown-");
+    expect(triggerVisualGeometry.maskImage).toContain(".png");
+    expect(Math.abs(triggerVisualGeometry.frame.x - triggerVisualGeometry.artwork.x)).toBeLessThanOrEqual(.5);
+    expect(Math.abs(triggerVisualGeometry.frame.y - triggerVisualGeometry.artwork.y)).toBeLessThanOrEqual(.5);
 
     await helpTrigger.click();
     const help = page.getByRole("dialog", { name: "How to play" });
     await expect(help).toBeVisible();
+    const keywordGeometry = await help.locator(".game-guide__keyword-list > li").evaluateAll((rows) => rows.map((row) => {
+      const icon = row.querySelector<HTMLElement>(".keyword-state-icons")!.getBoundingClientRect();
+      const label = row.querySelector<HTMLElement>(":scope > span:last-child")!.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      return {
+        iconRight: icon.right,
+        labelLeft: label.left,
+        rowTop: rowRect.top,
+        rowBottom: rowRect.bottom,
+      };
+    }));
+    expect(Math.max(...keywordGeometry.map((row) => row.labelLeft)) - Math.min(...keywordGeometry.map((row) => row.labelLeft)))
+      .toBeLessThanOrEqual(.5);
+    for (const row of keywordGeometry) expect(row.iconRight).toBeLessThanOrEqual(row.labelLeft);
+    for (let index = 1; index < keywordGeometry.length; index += 1) {
+      expect(keywordGeometry[index]!.rowTop).toBeGreaterThanOrEqual(keywordGeometry[index - 1]!.rowBottom);
+    }
     const modalGeometry = await help.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       const root = document.documentElement;
