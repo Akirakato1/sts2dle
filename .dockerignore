@@ -6,6 +6,7 @@ node_modules
 dist
 var
 test-results
+tests
 playwright-report
 coverage
 *.log

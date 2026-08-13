@@ -68,6 +68,7 @@ describe("Render deployment configuration", () => {
     const ignore = await readRoot(".dockerignore");
     expect(ignore).toContain("node_modules");
     expect(ignore).toContain("var");
+    expect(ignore.split(/\r?\n/)).toContain("tests");
     expect(ignore).not.toContain("vendor");
   });
 
