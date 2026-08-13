@@ -1,14 +1,17 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { mkdtemp as mkdtempAsync, rm as rmAsync } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 const SNAPSHOT_PATH = "deploy/snapshot-data";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const TERMINATION_TIMEOUT_MS = 5_000;
 const FALLBACK_CLOSE_TIMEOUT_MS = 1_000;
+const PRIVATE_INDEX_CLEANUP_TIMEOUT_MS = 5_000;
+const PRIVATE_INDEX_CLEANUP_RETRY_MS = 50;
 const PRIVATE_INDEX_PREFIX = "stsdle-snapshot-index-";
 const APPROVED_ORIGINS = new Set([
   "git@github.com:Akirakato1/sts2dle.git",
@@ -40,6 +43,13 @@ export class GitPushError extends Error {
   }
 }
 
+export class GitPostCommitCleanupError extends Error {
+  constructor() {
+    super("Card snapshot committed but private index cleanup failed");
+    this.name = "GitPostCommitCleanupError";
+  }
+}
+
 class GitSafetyError extends Error {}
 class BoundedProcessError extends Error {
   constructor() {
@@ -52,25 +62,42 @@ interface PrivateIndex {
   root: string;
   path: string;
 }
+interface PrivateIndexOperations {
+  removeDirectory(path: string): Promise<void>;
+  wait(milliseconds: number): Promise<void>;
+  monotonicNow(): number;
+}
 type SpawnedProcess = ChildProcessByStdio<null, Readable, Readable>;
+type SupervisedProcess = ChildProcess & { stdout: Readable; stderr: Readable };
 
 export class GitClient {
   readonly #repositoryRoot: string;
   readonly #runner: ArgumentArrayRunner;
+  readonly #privateIndexOperations: PrivateIndexOperations;
   #privateIndex: PrivateIndex | undefined;
 
   constructor(repositoryRoot: string, runner?: ArgumentArrayRunner);
-  constructor(options: { repositoryRoot: string; runner?: ArgumentArrayRunner });
+  constructor(options: {
+    repositoryRoot: string;
+    runner?: ArgumentArrayRunner;
+    privateIndexOperations?: PrivateIndexOperations;
+  });
   constructor(
-    repositoryRootOrOptions: string | { repositoryRoot: string; runner?: ArgumentArrayRunner },
+    repositoryRootOrOptions: string | {
+      repositoryRoot: string;
+      runner?: ArgumentArrayRunner;
+      privateIndexOperations?: PrivateIndexOperations;
+    },
     runner: ArgumentArrayRunner = runBoundedProcess,
   ) {
     if (typeof repositoryRootOrOptions === "string") {
       this.#repositoryRoot = resolve(repositoryRootOrOptions);
       this.#runner = runner;
+      this.#privateIndexOperations = defaultPrivateIndexOperations;
     } else {
       this.#repositoryRoot = resolve(repositoryRootOrOptions.repositoryRoot);
       this.#runner = repositoryRootOrOptions.runner ?? runBoundedProcess;
+      this.#privateIndexOperations = repositoryRootOrOptions.privateIndexOperations ?? defaultPrivateIndexOperations;
     }
   }
 
@@ -141,14 +168,27 @@ export class GitClient {
       await this.#git(["update-ref", "HEAD", newCommit, oldHead]);
       updatedRef = true;
       await this.#restoreSnapshotIndex();
-      await this.#discardPrivateIndex();
-    } catch {
+      try {
+        await this.#discardPrivateIndex();
+      } catch {
+        throw new GitPostCommitCleanupError();
+      }
+    } catch (error: unknown) {
+      if (error instanceof GitPostCommitCleanupError) throw error;
       if (updatedRef) {
         await this.#git(["update-ref", "HEAD", oldHead, newCommit]).catch(() => undefined);
         await this.#restoreSnapshotIndex().catch(() => undefined);
       }
       await this.#discardPrivateIndex().catch(() => undefined);
       throw new Error("Unable to commit card snapshot");
+    }
+  }
+
+  async cleanupPrivateIndex(): Promise<void> {
+    try {
+      await this.#discardPrivateIndex();
+    } catch {
+      throw new Error("Unable to clean private index");
     }
   }
 
@@ -184,9 +224,34 @@ export class GitClient {
 
   async #discardPrivateIndex(): Promise<void> {
     const privateIndex = this.#privateIndex;
-    this.#privateIndex = undefined;
-    if (privateIndex) await rmAsync(privateIndex.root, { recursive: true, force: true });
+    if (!privateIndex) return;
+    const deadline = this.#privateIndexOperations.monotonicNow() + PRIVATE_INDEX_CLEANUP_TIMEOUT_MS;
+    for (;;) {
+      try {
+        await this.#privateIndexOperations.removeDirectory(privateIndex.root);
+        if (this.#privateIndex === privateIndex) this.#privateIndex = undefined;
+        return;
+      } catch (error: unknown) {
+        if (!isTransientRemovalFailure(error) || this.#privateIndexOperations.monotonicNow() >= deadline) {
+          throw new GitSafetyError();
+        }
+        await this.#privateIndexOperations.wait(PRIVATE_INDEX_CLEANUP_RETRY_MS);
+      }
+    }
   }
+}
+
+const defaultPrivateIndexOperations: PrivateIndexOperations = {
+  removeDirectory: async (path) => rmAsync(path, { recursive: true, force: true }),
+  wait: async (milliseconds) => new Promise<void>((resolveWait) => {
+    setTimeout(resolveWait, milliseconds);
+  }),
+  monotonicNow: () => performance.now(),
+};
+
+function isTransientRemovalFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "EPERM" || error.code === "EBUSY";
 }
 
 export async function runNpmCheck(
@@ -224,16 +289,20 @@ export function resolveNpmCliPath(environment: NodeJS.ProcessEnv): string {
 export const runBoundedProcess: ArgumentArrayRunner = async (command, args, options) => {
   const timeoutMs = positiveLimit(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const maxOutputBytes = positiveLimit(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
-  let child: SpawnedProcess;
+  let child: SpawnedProcess | SupervisedProcess;
+  const supervised = process.platform === "win32";
+  const environment = options.env ? { ...process.env, ...options.env } : { ...process.env };
   try {
-    child = spawn(command, [...args], {
-      cwd: options.cwd,
-      detached: process.platform !== "win32",
-      env: options.env ? { ...process.env, ...options.env } : process.env,
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    child = supervised
+      ? spawnWindowsSupervisor(options.cwd)
+      : spawn(command, [...args], {
+        cwd: options.cwd,
+        detached: true,
+        env: environment,
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
   } catch {
     throw new BoundedProcessError();
   }
@@ -250,6 +319,7 @@ export const runBoundedProcess: ArgumentArrayRunner = async (command, args, opti
     requestFailure();
   };
   const capture = (chunks: Buffer[], chunk: Buffer): void => {
+    if (failureTriggered) return;
     outputBytes += chunk.byteLength;
     if (outputBytes > maxOutputBytes) {
       fail();
@@ -276,20 +346,66 @@ export const runBoundedProcess: ArgumentArrayRunner = async (command, args, opti
   const errorListener = () => observeClose({ code: null, signal: null, spawnError: true });
   child.once("close", closeListener);
   child.once("error", errorListener);
+  let resultResolve!: (succeeded: boolean) => void;
+  const resultReported = new Promise<boolean>((resolveResult) => { resultResolve = resolveResult; });
+  let terminationReadyResolve!: () => void;
+  const terminationReady = new Promise<void>((resolveReady) => { terminationReadyResolve = resolveReady; });
+  let resultObserved = false;
+  let terminationConfirmed = false;
+  const messageListener = (message: unknown): void => {
+    if (typeof message !== "object" || message === null || !("type" in message)) return;
+    if (message.type === "termination-ready") {
+      terminationConfirmed = true;
+      terminationReadyResolve();
+    } else if (message.type === "result" && "succeeded" in message && typeof message.succeeded === "boolean") {
+      if (resultObserved) return;
+      resultObserved = true;
+      resultResolve(message.succeeded);
+    }
+  };
+  if (supervised) child.on("message", messageListener);
+  if (supervised) {
+    try {
+      child.send({
+        type: "launch",
+        command,
+        args: [...args],
+        cwd: options.cwd,
+        env: environment,
+      }, (error) => { if (error) fail(); });
+    } catch {
+      fail();
+    }
+  }
   const timeout = setTimeout(fail, timeoutMs);
-  timeout.unref();
 
   const first = await Promise.race([
-    closed.then((result) => ({ kind: "closed" as const, result })),
+    (supervised
+      ? Promise.race([
+        resultReported.then((succeeded) => ({ code: succeeded ? 0 : 1, signal: null, spawnError: false })),
+        closed,
+      ])
+      : closed).then((result) => ({ kind: "closed" as const, result })),
     failureRequested.then(() => ({ kind: "failure" as const })),
   ]);
-  if (first.kind === "failure" || failureTriggered) await terminateProcessTree(child, closed);
+  if (supervised) {
+    await terminateWindowsSupervisor(
+      child as SupervisedProcess,
+      closed,
+      () => closeObserved,
+      () => terminationConfirmed,
+      terminationReady,
+    );
+  } else if (first.kind === "failure" || failureTriggered) {
+    await terminatePosixProcessTree(child as SpawnedProcess, closed);
+  }
 
   clearTimeout(timeout);
   child.stdout.removeListener("data", stdoutListener);
   child.stderr.removeListener("data", stderrListener);
   child.removeListener("close", closeListener);
   child.removeListener("error", errorListener);
+  if (supervised) child.removeListener("message", messageListener);
 
   if (first.kind === "failure" || failureTriggered) throw new BoundedProcessError();
   const { code, signal, spawnError } = first.result;
@@ -300,15 +416,13 @@ export const runBoundedProcess: ArgumentArrayRunner = async (command, args, opti
   };
 };
 
-async function terminateProcessTree(
+async function terminatePosixProcessTree(
   child: SpawnedProcess,
   closed: Promise<unknown>,
 ): Promise<void> {
   const pid = child.pid;
   if (!Number.isInteger(pid) || pid! <= 0) {
     child.kill("SIGKILL");
-  } else if (process.platform === "win32") {
-    await runTaskkill(pid!);
   } else {
     try {
       process.kill(-pid!, "SIGKILL");
@@ -323,8 +437,58 @@ async function terminateProcessTree(
   await settlesWithin(closed, FALLBACK_CLOSE_TIMEOUT_MS);
 }
 
-async function runTaskkill(pid: number): Promise<void> {
-  await new Promise<void>((resolveTaskkill) => {
+function spawnWindowsSupervisor(cwd: string): SupervisedProcess {
+  const currentExtension = extname(fileURLToPath(import.meta.url));
+  const supervisorExtension = currentExtension === ".ts" ? ".ts" : ".js";
+  const supervisorPath = fileURLToPath(new URL(`./process-supervisor${supervisorExtension}`, import.meta.url));
+  const child = spawn(process.execPath, [supervisorPath], {
+    cwd,
+    env: process.env,
+    serialization: "json",
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    windowsHide: true,
+  });
+  if (!child.stdout || !child.stderr) throw new BoundedProcessError();
+  return child as SupervisedProcess;
+}
+
+async function terminateWindowsSupervisor(
+  child: SupervisedProcess,
+  closed: Promise<unknown>,
+  closeObserved: () => boolean,
+  terminationConfirmed: () => boolean,
+  terminationReady: Promise<void>,
+): Promise<void> {
+  if (closeObserved()) return;
+  try {
+    child.send({ type: "prepare-termination" });
+  } catch {
+    if (!closeObserved()) await closed;
+    return;
+  }
+  const prepared = await Promise.race([
+    terminationReady.then(() => true),
+    closed.then(() => false),
+  ]);
+  if (!prepared || closeObserved() || !terminationConfirmed()) return;
+  const pid = child.pid;
+  if (!Number.isInteger(pid) || pid! <= 0) {
+    await closed;
+    return;
+  }
+
+  const deadline = performance.now() + TERMINATION_TIMEOUT_MS;
+  while (!closeObserved() && terminationConfirmed() && performance.now() < deadline) {
+    const taskkillSucceeded = await runTaskkill(pid!);
+    if (closeObserved()) return;
+    if (taskkillSucceeded && await settlesWithin(closed, FALLBACK_CLOSE_TIMEOUT_MS)) return;
+    await settlesWithin(closed, 50);
+  }
+  if (!closeObserved()) await closed;
+}
+
+async function runTaskkill(pid: number): Promise<boolean> {
+  return new Promise<boolean>((resolveTaskkill) => {
     let taskkill;
     try {
       taskkill = spawn(resolveTaskkillExecutable(), ["/PID", String(pid), "/T", "/F"], {
@@ -333,24 +497,22 @@ async function runTaskkill(pid: number): Promise<void> {
         windowsHide: true,
       });
     } catch {
-      resolveTaskkill();
+      resolveTaskkill(false);
       return;
     }
     let settled = false;
-    const settle = (): void => {
+    const settle = (succeeded: boolean): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       taskkill.removeAllListeners();
-      resolveTaskkill();
+      resolveTaskkill(succeeded);
     };
-    taskkill.once("close", settle);
-    taskkill.once("error", settle);
+    taskkill.once("close", (code, signal) => settle(code === 0 && signal === null));
+    taskkill.once("error", () => settle(false));
     const timer = setTimeout(() => {
       taskkill.kill("SIGKILL");
-      settle();
     }, TERMINATION_TIMEOUT_MS);
-    timer.unref();
   });
 }
 
@@ -372,7 +534,6 @@ async function settlesWithin(promise: Promise<unknown>, milliseconds: number): P
       promise.then(() => true),
       new Promise<boolean>((resolveTimeout) => {
         timer = setTimeout(() => resolveTimeout(false), milliseconds);
-        timer.unref();
       }),
     ]);
   } finally {

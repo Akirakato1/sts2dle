@@ -1,5 +1,5 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -201,7 +201,7 @@ describe("GitClient", () => {
     await expect(readFile(join(repository, "malicious.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(privateIndexes.length).toBeGreaterThan(0);
     expect(privateIndexes.every((path) => path.startsWith(join(repository, ".git")))).toBe(true);
-  });
+  }, 15_000);
 
   it("restores the snapshot index and worktree to HEAD after a pre-commit failure", async () => {
     const repository = await createGitRepository();
@@ -216,7 +216,70 @@ describe("GitClient", () => {
 
     expect((await git(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("");
     expect((await git(repository, ["diff", "--", "deploy/snapshot-data"])).trim()).toBe("");
-  });
+  }, 15_000);
+
+  it("retries a transient private-index removal without losing its cleanup handle", async () => {
+    const repository = await createGitRepository();
+    let removalAttempts = 0;
+    const client = new GitClient({
+      repositoryRoot: repository,
+      runner: runBoundedProcess,
+      privateIndexOperations: {
+        removeDirectory: async (path: string) => {
+          removalAttempts += 1;
+          if (removalAttempts === 1) throw Object.assign(new Error("private path"), { code: "EPERM" });
+          await rm(path, { recursive: true, force: true });
+        },
+        wait: async () => undefined,
+        monotonicNow: () => removalAttempts * 100,
+      },
+    });
+    await writeFile(join(repository, "deploy", "snapshot-data", "active.json"), "new snapshot\n");
+    await client.assertOnlySnapshotChanges();
+
+    await client.commitSnapshot("b".repeat(64));
+
+    expect(removalAttempts).toBe(2);
+    expect(await privateIndexDirectories(repository)).toEqual([]);
+    expect((await git(repository, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).trim())
+      .toBe("deploy/snapshot-data/active.json");
+  }, 15_000);
+
+  it("retains a private-index cleanup handle after persistent failure and succeeds on retry", async () => {
+    const repository = await createGitRepository();
+    let removalBlocked = true;
+    let clock = 0;
+    const client = new GitClient({
+      repositoryRoot: repository,
+      runner: runBoundedProcess,
+      privateIndexOperations: {
+        removeDirectory: async (path: string) => {
+          if (removalBlocked) throw Object.assign(new Error(`secret ${path}`), { code: "EBUSY" });
+          await rm(path, { recursive: true, force: true });
+        },
+        wait: async () => { clock += 100; },
+        monotonicNow: () => clock,
+      },
+    });
+    const oldHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
+    await writeFile(join(repository, "deploy", "snapshot-data", "active.json"), "new snapshot\n");
+    await client.assertOnlySnapshotChanges();
+    await writeFile(join(repository, "unrelated.txt"), "staged unrelated\n");
+    await git(repository, ["add", "unrelated.txt"]);
+
+    const error = await captureError(client.commitSnapshot("b".repeat(64)));
+
+    expect(stringifyErrorChain(error)).toBe("Card snapshot committed but private index cleanup failed");
+    expect((await git(repository, ["rev-parse", "HEAD"])).trim()).not.toBe(oldHead);
+    expect((await git(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("unrelated.txt");
+    expect(await privateIndexDirectories(repository)).toHaveLength(1);
+
+    removalBlocked = false;
+    await client.cleanupPrivateIndex();
+
+    expect(await privateIndexDirectories(repository)).toEqual([]);
+    expect((await git(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("unrelated.txt");
+  }, 15_000);
 
   it("returns a fixed typed push error without preserving credential-bearing causes", async () => {
     const runner = new RecordingRunner();
@@ -252,6 +315,48 @@ describe("runBoundedProcess", () => {
       await expectProcessToExit(descendantPid);
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(countTimeoutResources()).toBeLessThanOrEqual(beforeResources);
+    },
+    15_000,
+  );
+
+  it.each(["timeout", "overflow"] as const)(
+    "terminates descendants through a live supervisor after the command parent exits on %s",
+    async (mode) => {
+      const root = await makeTemporaryRoot();
+      const pidFile = join(root, "orphan-grandchild.pid");
+      const fixture = join(process.cwd(), "tests", "server", "fixtures", "process-tree-child.mjs");
+      const sentinel = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        shell: false,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(Number.isInteger(sentinel.pid) && sentinel.pid! > 0).toBe(true);
+      const beforeResources = countTimeoutResources();
+      const beforeProcessResources = countProcessResources();
+      try {
+        const error = await captureError(runBoundedProcess(
+          process.execPath,
+          [fixture, `parent-exit-${mode}`, pidFile],
+          {
+            cwd: root,
+            timeoutMs: mode === "timeout" ? 300 : 5_000,
+            maxOutputBytes: mode === "overflow" ? 1_024 : 1024 * 1024,
+          },
+        ));
+        const descendantPid = Number((await readFile(pidFile, "utf8")).trim());
+        const supervisorPid = Number((await readFile(`${pidFile}.supervisor`, "utf8")).trim());
+
+        expect(stringifyErrorChain(error)).toBe("Child process failed");
+        await expectProcessToExit(descendantPid);
+        await expectProcessToExit(supervisorPid);
+        expectProcessAlive(sentinel.pid!);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        expect(countTimeoutResources()).toBeLessThanOrEqual(beforeResources);
+        expectProcessResourcesNotIncreased(beforeProcessResources);
+      } finally {
+        sentinel.kill("SIGKILL");
+        await new Promise<void>((resolveClose) => sentinel.once("close", () => resolveClose()));
+      }
     },
     15_000,
   );
@@ -318,6 +423,11 @@ async function createGitRepository(): Promise<string> {
   return root;
 }
 
+async function privateIndexDirectories(repository: string): Promise<string[]> {
+  return (await readdir(join(repository, ".git")))
+    .filter((entry) => entry.startsWith("stsdle-snapshot-index-"));
+}
+
 async function git(cwd: string, args: readonly string[]): Promise<string> {
   const result = await execFileAsync("git", [...args], { cwd, windowsHide: true });
   return result.stdout;
@@ -345,4 +455,23 @@ async function expectProcessToExit(pid: number): Promise<void> {
 
 function countTimeoutResources(): number {
   return process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
+}
+
+function countProcessResources(): Record<string, number> {
+  const tracked = new Set(["PipeWrap", "ProcessWrap", "Timeout"]);
+  return process.getActiveResourcesInfo().reduce<Record<string, number>>((counts, name) => {
+    if (tracked.has(name)) counts[name] = (counts[name] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+function expectProcessResourcesNotIncreased(before: Record<string, number>): void {
+  const after = countProcessResources();
+  for (const name of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    expect(after[name] ?? 0, `${name} resources`).toBeLessThanOrEqual(before[name] ?? 0);
+  }
+}
+
+function expectProcessAlive(pid: number): void {
+  expect(() => process.kill(pid, 0)).not.toThrow();
 }

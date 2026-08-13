@@ -13,7 +13,7 @@ import {
 } from "../../src/server/release/release-snapshot.js";
 import type { ServerConfig } from "../../src/server/config.js";
 import { resolveNpmCliPath } from "../../src/server/release/git-client.js";
-import { GitClient, runBoundedProcess } from "../../src/server/release/git-client.js";
+import { GitClient, GitPostCommitCleanupError, runBoundedProcess } from "../../src/server/release/git-client.js";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -137,6 +137,20 @@ describe("releaseSnapshot", () => {
     expect(harness.cleanupSettled).toBe(true);
   });
 
+  it("retries private-index cleanup after the commit exists before finalizing and pushing", async () => {
+    const harness = createReleaseHarness({ failAt: "post-commit-cleanup" });
+
+    await expect(releaseSnapshot({}, harness.dependencies)).resolves.toEqual({
+      status: "released",
+      sourceRevision: NEXT_REVISION,
+    });
+
+    expect(harness.events).toContain("private-index-cleanup");
+    expect(harness.commitCreated).toBe(true);
+    expect(harness.finalize).toHaveBeenCalledOnce();
+    expect(harness.rollback).not.toHaveBeenCalled();
+  });
+
   it("passes the one fetched response to the builder instead of fetching cards again", async () => {
     const harness = createReleaseHarness();
 
@@ -201,6 +215,7 @@ describe("releaseSnapshot", () => {
           assertOnlySnapshotChanges: () => realGit.assertOnlySnapshotChanges(),
           rollbackSnapshotIndex: () => realGit.rollbackSnapshotIndex(),
           commitSnapshot: async () => { throw new Error("private commit failure"); },
+          cleanupPrivateIndex: () => realGit.cleanupPrivateIndex(),
           pushMain: () => realGit.pushMain(),
         },
         readCommittedRevision: async () => CURRENT_REVISION,
@@ -232,7 +247,7 @@ describe("releaseSnapshot", () => {
     } finally {
       await rm(repository, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
 
 describe("buildSnapshotBundle", () => {
@@ -528,9 +543,14 @@ function createReleaseHarness(options: HarnessOptions = {}) {
       },
       commitSnapshot: async () => {
         events.push("commit");
+        if (options.failAt === "post-commit-cleanup") {
+          commitCreated = true;
+          throw new GitPostCommitCleanupError();
+        }
         fail("commit");
         commitCreated = true;
       },
+      cleanupPrivateIndex: async () => { events.push("private-index-cleanup"); },
       rollbackSnapshotIndex: indexRollback,
       pushMain: async () => {
         events.push("push");

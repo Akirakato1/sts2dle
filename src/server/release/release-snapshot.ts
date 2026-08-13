@@ -16,6 +16,7 @@ import {
 } from "./deployment-bundle.js";
 import {
   GitClient,
+  GitPostCommitCleanupError,
   resolveNpmCliPath,
   runBoundedProcess,
   runNpmCheck,
@@ -41,7 +42,7 @@ export interface SnapshotBuildDependencies {
 }
 
 export interface ReleaseSnapshotDependencies extends SnapshotBuildDependencies {
-  gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "rollbackSnapshotIndex" | "commitSnapshot" | "pushMain">;
+  gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "rollbackSnapshotIndex" | "commitSnapshot" | "cleanupPrivateIndex" | "pushMain">;
   readCommittedRevision(): Promise<string | null>;
   runChecks(): Promise<void>;
   outputDir?: string;
@@ -113,10 +114,16 @@ export async function releaseSnapshot(
       try {
         await dependencies.validatePublishedSnapshot(published.active);
         await dependencies.gitClient.assertOnlySnapshotChanges();
-        await dependencies.gitClient.commitSnapshot(fetched.sourceRevision);
-        committed = true;
+        try {
+          await dependencies.gitClient.commitSnapshot(fetched.sourceRevision);
+          committed = true;
+        } catch (error: unknown) {
+          if (!(error instanceof GitPostCommitCleanupError)) throw error;
+          committed = true;
+          await dependencies.gitClient.cleanupPrivateIndex();
+        }
       } catch {
-        await rollbackPreCommitIgnoringPayload(published, dependencies.gitClient);
+        if (!committed) await rollbackPreCommitIgnoringPayload(published, dependencies.gitClient);
         throw new SnapshotReleaseError();
       }
 
