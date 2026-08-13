@@ -121,7 +121,7 @@ describe("searchCards", () => {
 });
 
 describe("CardSearch", () => {
-  test("composes assisted controls with the name hint before the search input", () => {
+  test("composes assisted controls with search input last", () => {
     const { view } = renderSearch({
       assistance: assisted,
       assistanceSlot: <section aria-label="Test orb tray">Orb assistance</section>,
@@ -130,12 +130,25 @@ describe("CardSearch", () => {
 
     const search = view.container.querySelector(".card-search")!;
     expect([...search.children].map((child) => child.getAttribute("aria-label") ?? child.tagName)).toEqual([
+      "Candidate visibility",
+      "Test orb tray",
       "Test name hint",
       "LABEL",
       "INPUT",
-      "Test orb tray",
-      "Candidate visibility",
     ]);
+  });
+
+  test("opens visible candidates and supports arrow selection from the final empty search input", () => {
+    const { input, view } = renderSearch({ assistance: assisted });
+    const search = view.container.querySelector(".card-search")!;
+
+    expect(search.lastElementChild).toBe(input);
+    fireEvent.focus(input);
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(4);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input).toHaveAttribute("aria-activedescendant", options[0]!.id);
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
   });
 
   test("shows classified visible candidates on empty focus and applies visibility without blocking red guesses", () => {

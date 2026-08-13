@@ -138,6 +138,26 @@ export function CardSearch({
   }
 
   return <section className="card-search" aria-label="Card search">
+    {assistance !== null && <fieldset className="candidate-visibility" aria-label="Candidate visibility">
+      {(["neutral", "green", "red"] as const).map((category) => <label
+        key={category}
+        className="candidate-visibility__label"
+        onPointerDown={() => { visibilityPointerDown.current = true; }}
+        onMouseDown={() => { visibilityPointerDown.current = true; }}
+        onPointerUp={() => { visibilityPointerDown.current = false; }}
+        onPointerCancel={() => { visibilityPointerDown.current = false; }}
+        onMouseUp={() => { visibilityPointerDown.current = false; }}
+      >
+        <input
+          type="checkbox"
+          checked={assistance.visibility[category]}
+          onMouseDown={(event) => event.preventDefault()}
+          onChange={(event) => onVisibilityChange(category, event.currentTarget.checked)}
+        />
+        <span>{category[0]!.toUpperCase() + category.slice(1)}</span>
+      </label>)}
+    </fieldset>}
+    {assistance !== null && assistanceSlot}
     {assistance !== null && nameHintSlot}
     <label className="card-search__label" htmlFor={`${listboxId}-input`}>Guess a card</label>
     <input
@@ -195,26 +215,6 @@ export function CardSearch({
         }
       }}
     />
-    {assistance !== null && assistanceSlot}
-    {assistance !== null && <fieldset className="candidate-visibility" aria-label="Candidate visibility">
-      {(["neutral", "green", "red"] as const).map((category) => <label
-        key={category}
-        className="candidate-visibility__label"
-        onPointerDown={() => { visibilityPointerDown.current = true; }}
-        onMouseDown={() => { visibilityPointerDown.current = true; }}
-        onPointerUp={() => { visibilityPointerDown.current = false; }}
-        onPointerCancel={() => { visibilityPointerDown.current = false; }}
-        onMouseUp={() => { visibilityPointerDown.current = false; }}
-      >
-        <input
-          type="checkbox"
-          checked={assistance.visibility[category]}
-          onMouseDown={(event) => event.preventDefault()}
-          onChange={(event) => onVisibilityChange(category, event.currentTarget.checked)}
-        />
-        <span>{category[0]!.toUpperCase() + category.slice(1)}</span>
-      </label>)}
-    </fieldset>}
     {menuOpen && (results.length > 0 ? <ul id={listboxId} className="card-search__options" role="listbox">
       {results.map(({ card, category }) => <li
         id={optionId(card.id)}
