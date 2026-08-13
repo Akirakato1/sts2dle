@@ -291,19 +291,31 @@ h1 {
 .result-legend__swatch--yellow { background: #a7791d; }
 .result-legend__swatch--red { background: #963d36; }
 
-.game-guide__icon-list,
-.game-guide__orb-list { list-style: none; }
+.game-guide__row-list {
+  padding-left: 0 !important;
+  list-style: none;
+}
 
-.game-guide__icon-list { padding-left: 0 !important; }
-
-.game-guide__icon-list li,
-.game-guide__orb-list li {
-  display: flex;
-  align-items: center;
+.game-guide__row-list li {
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr);
+  align-items: start;
   gap: .45rem;
 }
 
-.game-guide__orb-list { padding-left: 0 !important; }
+.game-guide__row-list li > [aria-hidden="true"] {
+  align-self: start;
+  justify-self: center;
+  margin-top: .08rem;
+}
+
+.game-guide__row-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  color: var(--gold);
+}
+
+.game-guide__orb-list li { grid-template-columns: 1.9rem minmax(0, 1fr); }
 
 .game-guide__orb-list .orb-visual { flex: 0 0 auto; }
 

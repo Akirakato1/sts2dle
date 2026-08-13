@@ -199,6 +199,26 @@ describe("App snapshot cleanup", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Class red result tile is an invalid target for the Filter Orb.");
   });
 
+  test("modal Escape closes help without canceling an orb, then normal Escape cancels it", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound()));
+
+    render(<App />);
+    const filter = await screen.findByRole("button", { name: "Filter Orb, available" });
+    fireEvent.click(filter);
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "How to play" }));
+    const closeHelp = screen.getByRole("button", { name: "Close help" });
+    fireEvent.keyDown(closeHelp, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog", { name: "How to play" })).not.toBeInTheDocument();
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(filter).toHaveAttribute("aria-pressed", "false");
+  });
+
   test("renders durable bubble and exact badges while red classification overrides green", async () => {
     const assistance = {
       ...createDefaultAssistance(),

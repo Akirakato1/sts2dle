@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { KeywordStateIcons } from "./KeywordStateIcons.js";
-import { ORB_LABELS, OrbVisual } from "./OrbVisual.js";
+import { OrbVisual } from "./OrbVisual.js";
 
 const RESULT_LEGEND = [
   ["green", "Both base and upgraded features match"],
@@ -10,10 +10,57 @@ const RESULT_LEGEND = [
 ] as const;
 
 const ORB_GUIDE = [
-  ["reveal", "Show the answer's base and upgraded pair for a feature header."],
-  ["filter", "Mark candidates that match a green feature pair."],
-  ["negation", "Exclude candidates that match a red feature pair; red takes priority."],
+  ["reveal", "Reveal Orb: one use on a feature header to reveal the answer's base and upgraded pair."],
+  ["filter", "Filter Orb: one use on a green result to mark matching candidates green."],
+  ["negation", "Negation Orb: one use on a red result to mark impossible candidates red."],
 ] as const;
+
+type GuideIconKind = "card" | "controls" | "candidates" | "hint" | "daily" | "hardcore" | "practice" | "lock" | "forfeit";
+
+function GuideRowIcon({ kind }: { kind: GuideIconKind }): React.JSX.Element {
+  let artwork: React.ReactNode;
+  switch (kind) {
+    case "card":
+      artwork = <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M8 7h8M8 11h6M8 15h8" /></>;
+      break;
+    case "controls":
+      artwork = <><path d="M4 7h16M4 17h16" /><path d="M8 4v6M16 14v6" /></>;
+      break;
+    case "candidates":
+      artwork = <><circle cx="6" cy="6" r="1.5" /><circle cx="6" cy="12" r="1.5" /><circle cx="6" cy="18" r="1.5" /><path d="M10 6h10M10 12h10M10 18h10" /></>;
+      break;
+    case "hint":
+      artwork = <><path d="M9 18h6M10 22h4" /><path d="M8.5 14.5A6 6 0 1 1 15.5 14.5c-1 .8-1.5 1.8-1.5 3.5h-4c0-1.7-.5-2.7-1.5-3.5Z" /></>;
+      break;
+    case "daily":
+      artwork = <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 10h18" /></>;
+      break;
+    case "hardcore":
+      artwork = <path d="M12 3 20 6v6c0 4.8-3.1 7.7-8 9-4.9-1.3-8-4.2-8-9V6l8-3Z" />;
+      break;
+    case "practice":
+      artwork = <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M18.2 9A7 7 0 0 0 6.4 6.4L4 9M5.8 15A7 7 0 0 0 17.6 17.6L20 15" /></>;
+      break;
+    case "lock":
+      artwork = <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>;
+      break;
+    case "forfeit":
+      artwork = <><path d="M5 3v19" /><path d="M5 5h12l-2 4 2 4H5" /></>;
+      break;
+  }
+  return <svg
+    className="game-guide__row-icon"
+    data-guide-icon={kind}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    focusable="false"
+    aria-hidden="true"
+  >{artwork}</svg>;
+}
 
 export function GameGuide(): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -32,6 +79,7 @@ export function GameGuide(): React.JSX.Element {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopPropagation();
         closeGuide();
         return;
       }
@@ -50,12 +98,12 @@ export function GameGuide(): React.JSX.Element {
         first.focus();
       }
     };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [closeGuide, open]);
 
   return <section className="game-guide" aria-label="Game help">
-    <button ref={triggerRef} type="button" className="game-guide__trigger" onClick={() => setOpen(true)}>
+    <button ref={triggerRef} type="button" className="game-guide__trigger" aria-label="How to play" onClick={() => setOpen(true)}>
       <span aria-hidden="true">?</span><span>How to play</span>
     </button>
     {open && <div className="game-guide__backdrop" onClick={(event) => {
@@ -69,14 +117,15 @@ export function GameGuide(): React.JSX.Element {
         <div className="game-guide__sections">
           <section>
             <h3>Basics</h3>
-            <ul>
-              <li>Guess a base card name; base and upgraded cards compare as a pair.</li>
-              <li>Cards with identical complete paired features are equivalent answers.</li>
+            <ul className="game-guide__row-list">
+              <li><GuideRowIcon kind="card" /><span>Guess a base card name.</span></li>
+              <li><GuideRowIcon kind="card" /><span>Compare the guess&apos;s base and upgraded versions with the answer&apos;s corresponding versions.</span></li>
+              <li><GuideRowIcon kind="card" /><span>Cards with an identical complete paired feature set are accepted as equivalent answers.</span></li>
             </ul>
           </section>
           <section>
             <h3>Result colors</h3>
-            <ul className="result-legend">
+            <ul className="result-legend game-guide__row-list">
               {RESULT_LEGEND.map(([color, meaning]) => <li key={color}>
                 <span className={`result-legend__swatch result-legend__swatch--${color}`} aria-hidden="true" />
                 <span>{meaning}</span>
@@ -85,33 +134,40 @@ export function GameGuide(): React.JSX.Element {
           </section>
           <section>
             <h3>Keyword icons</h3>
-            <ul className="game-guide__icon-list">
-              <li><KeywordStateIcons displayValue="false" /> Absent</li>
-              <li><KeywordStateIcons displayValue="true" /> Present</li>
-              <li><KeywordStateIcons displayValue="false → true" /> Added on upgrade</li>
-              <li><KeywordStateIcons displayValue="true → false" /> Removed on upgrade</li>
+            <ul className="game-guide__icon-list game-guide__row-list">
+              <li><KeywordStateIcons displayValue="false" /><span>Absent</span></li>
+              <li><KeywordStateIcons displayValue="true" /><span>Present</span></li>
+              <li><KeywordStateIcons displayValue="false → true" /><span>Gained on upgrade</span></li>
+              <li><KeywordStateIcons displayValue="true → false" /><span>Lost on upgrade</span></li>
             </ul>
           </section>
           <section>
             <h3>Orbs and filtering</h3>
-            <ul className="game-guide__orb-list">
+            <ul className="game-guide__orb-list game-guide__row-list">
               {ORB_GUIDE.map(([kind, description]) => <li key={kind}>
-                <OrbVisual kind={kind} compact /> <strong>{ORB_LABELS[kind]} Orb.</strong> {description}
+                <OrbVisual kind={kind} compact /><span>{description}</span>
               </li>)}
+              <li><GuideRowIcon kind="candidates" /><span>Red candidate marking overrides green marking.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Drag an orb, or operate it with click, tap, or keyboard.</span></li>
+              <li><GuideRowIcon kind="candidates" /><span>Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.</span></li>
             </ul>
           </section>
           <section>
             <h3>Name hints</h3>
-            <ul>
-              <li>Hints reveal the selected answer name after incorrect guesses.</li>
-              <li>They are advisory and do not change which equivalent answers are accepted.</li>
+            <ul className="game-guide__row-list">
+              <li><GuideRowIcon kind="hint" /><span>After 5 wrong guesses, word-length lines appear.</span></li>
+              <li><GuideRowIcon kind="hint" /><span>After 7 wrong guesses, the first word&apos;s first letter appears.</span></li>
+              <li><GuideRowIcon kind="hint" /><span>Each later wrong guess reveals the next word&apos;s first letter, then random unrevealed characters.</span></li>
             </ul>
           </section>
           <section>
             <h3>Modes</h3>
-            <ul>
-              <li>Daily uses the UTC date, restores progress, and shares a win result.</li>
-              <li>Practice provides unlimited random rounds; Hardcore Daily has no orbs or name hints.</li>
+            <ul className="game-guide__row-list">
+              <li><GuideRowIcon kind="daily" /><span>Daily: one UTC-date round that restores locally and creates a share result after a win.</span></li>
+              <li><GuideRowIcon kind="hardcore" /><span>Hardcore Daily: a separate daily answer with no orbs or name hints.</span></li>
+              <li><GuideRowIcon kind="practice" /><span>Practice: repeatable rounds that restore the current round.</span></li>
+              <li><GuideRowIcon kind="lock" /><span>Choose Hardcore before a Practice round; the setting locks when the round starts.</span></li>
+              <li><GuideRowIcon kind="forfeit" /><span>End game forfeits the current Practice round.</span></li>
             </ul>
           </section>
         </div>

@@ -1203,6 +1203,8 @@ for (const viewport of [
       expect(Math.abs(orb.well.y - orb.art.y)).toBeLessThanOrEqual(.5);
     }
     const helpTrigger = page.locator(".game-guide__trigger");
+    await expect(helpTrigger).toHaveAttribute("aria-label", "How to play");
+    await expect(helpTrigger).toHaveAccessibleName("How to play");
     const documentSizeBeforeHelp = await page.evaluate(() => ({
       width: document.documentElement.scrollWidth,
       height: document.documentElement.scrollHeight,
