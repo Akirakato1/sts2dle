@@ -385,6 +385,8 @@ async function inspectArchive(
 ): Promise<void> {
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let settled = false;
+    let decompressorFinished = false;
+    let parserFinished = false;
     let source: ReturnType<typeof createReadStream>;
     const decompressor = createGunzip();
     let parser: tar.Parser | tar.Unpack;
@@ -439,11 +441,21 @@ async function inspectArchive(
     parser.on("error", settle);
     source.on("error", settle);
     decompressor.on("error", settle);
+    const settleWhenFinished = (): void => {
+      if (decompressorFinished && parserFinished) settle();
+    };
+    decompressor.on("end", () => {
+      decompressorFinished = true;
+      settleWhenFinished();
+    });
     parser.on("meta", () => parser.abort(new Error("Archive metadata entries are forbidden")));
     parser.on("ignoredEntry", (entry: ReadEntry) => {
       if (entry.meta) parser.abort(new Error("Archive metadata entries are forbidden"));
     });
-    parser.on(extractionDirectory === undefined ? "end" : "close", () => settle());
+    parser.on(extractionDirectory === undefined ? "end" : "close", () => {
+      parserFinished = true;
+      settleWhenFinished();
+    });
     source.pipe(decompressor).pipe(parser);
   });
 }

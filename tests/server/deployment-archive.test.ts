@@ -298,6 +298,12 @@ describe("deployment snapshot archive", () => {
     await createMetadataArchive(paxArchive, "ExtendedHeader", Buffer.alloc(MAX_DEPLOYMENT_UNCOMPRESSED_BYTES + 1));
     const gnuArchive = join(root, "gnu.tar.gz");
     await createMetadataArchive(gnuArchive, "NextFileHasLongPath", Buffer.from("malicious-long-path\0"));
+    const decompressionBombArchive = join(root, "decompression-bomb.tar.gz");
+    const validTar = gunzipSync(await readFile(validArchive));
+    await writeFile(decompressionBombArchive, gzipSync(Buffer.concat([
+      validTar,
+      Buffer.alloc(MAX_DEPLOYMENT_UNCOMPRESSED_BYTES - validTar.length + 512),
+    ]), { level: 9 }));
 
     const linkedSource = join(root, "linked-source");
     await mkdir(linkedSource);
@@ -352,6 +358,7 @@ describe("deployment snapshot archive", () => {
       ["directory body", directoryBodyArchive],
       ["PAX metadata bomb", paxArchive],
       ["GNU metadata", gnuArchive],
+      ["decompressed bytes", decompressionBombArchive],
       ["link", linkedArchive],
       ["duplicate", duplicateArchive],
       ["oversize", oversizeArchive],
