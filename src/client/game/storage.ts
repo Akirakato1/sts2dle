@@ -7,7 +7,8 @@ import type { SelectedAnswer } from "../../shared/selection.js";
 import type { AssistanceState, ConstraintOrbTarget } from "./assistance.js";
 import type { PlayMode, RoundState, SubmittedGuess } from "./game-reducer.js";
 import {
-  KEYWORD_FILTER_FEATURES,
+  KEYWORD_FILTER_NONE,
+  KEYWORD_FILTER_VALUES,
   collectPracticeFilterOptions,
   type PracticeFilterOptions,
   type PracticeFilterState,
@@ -76,7 +77,7 @@ const practiceFilterSchema = z.object({
   cardType: filterGroupSchema(z.enum(CARD_TYPES)),
   mana: filterGroupSchema(manaSchema),
   rarity: filterGroupSchema(z.enum(CARD_RARITIES)),
-  keywords: filterGroupSchema(z.enum(KEYWORD_FILTER_FEATURES)),
+  keywords: filterGroupSchema(z.enum(KEYWORD_FILTER_VALUES)),
 }).strict();
 const roundSchema = z.object({
   mode: z.enum(["daily", "hardcore-daily", "practice"]),
@@ -170,7 +171,8 @@ function validPracticeFilter(filter: PracticeFilterState, options: PracticeFilte
     && selectedValuesAreCanonical(filter.cardType.selected, options.cardType)
     && selectedValuesAreCanonical(filter.mana.selected, options.mana)
     && selectedValuesAreCanonical(filter.rarity.selected, options.rarity)
-    && selectedValuesAreCanonical(filter.keywords.selected, options.keywords);
+    && selectedValuesAreCanonical(filter.keywords.selected, options.keywords)
+    && (!filter.keywords.selected.includes(KEYWORD_FILTER_NONE) || filter.keywords.selected.length === 1);
 }
 
 function canonicalAnswer(

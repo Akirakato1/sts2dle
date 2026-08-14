@@ -15,10 +15,13 @@ const CARD_CLASSES: readonly CardClass[] = [
 
 export const CORE_FILTER_GROUPS = ["cardClass", "cardType", "mana", "rarity"] as const;
 export const KEYWORD_FILTER_FEATURES = ["eternal", "ethereal", "exhaust", "innate", "retain", "sly"] as const;
+export const KEYWORD_FILTER_NONE = "none" as const;
+export const KEYWORD_FILTER_VALUES = [...KEYWORD_FILTER_FEATURES, KEYWORD_FILTER_NONE] as const;
 
 export type PracticeFilterGroupName = (typeof CORE_FILTER_GROUPS)[number] | "keywords";
 export type KeywordFilterFeature = (typeof KEYWORD_FILTER_FEATURES)[number];
-export type PracticeFilterValue = CardClass | CardType | ManaValue | CardRarity | KeywordFilterFeature;
+export type KeywordFilterValue = (typeof KEYWORD_FILTER_VALUES)[number];
+export type PracticeFilterValue = CardClass | CardType | ManaValue | CardRarity | KeywordFilterValue;
 
 export interface FilterGroup<T> {
   disabled: boolean;
@@ -31,7 +34,7 @@ export interface PracticeFilterState {
   cardType: FilterGroup<CardType>;
   mana: FilterGroup<ManaValue>;
   rarity: FilterGroup<CardRarity>;
-  keywords: FilterGroup<KeywordFilterFeature>;
+  keywords: FilterGroup<KeywordFilterValue>;
 }
 
 export interface PracticeFilterOptions {
@@ -39,7 +42,7 @@ export interface PracticeFilterOptions {
   cardType: CardType[];
   mana: ManaValue[];
   rarity: CardRarity[];
-  keywords: KeywordFilterFeature[];
+  keywords: KeywordFilterValue[];
 }
 
 export type CandidateFormMatch = "both" | "base-only" | "upgrade-only" | null;
@@ -77,7 +80,7 @@ export function collectPracticeFilterOptions(cards: readonly CardIdentity[]): Pr
     cardType: CARD_TYPES.filter((value) => cardType.has(value)),
     mana: [...mana].sort(compareMana),
     rarity: CARD_RARITIES.filter((value) => rarity.has(value)),
-    keywords: KEYWORD_FILTER_FEATURES.filter((value) => keywords.has(value)),
+    keywords: [...KEYWORD_FILTER_FEATURES.filter((value) => keywords.has(value)), KEYWORD_FILTER_NONE],
   };
 }
 
@@ -115,6 +118,13 @@ export function updatePracticeFilterGroupValue(
 ): PracticeFilterState {
   if (!isValueForGroup(group, value)) return filter;
   const current = filter[group].selected as PracticeFilterValue[];
+  if (group === "keywords" && selected) {
+    const next = value === KEYWORD_FILTER_NONE
+      ? [KEYWORD_FILTER_NONE]
+      : [...current.filter((item) => item !== KEYWORD_FILTER_NONE && item !== value), value];
+    if (next.length === current.length && next.every((item, index) => item === current[index])) return filter;
+    return { ...filter, keywords: { ...filter.keywords, selected: next as KeywordFilterValue[] } };
+  }
   const includesValue = current.includes(value);
   if (includesValue === selected) return filter;
   const next = selected ? [...current, value] : current.filter((item) => item !== value);
@@ -127,7 +137,7 @@ function isValueForGroup(group: PracticeFilterGroupName, value: PracticeFilterVa
     case "cardType": return CARD_TYPES.includes(value as CardType);
     case "mana": return typeof value === "number" || value === "X" || value === "None";
     case "rarity": return CARD_RARITIES.includes(value as CardRarity);
-    case "keywords": return KEYWORD_FILTER_FEATURES.includes(value as KeywordFilterFeature);
+    case "keywords": return KEYWORD_FILTER_VALUES.includes(value as KeywordFilterValue);
   }
 }
 
@@ -143,6 +153,11 @@ function coreGroupMatches<T>(value: T, group: FilterGroup<T>): boolean {
   return group.disabled || group.selected.includes(value);
 }
 
-function keywordGroupMatches(vector: FeatureVector, group: FilterGroup<KeywordFilterFeature>): boolean {
-  return group.disabled || (group.selected.length > 0 && group.selected.every((keyword) => vector[keyword]));
+function keywordGroupMatches(vector: FeatureVector, group: FilterGroup<KeywordFilterValue>): boolean {
+  if (group.disabled) return true;
+  if (group.selected.includes(KEYWORD_FILTER_NONE)) {
+    return group.selected.length === 1 && KEYWORD_FILTER_FEATURES.every((keyword) => !vector[keyword]);
+  }
+  return group.selected.length > 0
+    && group.selected.every((keyword) => vector[keyword as KeywordFilterFeature]);
 }

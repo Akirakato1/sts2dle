@@ -49,7 +49,7 @@ describe("practice filter defaults and snapshot options", () => {
       cardType: ["Attack", "Skill"],
       mana: [0, 2, "X", "None"],
       rarity: ["Basic", "Rare"],
-      keywords: ["eternal", "retain"],
+      keywords: ["eternal", "retain", "none"],
     });
   });
 });
@@ -90,6 +90,15 @@ describe("practice filter form classification", () => {
 
     expect(classifyPracticeCandidate(card("all-keywords", { retain: true, eternal: true }, { retain: true, eternal: true }), filter)).toBe("both");
     expect(classifyPracticeCandidate(card("one-keyword", { retain: true, eternal: false }), filter)).toBeNull();
+  });
+
+  it("matches None only when a complete form has no keywords", () => {
+    const filter = createDefaultPracticeFilter();
+    filter.keywords = { disabled: false, selected: ["none"] };
+
+    expect(classifyPracticeCandidate(card("keyword-free"), filter)).toBe("both");
+    expect(classifyPracticeCandidate(card("gains-innate", {}, { innate: true }), filter)).toBe("base-only");
+    expect(classifyPracticeCandidate(card("already-innate", { innate: true }, { innate: true }), filter)).toBeNull();
   });
 
   it("treats disabled groups as passing and enabled empty groups as failing", () => {
@@ -137,6 +146,18 @@ describe("practice filter immutable updates", () => {
     expect(duplicate).toBe(selected);
     expect(removed.mana.selected).toEqual([]);
     expect(filter.mana.selected).toEqual([]);
+  });
+
+  it("keeps None mutually exclusive with real keyword selections", () => {
+    const filter = createDefaultPracticeFilter();
+    filter.keywords = { disabled: false, selected: ["retain"] };
+
+    const none = updatePracticeFilterGroupValue(filter, "keywords", "none", true);
+    const retain = updatePracticeFilterGroupValue(none, "keywords", "retain", true);
+
+    expect(none.keywords.selected).toEqual(["none"]);
+    expect(retain.keywords.selected).toEqual(["retain"]);
+    expect(filter.keywords.selected).toEqual(["retain"]);
   });
 
   it("ignores values that do not belong to the target group", () => {

@@ -146,6 +146,14 @@ describe("current round storage", () => {
     expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer)).toEqual({ round: source });
   });
 
+  test("round-trips a Practice filter selecting keyword None", () => {
+    const storage = new MemoryStorage();
+    const source = round("practice");
+    source.practiceFilter!.keywords = { disabled: false, selected: ["none"] };
+    saveCurrentRound(storage, identities.practice, source);
+    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer)).toEqual({ round: source });
+  });
+
   test("new envelopes omit the obsolete pending Practice Hardcore choice", () => {
     const storage = new MemoryStorage();
     const source = round("practice", "forfeited");
@@ -216,6 +224,9 @@ describe("current round storage", () => {
     assertRejected("practice", (value) => { value.round.practiceFilter.mana.selected = [true]; });
     assertRejected("practice", (value) => { value.round.practiceFilter.mana.selected = [99]; });
     assertRejected("practice", (value) => { value.round.practiceFilter.keywords.selected = ["retain"]; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.keywords.selected = ["none", "eternal"]; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.keywords.selected = ["none", "none"]; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.keywords.selected = ["unknown"]; });
     assertRejected("daily", (value) => { value.round.practiceFilter = createDefaultPracticeFilter(); });
   });
 
