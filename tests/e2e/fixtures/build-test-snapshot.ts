@@ -9,9 +9,10 @@ import {
   type CardIdentity,
 } from "../../../src/shared/domain.js";
 import { baseKey, pairKey } from "../../../src/shared/feature-keys.js";
-import { RawSpireCardsSchema, type RawSpireCard } from "../../../src/server/spire-codex/schema.js";
+import { RawSpireCardsSchema } from "../../../src/server/spire-codex/schema.js";
 import { buildSnapshot } from "../../../src/server/sync/build-snapshot.js";
 import { SnapshotStore } from "../../../src/server/sync/snapshot-store.js";
+import { buildE2eFixtureCards } from "./cards.js";
 import { withE2eFixtureDataLock } from "./fixture-data-lock.js";
 import { pruneSupersededFixtureSnapshots } from "./prune-test-snapshots.js";
 
@@ -19,37 +20,11 @@ const ART_ORIGIN = "https://fixture.test";
 const FULL_CARD_ORIGIN = "https://cdn.test";
 const FIXED_TIME = "2026-08-12T00:00:00.000Z";
 
-function withE2eUpgrade(card: RawSpireCard): RawSpireCard {
-  const copy = structuredClone(card);
-  if (!copy.upgrade || Object.keys(copy.upgrade).length === 0) {
-    copy.upgrade = { fixture_upgrade: true };
-  }
-  copy.image_url_card_upg ??= `${FULL_CARD_ORIGIN}/${copy.id.toLowerCase()}_upg.webp`;
-  return copy;
-}
-
-function pairedCopy(card: RawSpireCard): RawSpireCard {
-  const copy = {
-    ...structuredClone(card),
-    id: `${card.id}_PAIR`,
-    name: `${card.name} Pair`,
-    image_url: `/fixture-art/${card.id.toLowerCase()}-pair.webp`,
-    image_url_card: `${FULL_CARD_ORIGIN}/${card.id.toLowerCase()}_pair.webp`,
-    image_url_card_upg: `${FULL_CARD_ORIGIN}/${card.id.toLowerCase()}_pair_upg.webp`,
-  };
-  if (card.id === "DAZED") {
-    copy.keywords_key = copy.keywords_key?.filter(
-      (keyword) => keyword.toLowerCase() !== "unplayable",
-    ) ?? [];
-  }
-  return copy;
-}
-
 async function main(): Promise<void> {
   const fixturePath = resolve("tests/fixtures/spire-cards.json");
   const fixtureBody = await readFile(fixturePath, "utf8");
-  const originals = RawSpireCardsSchema.parse(JSON.parse(fixtureBody)).map(withE2eUpgrade);
-  const cards = originals.flatMap((card) => [card, pairedCopy(card)]);
+  const originals = RawSpireCardsSchema.parse(JSON.parse(fixtureBody));
+  const cards = buildE2eFixtureCards(originals);
   const sourceBody = JSON.stringify(cards);
   const sourceRevision = createHash("sha256").update(sourceBody).digest("hex");
   const portrait = await sharp({
@@ -122,11 +97,11 @@ async function main(): Promise<void> {
     const dazed = builtCards.find((card) => card.id === "DAZED");
     const dazedPair = builtCards.find((card) => card.id === "DAZED_PAIR");
     if (!dazed || !dazedPair) throw new Error("Dazed E2E pair was not retained");
-    if (baseKey(dazed.base) !== baseKey(dazedPair.base)) {
-      throw new Error("Raw Unplayable state changed the generated base feature key");
+    if (!dazed.base.keywords.includes("Unplayable") || !dazedPair.base.keywords.includes("Unplayable")) {
+      throw new Error("Raw Unplayable state was not retained in fixture keyword sets");
     }
-    if (pairKey(dazed) !== pairKey(dazedPair)) {
-      throw new Error("Raw Unplayable state changed the generated pair feature key");
+    if (baseKey(dazed.base) !== baseKey(dazedPair.base) || pairKey(dazed) !== pairKey(dazedPair)) {
+      throw new Error("Equivalent Unplayable fixtures generated different feature keys");
     }
     await pruneSupersededFixtureSnapshots(lockedDataDir, built, {
       allowedArtworkOrigins: [ART_ORIGIN],

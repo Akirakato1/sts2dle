@@ -1,13 +1,15 @@
 import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from "@playwright/test";
 
 import {
+  CARD_TARGETS,
+  FEATURE_ORDER,
   type BaseGroup,
   type CardIdentity,
   type FeatureName,
   type PairGroup,
   type SnapshotManifest,
 } from "../../src/shared/domain.js";
-import { compareGuess, formatFeatureValue } from "../../src/shared/comparison.js";
+import { compareGuess, formatFeatureValue, sameFeatureValue } from "../../src/shared/comparison.js";
 import { createDailyRandom } from "../../src/shared/random.js";
 import { selectAnswer, type SelectedAnswer } from "../../src/shared/selection.js";
 import {
@@ -145,23 +147,16 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
   if (dailyWrongGuesses.length < 8 || hardcoreWrongGuesses.length < 8) {
     throw new Error("Fixture must provide at least eight accepted wrong submissions per Daily mode");
   }
-  const answerWordCount = answerCard.name.match(/[^ ]+/gu)?.length ?? 0;
-  if (answerWordCount < 2) {
-    throw new Error("Normal Daily fixture answer must have multiple words for initial hint coverage");
-  }
-  if (dailyWrongGuesses.length < 7 + answerWordCount) {
-    throw new Error("Fixture must provide enough wrong guesses for deterministic post-initial hints");
-  }
   let orbFixture: FixtureModel["orbFixture"] | undefined;
   for (const guess of dailyWrongGuesses) {
     const results = compareGuess(guess, answerCard);
     for (const green of results.filter((result) => result.color === "green")) {
       for (const red of results.filter((result) => result.color === "red")) {
         const dualCandidate = dailyWrongGuesses.find((candidate) => candidate.id !== guess.id
-          && candidate.base[green.feature] === guess.base[green.feature]
-          && candidate.upgraded[green.feature] === guess.upgraded[green.feature]
-          && candidate.base[red.feature] === guess.base[red.feature]
-          && candidate.upgraded[red.feature] === guess.upgraded[red.feature]);
+          && sameFeatureValue(green.feature, candidate.base[green.feature], guess.base[green.feature])
+          && sameFeatureValue(green.feature, candidate.upgraded[green.feature], guess.upgraded[green.feature])
+          && sameFeatureValue(red.feature, candidate.base[red.feature], guess.base[red.feature])
+          && sameFeatureValue(red.feature, candidate.upgraded[red.feature], guess.upgraded[red.feature]));
         if (dualCandidate) {
           orbFixture = {
             guess,
@@ -189,8 +184,8 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
     for (const green of compareGuess(guess, practiceAnswerCard).filter((result) => result.color === "green")) {
       const greenCandidate = cards.find((candidate) => candidate.id !== guess.id
         && !practiceAnswer.acceptedCardIds.includes(candidate.id)
-        && candidate.base[green.feature] === guess.base[green.feature]
-        && candidate.upgraded[green.feature] === guess.upgraded[green.feature]);
+        && sameFeatureValue(green.feature, candidate.base[green.feature], guess.base[green.feature])
+        && sameFeatureValue(green.feature, candidate.upgraded[green.feature], guess.upgraded[green.feature]));
       if (greenCandidate) {
         practiceOrbFixture = { guess, greenFeature: green.feature, greenCandidate };
         break;
@@ -202,11 +197,15 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
   const risingGuess = cards.find((card) => card.id === "AFTERIMAGE");
   const fallingGuess = cards.find((card) => card.id === "APPARITION");
   if (!risingGuess || !fallingGuess) throw new Error("Directional E2E guesses were not retained");
-  if (!compareGuess(risingGuess, answerCard).some((result) => result.displayValue === "false → true")) {
-    throw new Error("Afterimage no longer demonstrates the false-to-true fixture direction");
+  if (!compareGuess(risingGuess, answerCard).some((result) => (
+    result.feature === "keywords" && result.displayValue === "None → Innate"
+  ))) {
+    throw new Error("Afterimage no longer demonstrates a gained keyword set");
   }
-  if (!compareGuess(fallingGuess, answerCard).some((result) => result.displayValue === "true → false")) {
-    throw new Error("Apparition no longer demonstrates the true-to-false fixture direction");
+  if (!compareGuess(fallingGuess, answerCard).some((result) => (
+    result.feature === "keywords" && result.displayValue === "Ethereal, Exhaust → Exhaust"
+  ))) {
+    throw new Error("Apparition no longer demonstrates a lost keyword set");
   }
   return {
     cards,
@@ -457,6 +456,7 @@ function expectedShareRow(guess: CardIdentity, answer: CardIdentity): string {
 async function prepareOfflinePage(
   page: Page,
   fullCardFailure?: FullCardFailureGate,
+  practiceRandomValues: readonly number[] = [],
 ): Promise<OfficialCodexNetworkGuard> {
   const guard = await installOfficialCodexBlock(page);
   await page.route("https://cdn.test/**", (route) => {
@@ -465,7 +465,7 @@ async function prepareOfflinePage(
     }
     return route.fulfill({ status: 200, contentType: "image/png", body: ONE_PIXEL_PNG });
   });
-  await page.addInitScript((fixedNow) => {
+  await page.addInitScript(({ fixedNow, practiceRandomValues }) => {
     const NativeDate = Date;
     class FixedDate extends NativeDate {
       constructor(value?: string | number | Date) {
@@ -477,7 +477,10 @@ async function prepareOfflinePage(
     Object.defineProperty(window.crypto, "getRandomValues", {
       configurable: true,
       value: (values: Uint32Array) => {
-        values.fill(0);
+        const counterKey = "stsdle:e2e:practice-random-counter";
+        const index = Number.parseInt(sessionStorage.getItem(counterKey) ?? "0", 10);
+        values.fill(practiceRandomValues[index] ?? 0);
+        sessionStorage.setItem(counterKey, String(index + 1));
         return values;
       },
     });
@@ -491,8 +494,22 @@ async function prepareOfflinePage(
         return `00000000-0000-4000-8000-${next.toString(16).padStart(12, "0")}`;
       },
     });
-  }, FIXED_NOW.valueOf());
+  }, { fixedNow: FIXED_NOW.valueOf(), practiceRandomValues });
   return guard;
+}
+
+async function prepareOfflinePageForPracticeAnswer(
+  page: Page,
+  request: APIRequestContext,
+  cardId: string,
+): Promise<OfficialCodexNetworkGuard> {
+  const baseGroups = await request.get("/runtime/base-groups.json")
+    .then((response) => response.json() as Promise<BaseGroup[]>);
+  const groupIndex = baseGroups.findIndex((group) => group.cardIds.includes(cardId));
+  expect(groupIndex, `Practice fixture must retain ${cardId}`).toBeGreaterThanOrEqual(0);
+  const cardIndex = baseGroups[groupIndex]!.cardIds.indexOf(cardId);
+  expect(cardIndex, `Practice base group must retain ${cardId}`).toBeGreaterThanOrEqual(0);
+  return prepareOfflinePage(page, undefined, [groupIndex, cardIndex]);
 }
 
 async function expectAccessibleTarget(locator: Locator): Promise<void> {
@@ -539,17 +556,83 @@ async function expectAtlasesReady(page: Page, readiness: AtlasReadiness): Promis
   }
 }
 
-async function expectKeywordIconOrder(
-  cell: Locator,
-  expectedIcons: readonly ["x" | "check", "x" | "check"],
-): Promise<void> {
-  const icons = cell.locator("svg");
-  expect(await icons.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-icon"))))
-    .toEqual(expectedIcons);
-  expect(await icons.evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-hidden"))))
-    .toEqual(["true", "true"]);
-  await expect(cell.getByRole("img")).toHaveCount(0);
-}
+test("offline fixture drives seven set-aware columns, comparisons, reveal, and pair-exact orbs", async ({ page, request }) => {
+  const cards = await request.get("/runtime/cards.json")
+    .then((response) => response.json() as Promise<CardIdentity[]>);
+  const cardsById = new Map(cards.map((card) => [card.id, card]));
+  const fixtureIds = [
+    "SET_SENTINEL", "SET_SENTINEL_PAIR", "EXACT_SET_SENTINEL",
+    "OVERLAP_SENTINEL", "DISJOINT_SENTINEL", "DISJOINT_SENTINEL_PAIR", "LONG_SET",
+  ];
+
+  const observedTargets = new Set(cards.flatMap((card) => [card.base.target, card.upgraded.target]));
+  expect.soft(CARD_TARGETS.filter((target) => observedTargets.has(target))).toEqual(CARD_TARGETS);
+  expect.soft(cards.some((card) => card.base.powers.length === 0)).toBe(true);
+  expect.soft(cards.some((card) => card.base.powers.length === 1 && card.base.powers[0] === "Unique Buff")).toBe(true);
+  expect.soft(cards.some((card) => card.base.powers.length === 1 && card.base.powers[0] !== "Unique Buff")).toBe(true);
+  expect.soft(cards.some((card) => card.base.powers.length === 2)).toBe(true);
+  expect.soft(cardsById.get("ALCHEMIZE")?.base.keywords).toEqual(["Exhaust"]);
+  expect.soft(cardsById.get("ALCHEMIZE")?.upgraded.keywords).toEqual(["Exhaust"]);
+  expect.soft(cardsById.get("AFTERIMAGE")?.base.keywords).toEqual([]);
+  expect.soft(cardsById.get("AFTERIMAGE")?.upgraded.keywords).toEqual(["Innate"]);
+  expect.soft(cardsById.get("APPARITION")?.base.keywords).toEqual(["Ethereal", "Exhaust"]);
+  expect.soft(cardsById.get("APPARITION")?.upgraded.keywords).toEqual(["Exhaust"]);
+  expect.soft(cardsById.get("DAZED")?.base.keywords).toContain("Unplayable");
+  expect.soft(fixtureIds.every((id) => cardsById.has(id))).toBe(true);
+  if (!fixtureIds.every((id) => cardsById.has(id))) return;
+
+  const answer = cardsById.get("SET_SENTINEL")!;
+  const exact = cardsById.get("EXACT_SET_SENTINEL")!;
+  const overlap = cardsById.get("OVERLAP_SENTINEL")!;
+  const disjoint = cardsById.get("DISJOINT_SENTINEL")!;
+  const disjointPair = cardsById.get("DISJOINT_SENTINEL_PAIR")!;
+  const targetExact = cardsById.get("LONG_SET")!;
+  const guard = await prepareOfflinePageForPracticeAnswer(page, request, answer.id);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Practice" }).click();
+
+  await expect(page.getByRole("columnheader")).toHaveText([
+    "Card", "Class", "Type", "Mana", "Rarity", "Target", "Powers", "Keywords",
+  ]);
+  await expect(page.getByRole("table", { name: "Card feature comparisons" })).toHaveAttribute("aria-colcount", "8");
+  expect(FEATURE_ORDER).toHaveLength(7);
+
+  for (const card of [exact, overlap, disjoint, targetExact]) await submitGuessAndWait(page, card);
+  for (const [card, color] of [[exact, "green"], [overlap, "yellow"], [disjoint, "red"]] as const) {
+    const row = guessRow(page, card);
+    await expect(row.getByRole("cell", { name: new RegExp(`^Powers: .*Result: ${color}\\.$`) })).toBeVisible();
+    await expect(row.getByRole("cell", { name: new RegExp(`^Keywords: .*Result: ${color}\\.$`) })).toBeVisible();
+  }
+  await expect(guessRow(page, exact).getByRole("cell", {
+    name: "Keywords: Ethereal, Exhaust → Exhaust. Result: green.",
+  })).toBeVisible();
+  await expect(guessRow(page, targetExact).getByRole("cell", {
+    name: "Target: AllAllies. Result: green.",
+  })).toBeVisible();
+  await expect(guessRow(page, disjoint).getByRole("cell", {
+    name: "Target: RandomEnemy. Result: red.",
+  })).toBeVisible();
+
+  const keywordsHeader = page.locator('.guess-grid__header[data-feature="keywords"]');
+  await page.getByRole("button", { name: "Reveal Orb, available" }).click();
+  await keywordsHeader.getByRole("button", { name: "Keywords feature heading. Use Reveal Orb." }).click();
+  await expect(keywordsHeader.getByRole("note", {
+    name: "Answer: Ethereal, Exhaust → Exhaust",
+  })).toBeVisible();
+
+  const exactPowers = guessRow(page, exact).getByRole("cell", { name: /^Powers: .*Result: green\.$/ });
+  await page.getByRole("button", { name: "Filter Orb, available" }).click();
+  await exactPowers.getByRole("button", { name: "Powers green result tile. Use Filter Orb." }).click();
+  const disjointPowers = guessRow(page, disjoint).getByRole("cell", { name: /^Powers: .*Result: red\.$/ });
+  await page.getByRole("button", { name: "Negation Orb, available" }).click();
+  await disjointPowers.getByRole("button", { name: "Powers red result tile. Use Negation Orb." }).click();
+  await openEmptySearch(page);
+  await expect(cardOption(page, answer)).toContainText("matches Filter Orb");
+  await expect(cardOption(page, disjointPair)).toContainText("excluded by Negation Orb");
+  expect(guard.attemptedRequests).toEqual([]);
+  expect(guard.blockedRequests).toEqual([]);
+});
 
 test("Normal Daily preloads atlases and persists orb targets, classifications, visibility, and usage-only sharing", async ({ context, page, request }) => {
   const model = await loadFixtureModel(request);
@@ -695,7 +778,7 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
 
 test("pointer-selects a search option above multiple guess rows on a narrow viewport", async ({ page, request }) => {
   const model = await loadFixtureModel(request);
-  await prepareOfflinePage(page);
+  const codexGuard = await prepareOfflinePage(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
@@ -706,18 +789,25 @@ test("pointer-selects a search option above multiple guess rows on a narrow view
   await cardOption(page, pointerGuess).click();
 
   await expect(guessRow(page, pointerGuess)).toBeVisible();
+  expect(codexGuard.attemptedRequests).toEqual([]);
+  expect(codexGuard.blockedRequests).toEqual([]);
 });
 
-test("Normal Daily reveals exact deterministic name masks at 5, 6, 7, later initials, and a post-initial position", async ({ page, request }) => {
+test("Practice reveals exact deterministic name masks at 5, 6, 7, later initials, and a post-initial position", async ({ page, request }) => {
   const model = await loadFixtureModel(request);
-  const codexGuard = await prepareOfflinePage(page);
+  const answer = model.cards.find((card) => card.id === "SET_SENTINEL")!;
+  const equivalent = model.cards.find((card) => card.id === "SET_SENTINEL_PAIR")!;
+  const wrongGuesses = model.cards
+    .filter((card) => card.id !== answer.id && card.id !== equivalent.id)
+    .sort((left, right) => left.name.localeCompare(right.name, "en-US"));
+  const codexGuard = await prepareOfflinePageForPracticeAnswer(page, request, answer.id);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
+  await page.getByRole("button", { name: "Practice" }).click();
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
-  const answer = model.cards.find((card) => card.id === model.dailyAnswer.selectedCardId)!;
-  const hintSeed = `daily:${FIXED_UTC_DATE}:${model.manifest.sourceRevision}`;
+  const hintSeed = "00000000-0000-4000-8000-000000000001";
 
-  for (const card of model.dailyWrongGuesses.slice(0, 5)) await submitGuessAndWait(page, card);
+  for (const card of wrongGuesses.slice(0, 5)) await submitGuessAndWait(page, card);
   const hint = page.locator(".name-hint");
   await expect(hint).toHaveAttribute("aria-label", expectedHintLabel(answer.name, 5, hintSeed));
   const wordLengths = [...answer.name.matchAll(/[^ ]+/gu)].map((match) => Array.from(match[0]).length);
@@ -741,28 +831,29 @@ test("Normal Daily reveals exact deterministic name masks at 5, 6, 7, later init
   });
 
   const fiveMask = await hint.getAttribute("aria-label");
-  await submitGuessAndWait(page, model.dailyWrongGuesses[5]!);
+  await submitGuessAndWait(page, wrongGuesses[5]!);
   await expect(hint).toHaveAttribute("aria-label", expectedHintLabel(answer.name, 6, hintSeed));
   expect(await hint.getAttribute("aria-label")).toBe(fiveMask);
 
-  await submitGuessAndWait(page, model.dailyWrongGuesses[6]!);
+  await submitGuessAndWait(page, wrongGuesses[6]!);
   await expect(hint).toHaveAttribute("aria-label", expectedHintLabel(answer.name, 7, hintSeed));
-  await submitGuessAndWait(page, model.dailyWrongGuesses[7]!);
+  await submitGuessAndWait(page, wrongGuesses[7]!);
   await expect(hint).toHaveAttribute("aria-label", expectedHintLabel(answer.name, 8, hintSeed));
 
   const postInitialWrongCount = 7 + wordLengths.length;
   for (let index = 8; index < postInitialWrongCount; index += 1) {
-    await submitGuessAndWait(page, model.dailyWrongGuesses[index]!);
+    await submitGuessAndWait(page, wrongGuesses[index]!);
   }
   const postInitialMask = expectedHintLabel(answer.name, postInitialWrongCount, hintSeed);
   await expect(hint).toHaveAttribute("aria-label", postInitialMask);
   await page.reload();
+  await page.getByRole("button", { name: "Practice" }).click();
   await expect(page.locator(".name-hint")).toHaveAttribute("aria-label", postInitialMask);
 
-  expect(model.dailyEquivalent.name).not.toBe(answer.name);
-  await submitWinningGuess(page, model.dailyEquivalent);
+  expect(equivalent.name).not.toBe(answer.name);
+  await submitWinningGuess(page, equivalent);
   await expect(page.getByRole("heading", { name: "Accepted answers" })).toBeVisible();
-  for (const acceptedId of model.dailyAnswer.acceptedCardIds) {
+  for (const acceptedId of [answer.id, equivalent.id]) {
     const accepted = model.cards.find((card) => card.id === acceptedId)!;
     await expect(page.getByRole("heading", { name: accepted.name, level: 3, exact: true })).toBeVisible();
   }
@@ -866,9 +957,10 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   const help = page.getByRole("dialog", { name: "Filter help" });
   await expect(help).toContainText("Disable accepts any value for that group and preserves your checks.");
   await expect(help).toContainText("An enabled group with nothing checked matches no cards.");
-  await expect(help).toContainText("Class, Type, Mana, and Rarity use OR within each group.");
-  await expect(help).toContainText("Keywords use AND");
-  await expect(help).toContainText("None means that form has no keywords and clears keyword choices.");
+  await expect(help).toContainText("Class, Type, Mana, Rarity, and Target use OR within each group.");
+  await expect(help).toContainText("Powers and Keywords use AND");
+  await expect(help).toContainText("Power None means that form has no powers and clears other power choices.");
+  await expect(help).toContainText("Keyword None means that form has no keywords and clears other keyword choices.");
   await expect(help).toContainText("Enabled groups combine with AND.");
   await expect(help).toContainText("Base and upgraded forms are evaluated separately");
   await page.keyboard.press("Escape");
@@ -920,7 +1012,35 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
     "Mad Science", "Mad Science Pair", "Malaise", "Malaise Pair",
   ]);
   await expect(page.getByText("Alchemize", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Falling Star", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("option").getByText("Falling Star", { exact: true })).toHaveCount(0);
+
+  await classGroup.getByRole("checkbox", { name: "Disable" }).check();
+  const targetGroup = page.getByRole("group", { name: "Target" });
+  await targetGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  await targetGroup.getByRole("checkbox", { name: "Single Ally" }).check();
+  await targetGroup.getByRole("checkbox", { name: "All Allies" }).check();
+  await openEmptySearch(page);
+  await expect(cardOption(page, model.cards.find((card) => card.id === "EXACT_SET_SENTINEL")!)).toBeVisible();
+  await expect(cardOption(page, model.cards.find((card) => card.id === "LONG_SET")!)).toBeVisible();
+  await expect(cardOption(page, model.cards.find((card) => card.id === "DISJOINT_SENTINEL")!)).toHaveCount(0);
+  await targetGroup.getByRole("checkbox", { name: "Disable" }).check();
+
+  const powersGroup = page.getByRole("group", { name: "Powers" });
+  await powersGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  await powersGroup.getByRole("checkbox", { name: "Strength" }).check();
+  await powersGroup.getByRole("checkbox", { name: "Weak" }).check();
+  await openEmptySearch(page);
+  await expect(cardOption(page, model.cards.find((card) => card.id === "EXACT_SET_SENTINEL")!)).toBeVisible();
+  await expect(cardOption(page, model.cards.find((card) => card.id === "OVERLAP_SENTINEL")!)).toHaveCount(0);
+  const powerNone = powersGroup.getByRole("checkbox", { name: "None" });
+  await powerNone.check();
+  await expect(powersGroup.getByRole("checkbox", { name: "Strength" })).not.toBeChecked();
+  await expect(powersGroup.getByRole("checkbox", { name: "Weak" })).not.toBeChecked();
+  await openEmptySearch(page);
+  await expect(cardOption(page, model.cards.find((card) => card.id === "ALCHEMIZE")!)).toBeVisible();
+  await expect(cardOption(page, model.cards.find((card) => card.id === "EXACT_SET_SENTINEL")!)).toHaveCount(0);
+  await powersGroup.getByRole("checkbox", { name: "Disable" }).check();
+  await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
 
   const keywordGroup = page.getByRole("group", { name: "Keywords" });
   await keywordGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
@@ -1022,8 +1142,7 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await visibility.getByRole("checkbox", { name: "Green" }).uncheck();
   await openEmptySearch(page);
   await expect(cardOption(page, greenCandidate)).toHaveCount(0);
-  await expect(page.getByRole("status").filter({ hasText: "No visible candidates" }))
-    .toHaveText("No visible candidates");
+  await expect(page.locator(".card-search__option--green")).toHaveCount(0);
   await visibility.getByRole("checkbox", { name: "Green" }).check();
 
   await page.getByRole("button", { name: "End game" }).click();
@@ -1036,7 +1155,7 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(PRACTICE_ROUND_IDS[1]);
   await filterMode.check();
   const resetPanel = page.getByRole("region", { name: "Practice filters" });
-  for (const groupName of ["Class", "Type", "Mana", "Rarity", "Keywords"]) {
+  for (const groupName of ["Class", "Type", "Mana", "Rarity", "Target", "Powers", "Keywords"]) {
     const group = resetPanel.getByRole("group", { name: groupName });
     const checkboxes = group.getByRole("checkbox");
     await expect(checkboxes.first()).toHaveAccessibleName("Disable");
@@ -1141,14 +1260,14 @@ test("Daily and Practice complete the full paired-card experience without leakin
   await expect(attribution).toContainText(/unofficial fan project/i);
   await expect(attribution).toContainText(/not affiliated with or endorsed by Mega Crit/i);
   const helpTrigger = page.getByRole("button", { name: "How to play" });
-  await expect(page.getByText("Both base and upgraded features match", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Both corresponding forms match exactly", { exact: true })).toHaveCount(0);
   await helpTrigger.click();
   const help = page.getByRole("dialog", { name: "How to play" });
   await expect(help).toBeVisible();
-  for (const heading of ["Basics", "Result colors", "Keyword icons", "Orbs and filtering", "Name hints", "Modes"]) {
+  for (const heading of ["Basics", "Result colors", "Set features", "Orbs and filtering", "Name hints", "Modes"]) {
     await expect(help.getByRole("heading", { name: heading })).toBeVisible();
   }
-  await expect(help.getByText("Both base and upgraded features match", { exact: true })).toBeVisible();
+  await expect(help.getByText("Both corresponding forms match exactly", { exact: true })).toBeVisible();
   const closeHelp = help.getByRole("button", { name: "Close help" });
   await expect(closeHelp).toBeFocused();
   await page.keyboard.press("Tab");
@@ -1197,7 +1316,7 @@ test("Daily and Practice complete the full paired-card experience without leakin
   const dailyAnswerCard = model.cards.find((card) => card.id === model.dailyAnswer.selectedCardId)!;
   await chooseCard(page, firstWrongGuess.name);
   const wrongRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(firstWrongGuess.name) }) });
-  await expect(wrongRow.getByRole("cell")).toHaveCount(10);
+  await expect(wrongRow.getByRole("cell")).toHaveCount(7);
   const guessArtworkBox = await wrongRow.getByRole("img", {
     name: `${firstWrongGuess.name} guess artwork`,
   }).boundingBox();
@@ -1209,23 +1328,25 @@ test("Daily and Practice complete the full paired-card experience without leakin
   }
   await expect(wrongRow).not.toContainText(/Direction:/);
   await expect(wrongRow.locator(".feature-tile__result-mark, .feature-tile__hint")).toHaveCount(0);
-  const risingCell = wrongRow.getByRole("cell", { name: /absent to present/ });
-  await expectKeywordIconOrder(risingCell, ["x", "check"]);
+  await expect(wrongRow.getByRole("cell", {
+    name: /^Keywords: None → Innate\. Result: (?:green|yellow|red)\.$/,
+  })).toBeVisible();
   await expect(wrongRow.locator(".sprite-art--guess")).toHaveCSS("background-image", /guess\.webp/);
   await expect(search).toBeEnabled({ timeout: 5_000 });
 
   await page.reload();
   const restoredRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(firstWrongGuess.name) }) });
-  await expect(restoredRow.getByRole("cell")).toHaveCount(10);
-  await expect(restoredRow.locator(".feature-tile--immediate")).toHaveCount(10);
+  await expect(restoredRow.getByRole("cell")).toHaveCount(7);
+  await expect(restoredRow.locator(".feature-tile--immediate")).toHaveCount(7);
   await expect(restoredRow).not.toContainText(/Direction:/);
   await expect(restoredRow.locator(".feature-tile__result-mark, .feature-tile__hint")).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled();
 
   await chooseCard(page, secondWrongGuess.name);
   const secondWrongRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(secondWrongGuess.name) }) });
-  const fallingCell = secondWrongRow.getByRole("cell", { name: /present to absent/ });
-  await expectKeywordIconOrder(fallingCell, ["check", "x"]);
+  await expect(secondWrongRow.getByRole("cell", {
+    name: /^Keywords: Ethereal, Exhaust → Exhaust\. Result: (?:green|yellow|red)\.$/,
+  })).toBeVisible();
   await expect(search).toBeEnabled({ timeout: 5_000 });
   const visibleRowHeaders = await page.getByRole("rowheader").allTextContents();
   expect(visibleRowHeaders).toEqual([
@@ -1283,7 +1404,7 @@ test("Daily and Practice complete the full paired-card experience without leakin
     expectedShareRow(secondWrongGuess, dailyAnswerCard),
     expectedShareRow(equivalent, dailyAnswerCard),
   ]);
-  for (const row of shareRows) expect([...row]).toHaveLength(10);
+  for (const row of shareRows) expect([...row]).toHaveLength(7);
   const dailyStorage = await page.evaluate(() => Object.fromEntries(Object.entries(localStorage)
     .filter(([key]) => key === "stsdle:round:daily:v1" || key === "stsdle:stats:v1")));
 
@@ -1330,6 +1451,44 @@ for (const viewport of [
     await page.goto("/");
     await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeVisible();
     for (const card of model.dailyWrongGuesses.slice(0, 5)) await submitGuessAndWait(page, card);
+    const longSet = model.cards.find((card) => card.id === "LONG_SET")!;
+    expect(model.dailyAnswer.acceptedCardIds).not.toContain(longSet.id);
+    await submitGuessAndWait(page, longSet);
+    const longSetRow = guessRow(page, longSet);
+    await expect(longSetRow.locator(".feature-tile__value--cardClass")).toHaveText("Necrobinder");
+    await expect(longSetRow.locator(".feature-tile__value--powers"))
+      .toHaveText("Afterimage, Strength, Vulnerable, Weak");
+    await expect(longSetRow.locator(".feature-tile__value--keywords"))
+      .toHaveText("Ethereal, Exhaust, Retain, Unplayable");
+    const longSetGeometry = await longSetRow.evaluate((row) => {
+      const measure = (selector: string) => {
+        const value = row.querySelector<HTMLElement>(selector)!;
+        const valueRect = value.getBoundingClientRect();
+        const faceRect = value.closest<HTMLElement>(".feature-tile__face")!.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(value);
+        return {
+          value: { left: valueRect.left, top: valueRect.top, right: valueRect.right, bottom: valueRect.bottom },
+          face: { left: faceRect.left, top: faceRect.top, right: faceRect.right, bottom: faceRect.bottom },
+          height: valueRect.height,
+          lineCount: range.getClientRects().length,
+          whiteSpace: getComputedStyle(value).whiteSpace,
+        };
+      };
+      return {
+        cardClass: measure(".feature-tile__value--cardClass"),
+        powers: measure(".feature-tile__value--powers"),
+        keywords: measure(".feature-tile__value--keywords"),
+      };
+    });
+    expect(longSetGeometry.cardClass.whiteSpace).toBe("nowrap");
+    expect(longSetGeometry.cardClass.lineCount).toBe(1);
+    for (const feature of [longSetGeometry.powers, longSetGeometry.keywords]) {
+      expect(feature.value.left).toBeGreaterThanOrEqual(feature.face.left);
+      expect(feature.value.top).toBeGreaterThanOrEqual(feature.face.top);
+      expect(feature.value.right).toBeLessThanOrEqual(feature.face.right);
+      expect(feature.value.bottom).toBeLessThanOrEqual(feature.face.bottom);
+    }
     await expect(page.locator(".name-hint")).toBeVisible();
     const gridGeometry = await page.evaluate(() => {
       const grid = document.querySelector<HTMLElement>(".guess-grid")!;
@@ -1446,23 +1605,16 @@ for (const viewport of [
     await helpTrigger.click();
     const help = page.getByRole("dialog", { name: "How to play" });
     await expect(help).toBeVisible();
-    const keywordGeometry = await help.locator(".game-guide__keyword-list > li").evaluateAll((rows) => rows.map((row) => {
-      const icon = row.querySelector<HTMLElement>(".keyword-state-icons")!.getBoundingClientRect();
-      const label = row.querySelector<HTMLElement>(":scope > span:last-child")!.getBoundingClientRect();
-      const rowRect = row.getBoundingClientRect();
+    const setSectionGeometry = await help.getByRole("heading", { name: "Set features" }).locator("..").evaluate((section) => {
+      const sectionRect = section.getBoundingClientRect();
+      const rowRect = section.querySelector("li")!.getBoundingClientRect();
       return {
-        iconRight: icon.right,
-        labelLeft: label.left,
-        rowTop: rowRect.top,
-        rowBottom: rowRect.bottom,
+        section: { left: sectionRect.left, right: sectionRect.right },
+        row: { left: rowRect.left, right: rowRect.right },
       };
-    }));
-    expect(Math.max(...keywordGeometry.map((row) => row.labelLeft)) - Math.min(...keywordGeometry.map((row) => row.labelLeft)))
-      .toBeLessThanOrEqual(.5);
-    for (const row of keywordGeometry) expect(row.iconRight).toBeLessThanOrEqual(row.labelLeft);
-    for (let index = 1; index < keywordGeometry.length; index += 1) {
-      expect(keywordGeometry[index]!.rowTop).toBeGreaterThanOrEqual(keywordGeometry[index - 1]!.rowBottom);
-    }
+    });
+    expect(setSectionGeometry.row.left).toBeGreaterThanOrEqual(setSectionGeometry.section.left);
+    expect(setSectionGeometry.row.right).toBeLessThanOrEqual(setSectionGeometry.section.right);
     const modalGeometry = await help.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       const root = document.documentElement;
@@ -1632,7 +1784,7 @@ for (const viewport of [
     expect(filterGeometry.panel.left).toBeGreaterThanOrEqual(filterGeometry.shell.left - 1);
     expect(filterGeometry.panel.right).toBeLessThanOrEqual(filterGeometry.shell.right + 1);
     expect(filterGeometry.panelWidth).toBeLessThanOrEqual(filterGeometry.shellWidth + 1);
-    expect(filterGeometry.groups).toHaveLength(5);
+    expect(filterGeometry.groups).toHaveLength(7);
     expect(filterGeometry.warnings).toHaveLength(1);
     for (const rect of [...filterGeometry.groups, ...filterGeometry.warnings]) {
       expect(rect.left).toBeGreaterThanOrEqual(filterGeometry.panel.left - 1);
