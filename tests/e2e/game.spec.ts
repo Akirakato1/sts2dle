@@ -49,7 +49,11 @@ interface FixtureModel {
   hardcoreEquivalent: CardIdentity;
   dailyWrongGuesses: CardIdentity[];
   hardcoreWrongGuesses: CardIdentity[];
-  practiceWrongGuess: CardIdentity;
+  practiceOrbFixture: {
+    guess: CardIdentity;
+    greenFeature: FeatureName;
+    greenCandidate: CardIdentity;
+  };
   orbFixture: {
     guess: CardIdentity;
     greenFeature: FeatureName;
@@ -178,8 +182,26 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
   if (!orbFixture) {
     throw new Error("Fixture must provide green and red targets with a candidate matching both constraints");
   }
-  const practiceWrongGuess = cards.find((card) => !practiceAnswer.acceptedCardIds.includes(card.id));
-  if (!practiceWrongGuess) throw new Error("Practice fixture must provide an accepted wrong submission");
+  const practiceAnswerCard = cardsById.get(practiceAnswer.selectedCardId);
+  if (!practiceAnswerCard) throw new Error("Practice fixture answer was not retained");
+  let practiceOrbFixture: FixtureModel["practiceOrbFixture"] | undefined;
+  const practiceOrbGuesses = ["DAZED", "FALLING_STAR"]
+    .map((id) => cardsById.get(id))
+    .filter((card): card is CardIdentity => card !== undefined && !practiceAnswer.acceptedCardIds.includes(card.id));
+  for (const guess of practiceOrbGuesses) {
+    for (const green of compareGuess(guess, practiceAnswerCard).filter((result) => result.color === "green")) {
+      const greenCandidate = cards.find((candidate) => candidate.id !== guess.id
+        && !practiceAnswer.acceptedCardIds.includes(candidate.id)
+        && candidate.base[green.feature] === guess.base[green.feature]
+        && candidate.upgraded[green.feature] === guess.upgraded[green.feature]);
+      if (greenCandidate) {
+        practiceOrbFixture = { guess, greenFeature: green.feature, greenCandidate };
+        break;
+      }
+    }
+    if (practiceOrbFixture) break;
+  }
+  if (!practiceOrbFixture) throw new Error("Practice fixture must provide a real Filter Orb candidate");
   const risingGuess = cards.find((card) => card.id === "AFTERIMAGE");
   const fallingGuess = cards.find((card) => card.id === "APPARITION");
   if (!risingGuess || !fallingGuess) throw new Error("Directional E2E guesses were not retained");
@@ -199,7 +221,7 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
     hardcoreEquivalent,
     dailyWrongGuesses,
     hardcoreWrongGuesses,
-    practiceWrongGuess,
+    practiceOrbFixture,
     orbFixture,
     wrongGuesses: [risingGuess, fallingGuess],
   };
@@ -814,6 +836,19 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await expect(page.getByRole("button", { name: "Practice" })).toHaveAttribute("aria-current", "page");
   expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(PRACTICE_ROUND_IDS[0]);
 
+  const { guess: orbGuess, greenFeature, greenCandidate } = model.practiceOrbFixture;
+  await submitGuessAndWait(page, orbGuess);
+  const filterOrb = page.getByRole("button", { name: "Filter Orb, available" });
+  await filterOrb.click();
+  await expect(filterOrb).toHaveAttribute("aria-pressed", "true");
+  await guessRow(page, orbGuess).getByRole("button", {
+    name: `${FEATURE_LABELS[greenFeature]} green result tile. Use Filter Orb.`,
+  }).click();
+  await expectPoof(page, "filter");
+  await openEmptySearch(page);
+  await expect(cardOption(page, greenCandidate)).toHaveClass(/card-search__option--green/);
+  await expect(cardOption(page, greenCandidate)).toContainText("matches Filter Orb");
+
   const filterMode = page.getByRole("checkbox", { name: "Filter Mode" });
   await expect(filterMode).toBeEnabled();
   await expect(filterMode).not.toBeChecked();
@@ -852,11 +887,13 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await expect(disabledAssistance).toBeVisible();
   await expect(disabledAssistance).toHaveAttribute("inert", "");
   const suppressedOrbs = disabledAssistance.locator(".orb-button");
-  await expect(suppressedOrbs).toHaveCount(3);
+  await expect(suppressedOrbs).toHaveCount(2);
   for (const orb of await suppressedOrbs.all()) {
     await expect(orb).toBeVisible();
+    await expect(orb).toBeDisabled();
     expect(await orb.evaluate((button) => button.closest("[inert]") !== null)).toBe(true);
   }
+  await expect(disabledAssistance.locator(".orb-remnant")).toBeVisible();
   const suppressionStyle = await disabledAssistance.evaluate((element) => ({
     opacity: Number.parseFloat(getComputedStyle(element).opacity),
     pointerEvents: getComputedStyle(element).pointerEvents,
@@ -866,6 +903,8 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await openEmptySearch(page);
   await expect(page.locator(".card-search__option--green, .card-search__option--red")).toHaveCount(0);
   await expect(page.locator(".card-search__option--neutral")).not.toHaveCount(0);
+  await expect(cardOption(page, greenCandidate)).toHaveClass(/card-search__option--neutral/);
+  await expect(cardOption(page, greenCandidate)).toContainText("unhighlighted candidate");
 
   const classGroup = page.getByRole("group", { name: "Class" });
   await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
@@ -896,7 +935,7 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   const apparition = model.cards.find((card) => card.id === "APPARITION")!;
   await expect(cardOption(page, apparition).getByText("Base only", { exact: true })).toBeVisible();
   await expect(page.getByText("Alchemize", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Dazed", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("option").getByText("Dazed", { exact: true })).toHaveCount(0);
 
   await keywordGroup.getByRole("checkbox", { name: "Disable" }).check();
   await classGroup.getByRole("checkbox", { name: "Disable" }).check();
@@ -945,15 +984,19 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
     await expect(visibility.getByRole("checkbox", { name: label })).toBeEnabled();
     await expect(visibility.getByRole("checkbox", { name: label })).toBeChecked();
   }
+  await openEmptySearch(page);
+  await expect(cardOption(page, greenCandidate)).toHaveClass(/card-search__option--green/);
+  await expect(cardOption(page, greenCandidate)).toContainText("matches Filter Orb");
   const revealButton = page.getByRole("button", { name: "Reveal Orb, available" });
   await expect(revealButton).toBeEnabled();
   await revealButton.click();
   await expect(revealButton).toHaveAttribute("aria-pressed", "true");
-  await visibility.getByRole("checkbox", { name: "Neutral" }).uncheck();
+  await visibility.getByRole("checkbox", { name: "Green" }).uncheck();
   await openEmptySearch(page);
+  await expect(cardOption(page, greenCandidate)).toHaveCount(0);
   await expect(page.getByRole("status").filter({ hasText: "No visible candidates" }))
     .toHaveText("No visible candidates");
-  await visibility.getByRole("checkbox", { name: "Neutral" }).check();
+  await visibility.getByRole("checkbox", { name: "Green" }).check();
 
   await page.getByRole("button", { name: "End game" }).click();
   await expect(page.getByRole("heading", { name: "Accepted answers" })).toBeVisible();
@@ -963,6 +1006,17 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await expect(page.getByRole("rowheader")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reveal Orb, available" })).toBeVisible();
   expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(PRACTICE_ROUND_IDS[1]);
+  await filterMode.check();
+  const resetPanel = page.getByRole("region", { name: "Practice filters" });
+  for (const groupName of ["Class", "Type", "Mana", "Rarity", "Keywords"]) {
+    const group = resetPanel.getByRole("group", { name: groupName });
+    const checkboxes = group.getByRole("checkbox");
+    await expect(checkboxes.first()).toHaveAccessibleName("Disable");
+    await expect(checkboxes.first()).toBeChecked();
+    for (let index = 1; index < await checkboxes.count(); index += 1) {
+      await expect(checkboxes.nth(index)).not.toBeChecked();
+    }
+  }
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
 });
@@ -1523,6 +1577,7 @@ for (const viewport of [
     const filterGroups = filterPanel.getByRole("group");
     for (const group of await filterGroups.all()) {
       await expectAccessibleTarget(group.locator(".practice-filter__choice--disable"));
+      await expectAccessibleTarget(group.locator(".practice-filter__choice:not(.practice-filter__choice--disable)").first());
     }
     const classGroup = filterPanel.getByRole("group", { name: "Class" });
     await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
