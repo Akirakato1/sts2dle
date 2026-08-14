@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { link as hardLink, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import sharp from "sharp";
 import * as tar from "tar";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import fixture from "../fixtures/spire-cards.json";
 import {
   beginDeploymentArchivePublish,
@@ -81,6 +81,26 @@ describe("deployment snapshot archive", () => {
 
     await expect(readFile(archive)).rejects.toMatchObject({ code: "ENOENT" });
     expect(syncCalls).toBe(2);
+  });
+
+  it("retries a non-ENOENT post-link stat failure and removes the owned create target", async () => {
+    const revision = "a1".repeat(32);
+    const source = await createValidSource(revision);
+    const root = await temporaryRoot();
+    const archive = join(root, "snapshot-data.tar.gz");
+    let targetStats = 0;
+
+    await expect(createDeploymentArchive(source.dataDir, archive, revision, validationOptions, {
+      lstatFile: async (path) => {
+        if (path === archive && targetStats++ === 0) {
+          throw Object.assign(new Error(`private target stat ${root}`), { code: "EACCES" });
+        }
+        return lstat(path);
+      },
+    })).rejects.toThrow("Unable to create deployment archive");
+
+    expect(targetStats).toBeGreaterThan(1);
+    await expect(lstat(archive)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("preserves a concurrent create-path replacement after a partial hard-link failure", async () => {
@@ -262,6 +282,60 @@ describe("deployment snapshot archive", () => {
 
     expect(await readFile(destination)).toEqual(original);
     expect(await readDeploymentRevision(destination, validationOptions)).toBe(oldRevision);
+  }, 20_000);
+
+  it("retries a non-ENOENT post-link stat failure and restores the previous archive", async () => {
+    const oldRevision = "a2".repeat(32);
+    const nextRevision = "a3".repeat(32);
+    const oldSource = await createValidSource(oldRevision);
+    const nextSource = await createValidSource(nextRevision);
+    const root = await temporaryRoot();
+    const destination = join(root, "snapshot-data.tar.gz");
+    const staging = join(root, ".snapshot-data.tar.gz.staging");
+    await createDeploymentArchive(oldSource.dataDir, destination, oldRevision, validationOptions);
+    const original = await readFile(destination);
+    await createDeploymentArchive(nextSource.dataDir, staging, nextRevision, validationOptions);
+    let targetStats = 0;
+
+    await expect(beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
+      lstatFile: async (path) => {
+        if (path === destination && targetStats++ === 0) {
+          throw Object.assign(new Error(`private target stat ${root}`), { code: "EACCES" });
+        }
+        return lstat(path);
+      },
+    })).rejects.toThrow("Unable to publish deployment archive");
+
+    expect(targetStats).toBeGreaterThan(1);
+    expect(await readFile(destination)).toEqual(original);
+    expect(await readDeploymentRevision(destination, validationOptions)).toBe(oldRevision);
+  }, 20_000);
+
+  it("preserves a persistent unsafe replacement discovered after a successful publish link", async () => {
+    const oldRevision = "a4".repeat(32);
+    const nextRevision = "a5".repeat(32);
+    const oldSource = await createValidSource(oldRevision);
+    const nextSource = await createValidSource(nextRevision);
+    const root = await temporaryRoot();
+    const destination = join(root, "snapshot-data.tar.gz");
+    const staging = join(root, ".snapshot-data.tar.gz.staging");
+    await createDeploymentArchive(oldSource.dataDir, destination, oldRevision, validationOptions);
+    await createDeploymentArchive(nextSource.dataDir, staging, nextRevision, validationOptions);
+    let replaced = false;
+
+    await expect(beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
+      lstatFile: async (path) => {
+        if (path === destination && !replaced) {
+          replaced = true;
+          await unlink(path);
+          await mkdir(path);
+        }
+        return lstat(path);
+      },
+    })).rejects.toThrow("Unable to publish deployment archive");
+
+    expect((await lstat(destination)).isDirectory()).toBe(true);
+    expect((await readdir(root)).filter((name) => name.includes(".backup-"))).toHaveLength(1);
   }, 20_000);
 
   it("preserves a concurrent publish-path replacement after a partial hard-link failure", async () => {
@@ -492,6 +566,53 @@ describe("deployment snapshot archive", () => {
     await rename(corrupt, moved);
     await unlink(moved);
   });
+
+  it("awaits Unpack close after a gzip stream truncates in the middle of a large entry", async () => {
+    const revision = "a6".repeat(32);
+    const root = await temporaryRoot();
+    const sourceRoot = join(root, "large-source");
+    const archive = join(root, "large.tar.gz");
+    const moved = join(root, "moved-large.tar.gz");
+    await mkdir(join(sourceRoot, "snapshots", "only"), { recursive: true });
+    await writeFile(join(sourceRoot, "active.json"), '{"buildId":"only"}\n');
+    await writeFile(join(sourceRoot, "snapshots", "only", "large.bin"), randomBytes(4 * 1024 * 1024));
+    await createNormalizedTestArchive(sourceRoot, archive, [
+      "active.json",
+      "snapshots",
+      "snapshots/only",
+      "snapshots/only/large.bin",
+    ]);
+    const cleanedRoots = new Set<string>();
+    let unpackClosed = false;
+    let cleanupStartedBeforeUnpackClose = false;
+    const originalEmit = tar.Unpack.prototype.emit;
+    const emitSpy = vi.spyOn(tar.Unpack.prototype, "emit").mockImplementation(function (this: tar.Unpack, event, ...args) {
+      if (event === "close") unpackClosed = true;
+      return Reflect.apply(originalEmit, this, [event, ...args]) as boolean;
+    });
+
+    try {
+      await expect(validateDeploymentArchive(archive, revision, validationOptions, {
+        afterInspection: async (immutableArchive) => {
+          const bytes = await readFile(immutableArchive);
+          await writeFile(immutableArchive, bytes.subarray(0, Math.floor(bytes.length * 0.75)));
+        },
+        removeValidationRoot: async (path) => {
+          cleanedRoots.add(path);
+          cleanupStartedBeforeUnpackClose ||= !unpackClosed;
+          await rm(path, { recursive: true, force: true });
+        },
+      })).rejects.toThrow("Unable to validate deployment archive");
+    } finally {
+      emitSpy.mockRestore();
+    }
+
+    expect(cleanupStartedBeforeUnpackClose).toBe(false);
+    expect(unpackClosed).toBe(true);
+    await expectPathsAbsent(cleanedRoots);
+    await rename(archive, moved);
+    await unlink(moved);
+  }, 20_000);
 });
 
 async function createValidSource(sourceRevision: string): Promise<{ dataDir: string; buildId: string }> {
