@@ -38,6 +38,8 @@ describe("Render deployment configuration", () => {
     expect(dockerfile).toContain("npm ci");
     expect(dockerfile).toContain("npm run build");
     expect(dockerfile).toContain("npm prune --omit=dev");
+    expect(dockerfile).toContain("tar -xzf /app/deploy/snapshot-data.tar.gz -C /app/deploy/snapshot-data");
+    expect(dockerfile).toContain("rm /app/deploy/snapshot-data.tar.gz");
     expect(dockerfile).toContain('CMD ["node", "dist/server/main.js"]');
     expect(dockerfile).not.toContain("playwright install");
     expect(dockerfile).not.toContain("PLAYWRIGHT_BROWSERS_PATH");
@@ -78,7 +80,7 @@ describe("Render deployment configuration", () => {
     expect(ignore).toContain(".tmp");
     expect(ignore).toContain("vendor/card-renderer");
     expect(ignore.split(/\r?\n/)).not.toContain("deploy");
-    expect(ignore.split(/\r?\n/)).not.toContain("deploy/snapshot-data");
+    expect(ignore.split(/\r?\n/)).not.toContain("deploy/snapshot-data.tar.gz");
   });
 
   test("documents snapshot releases and the stateless Render deployment", async () => {
