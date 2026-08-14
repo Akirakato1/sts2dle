@@ -144,5 +144,5 @@ function coreGroupMatches<T>(value: T, group: FilterGroup<T>): boolean {
 }
 
 function keywordGroupMatches(vector: FeatureVector, group: FilterGroup<KeywordFilterFeature>): boolean {
-  return group.disabled || group.selected.every((keyword) => vector[keyword]);
+  return group.disabled || (group.selected.length > 0 && group.selected.every((keyword) => vector[keyword]));
 }

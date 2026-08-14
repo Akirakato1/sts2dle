@@ -99,6 +99,10 @@ describe("practice filter form classification", () => {
     const empty = createDefaultPracticeFilter();
     empty.mana = { disabled: false, selected: [] };
     expect(classifyPracticeCandidate(hiddenCard, empty)).toBeNull();
+
+    const emptyKeywords = createDefaultPracticeFilter();
+    emptyKeywords.keywords = { disabled: false, selected: [] };
+    expect(classifyPracticeCandidate(hiddenCard, emptyKeywords)).toBeNull();
   });
 
   it("does not combine matching values from different forms", () => {
