@@ -563,6 +563,8 @@ test("offline fixture drives seven set-aware columns, comparisons, reveal, and p
   const fixtureIds = [
     "SET_SENTINEL", "SET_SENTINEL_PAIR", "EXACT_SET_SENTINEL",
     "OVERLAP_SENTINEL", "DISJOINT_SENTINEL", "DISJOINT_SENTINEL_PAIR", "LONG_SET",
+    "FILTER_FORM_SENTINEL", "NEGATION_SOURCE_SENTINEL", "NEGATION_SOURCE_SENTINEL_PAIR",
+    "NEGATION_FORM_SENTINEL",
   ];
 
   const observedTargets = new Set(cards.flatMap((card) => [card.base.target, card.upgraded.target]));
@@ -585,7 +587,10 @@ test("offline fixture drives seven set-aware columns, comparisons, reveal, and p
   const exact = cardsById.get("EXACT_SET_SENTINEL")!;
   const overlap = cardsById.get("OVERLAP_SENTINEL")!;
   const disjoint = cardsById.get("DISJOINT_SENTINEL")!;
-  const disjointPair = cardsById.get("DISJOINT_SENTINEL_PAIR")!;
+  const filterFormSentinel = cardsById.get("FILTER_FORM_SENTINEL")!;
+  const negationSource = cardsById.get("NEGATION_SOURCE_SENTINEL")!;
+  const negationSourcePair = cardsById.get("NEGATION_SOURCE_SENTINEL_PAIR")!;
+  const negationFormSentinel = cardsById.get("NEGATION_FORM_SENTINEL")!;
   const targetExact = cardsById.get("LONG_SET")!;
   const guard = await prepareOfflinePageForPracticeAnswer(page, request, answer.id);
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -598,7 +603,7 @@ test("offline fixture drives seven set-aware columns, comparisons, reveal, and p
   await expect(page.getByRole("table", { name: "Card feature comparisons" })).toHaveAttribute("aria-colcount", "8");
   expect(FEATURE_ORDER).toHaveLength(7);
 
-  for (const card of [exact, overlap, disjoint, targetExact]) await submitGuessAndWait(page, card);
+  for (const card of [exact, overlap, disjoint, targetExact, negationSource]) await submitGuessAndWait(page, card);
   for (const [card, color] of [[exact, "green"], [overlap, "yellow"], [disjoint, "red"]] as const) {
     const row = guessRow(page, card);
     await expect(row.getByRole("cell", { name: new RegExp(`^Powers: .*Result: ${color}\\.$`) })).toBeVisible();
@@ -621,15 +626,19 @@ test("offline fixture drives seven set-aware columns, comparisons, reveal, and p
     name: "Answer: Ethereal, Exhaust → Exhaust",
   })).toBeVisible();
 
-  const exactPowers = guessRow(page, exact).getByRole("cell", { name: /^Powers: .*Result: green\.$/ });
+  const exactKeywords = guessRow(page, exact).getByRole("cell", { name: /^Keywords: .*Result: green\.$/ });
   await page.getByRole("button", { name: "Filter Orb, available" }).click();
-  await exactPowers.getByRole("button", { name: "Powers green result tile. Use Filter Orb." }).click();
-  const disjointPowers = guessRow(page, disjoint).getByRole("cell", { name: /^Powers: .*Result: red\.$/ });
+  await exactKeywords.getByRole("button", { name: "Keywords green result tile. Use Filter Orb." }).click();
+  const negationKeywords = guessRow(page, negationSource).getByRole("cell", { name: /^Keywords: .*Result: red\.$/ });
   await page.getByRole("button", { name: "Negation Orb, available" }).click();
-  await disjointPowers.getByRole("button", { name: "Powers red result tile. Use Negation Orb." }).click();
+  await negationKeywords.getByRole("button", { name: "Keywords red result tile. Use Negation Orb." }).click();
   await openEmptySearch(page);
   await expect(cardOption(page, answer)).toContainText("matches Filter Orb");
-  await expect(cardOption(page, disjointPair)).toContainText("excluded by Negation Orb");
+  await expect(cardOption(page, negationSourcePair)).toContainText("excluded by Negation Orb");
+  await expect.soft(cardOption(page, filterFormSentinel)).toHaveClass(/card-search__option--neutral/);
+  await expect.soft(cardOption(page, filterFormSentinel)).toContainText("unhighlighted candidate");
+  await expect.soft(cardOption(page, negationFormSentinel)).toHaveClass(/card-search__option--neutral/);
+  await expect.soft(cardOption(page, negationFormSentinel)).toContainText("unhighlighted candidate");
   expect(guard.attemptedRequests).toEqual([]);
   expect(guard.blockedRequests).toEqual([]);
 });
@@ -1006,9 +1015,10 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await classGroup.getByRole("checkbox", { name: "Silent" }).check();
   await classGroup.getByRole("checkbox", { name: "Event" }).check();
   await openEmptySearch(page);
-  await expect(page.getByRole("option")).toHaveCount(8);
+  await expect(page.getByRole("option")).toHaveCount(10);
   expect(await page.getByRole("option").locator(".card-search__name").allTextContents()).toEqual([
     "Afterimage", "Afterimage Pair", "Apparition", "Apparition Pair",
+    "Filter Form Sentinel", "Filter Form Sentinel Pair",
     "Mad Science", "Mad Science Pair", "Malaise", "Malaise Pair",
   ]);
   await expect(page.getByText("Alchemize", { exact: true })).toHaveCount(0);
@@ -1049,7 +1059,9 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await keywordGroup.getByRole("checkbox", { name: "Ethereal" }).check();
   await openEmptySearch(page);
   expect(await page.getByRole("option").locator(".card-search__name").allTextContents())
-    .toEqual(["Apparition", "Apparition Pair"]);
+    .toEqual([
+      "Apparition", "Apparition Pair", "Filter Form Sentinel", "Filter Form Sentinel Pair",
+    ]);
   const apparition = model.cards.find((card) => card.id === "APPARITION")!;
   await expect(cardOption(page, apparition).getByText("Base only", { exact: true })).toBeVisible();
   await expect(page.getByText("Alchemize", { exact: true })).toHaveCount(0);
