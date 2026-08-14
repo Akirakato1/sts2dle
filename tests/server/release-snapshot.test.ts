@@ -121,6 +121,38 @@ describe("releaseSnapshot", () => {
     expect(harness.events).toContain("build-temp");
   });
 
+  it("force replaces an unreadable committed archive through the strict publication transaction", async () => {
+    const harness = createReleaseHarness({ failCommittedRevisionRead: true });
+
+    await expect(releaseSnapshot({ force: true }, harness.dependencies)).resolves.toEqual({
+      status: "released",
+      sourceRevision: NEXT_REVISION,
+      sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+    });
+
+    expect(harness.readCommittedRevision).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([
+      "git-ready", "fetch", "checks", "build-temp", "validate-temp",
+      "publish", "validate-published", "scope-check", "commit", "push",
+    ]);
+    expect(harness.finalize).toHaveBeenCalledOnce();
+    expect(harness.rollback).not.toHaveBeenCalled();
+    expect(harness.recoveryCompletedBeforePush).toBe(true);
+  });
+
+  it("non-force still rejects an unreadable committed archive before fetching or publishing", async () => {
+    const harness = createReleaseHarness({ failCommittedRevisionRead: true });
+
+    await expect(releaseSnapshot({}, harness.dependencies))
+      .rejects.toThrow("Card snapshot release failed");
+
+    expect(harness.readCommittedRevision).toHaveBeenCalledOnce();
+    expect(harness.fetchCards).not.toHaveBeenCalled();
+    expect(harness.events).toEqual(["git-ready"]);
+    expect(harness.finalize).not.toHaveBeenCalled();
+    expect(harness.rollback).not.toHaveBeenCalled();
+  });
+
   it("stops before generation when project checks fail", async () => {
     const harness = createReleaseHarness({ failAt: "checks" });
 
@@ -663,6 +695,7 @@ describe("snapshot build CLI", () => {
 
 interface HarnessOptions {
   committedRevision?: string | null;
+  failCommittedRevisionRead?: boolean;
   failAt?: string;
   failure?: Error;
   failRollback?: boolean;
@@ -725,6 +758,10 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     events.push("fetch");
     return fetched;
   });
+  const readCommittedRevision = vi.fn(async () => {
+    if (options.failCommittedRevisionRead) throw failure;
+    return options.committedRevision ?? CURRENT_REVISION;
+  });
   const dependencies: ReleaseSnapshotDependencies = {
     gitClient: {
       assertReady: async () => { events.push("git-ready"); fail("git-ready"); },
@@ -754,7 +791,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
         fail("push");
       },
     },
-    readCommittedRevision: async () => options.committedRevision ?? CURRENT_REVISION,
+    readCommittedRevision,
     fetchCards,
     runChecks: async () => { events.push("checks"); fail("checks"); },
     buildTemporarySnapshot: async (received) => {
@@ -793,6 +830,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     events,
     fetched,
     fetchCards,
+    readCommittedRevision,
     finalize,
     privateCleanup,
     completeSnapshotRecovery,

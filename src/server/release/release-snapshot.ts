@@ -128,7 +128,9 @@ export async function releaseSnapshot(
 
   try {
     await dependencies.gitClient.assertReady();
-    const committedRevision = await dependencies.readCommittedRevision();
+    const committedRevision = options.force === true
+      ? null
+      : await dependencies.readCommittedRevision();
     const fetched = await dependencies.fetchCards();
     const sourceFeatureAudit = createSourceFeatureAudit(analyzeSourceFeatures(fetched.cards));
     if (!options.force && fetched.sourceRevision === committedRevision) {
