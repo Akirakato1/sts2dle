@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import React from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -274,6 +275,27 @@ describe("CardSearch", () => {
     for (const option of screen.getAllByRole("option")) {
       expect(option).not.toHaveClass("card-search__option--green");
       expect(option).not.toHaveClass("card-search__option--red");
+    }
+  });
+
+  test("pins a non-duplicate candidate badge to the rightmost result column", () => {
+    const style = document.createElement("style");
+    style.textContent = readFileSync("src/client/styles/search.css", "utf8");
+    document.head.append(style);
+    try {
+      const formCards = [card("base", "Base match", "Silent", false, { mana: 1 }, { mana: 0 })];
+      const { input } = renderSearch({
+        cards: formCards,
+        cardsById: new Map(formCards.map((item) => [item.id, item])),
+        practiceFilter: manualFilter({ mana: { disabled: false, selected: [1] } }),
+      });
+
+      fireEvent.focus(input);
+      const option = screen.getByRole("option", { name: /Base match.*Base only/ });
+      expect(within(option).queryByText("Silent")).not.toBeInTheDocument();
+      expect(getComputedStyle(within(option).getByText("Base only")).gridColumn).toBe("4");
+    } finally {
+      style.remove();
     }
   });
 

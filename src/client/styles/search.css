@@ -341,6 +341,7 @@
 }
 
 .card-search__form-badge {
+  grid-column: 4;
   justify-self: end;
   padding: .16rem .36rem;
   border: 1px solid #c9a955;
