@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import {
   lstat,
+  link,
   mkdir,
   mkdtemp,
   open,
@@ -9,7 +11,6 @@ import {
   realpath,
   rename,
   rm,
-  stat,
   unlink,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -26,8 +27,11 @@ import {
   type SnapshotValidationOptions,
 } from "../sync/validate-snapshot.js";
 
-export const MAX_DEPLOYMENT_ARCHIVE_BYTES = 32 * 1024 * 1024;
+export const MAX_DEPLOYMENT_ARCHIVE_BYTES = 8 * 1024 * 1024;
 export const MAX_DEPLOYMENT_ARCHIVE_ENTRIES = 64;
+export const MAX_DEPLOYMENT_UNCOMPRESSED_BYTES = 16 * 1024 * 1024;
+export const MAX_DEPLOYMENT_ENTRY_BYTES = 8 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 64 * 1024;
 const FIXED_MTIME = new Date(0);
 const RETRY_TIMEOUT_MS = 5_000;
 const RETRY_DELAY_MS = 50;
@@ -40,6 +44,11 @@ export interface ValidatedDeploymentArchive {
   cleanup(): Promise<void>;
 }
 
+export interface ArchiveValidationOperations {
+  afterInspection?: () => Promise<void>;
+  removeValidationRoot?: (path: string) => Promise<void>;
+}
+
 export interface PublishedArchive {
   active: ActiveSnapshot;
   finalize(): Promise<void>;
@@ -49,7 +58,10 @@ export interface PublishedArchive {
 
 export interface ArchivePublishOperations {
   afterPublish?: () => Promise<void>;
+  beforePublish?: () => Promise<void>;
+  linkFile?: (from: string, to: string) => Promise<void>;
   monotonicNow?: () => number;
+  removeValidationRoot?: (path: string) => Promise<void>;
   renameFile?: (from: string, to: string) => Promise<void>;
   unlinkFile?: (path: string) => Promise<void>;
   wait?: (milliseconds: number) => Promise<void>;
@@ -74,7 +86,10 @@ interface OwnedFile {
 
 interface PublishOperations {
   afterPublish(): Promise<void>;
+  beforePublish(): Promise<void>;
+  linkFile(from: string, to: string): Promise<void>;
   monotonicNow(): number;
+  removeValidationRoot(path: string): Promise<void>;
   renameFile(from: string, to: string): Promise<void>;
   unlinkFile(path: string): Promise<void>;
   wait(milliseconds: number): Promise<void>;
@@ -82,7 +97,10 @@ interface PublishOperations {
 
 const defaultPublishOperations: PublishOperations = {
   afterPublish: async () => undefined,
+  beforePublish: async () => undefined,
+  linkFile: link,
   monotonicNow: () => performance.now(),
+  removeValidationRoot: async (path) => { await rm(path, { recursive: true, force: true }); },
   renameFile: rename,
   unlinkFile: unlink,
   wait: delay,
@@ -121,8 +139,10 @@ export async function createDeploymentArchive(
     await syncFile(temporaryPath);
     const validated = await validateArchiveInternal(temporaryPath, expectedRevision, options);
     await validated.cleanup();
+    const temporary = await resolveOwnedFile(temporaryPath);
     await revalidateParent(target.parent);
-    await rename(temporaryPath, target.path);
+    await linkOwnedFile(temporary, target.path, { ...defaultPublishOperations });
+    await unlinkOwnedFile(temporary, { ...defaultPublishOperations });
     temporaryPath = undefined;
     await syncDirectoryIfSupported(target.parent.path);
   } catch {
@@ -135,10 +155,11 @@ export async function validateDeploymentArchive(
   archivePath: string,
   expectedRevision: string,
   options: SnapshotValidationOptions,
+  operations: ArchiveValidationOperations = {},
 ): Promise<ValidatedDeploymentArchive> {
   try {
     assertRevision(expectedRevision);
-    return await validateArchiveInternal(archivePath, expectedRevision, options);
+    return await validateArchiveInternal(archivePath, expectedRevision, options, operations);
   } catch {
     throw new Error("Unable to validate deployment archive");
   }
@@ -152,10 +173,9 @@ export async function readDeploymentRevision(
     const metadata = await lstatIfPresent(archivePath);
     if (!metadata) return null;
     if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("Unsafe archive");
-    const revision = await inspectManifestRevision(archivePath);
-    const validated = await validateArchiveInternal(archivePath, revision, options);
+    const validated = await validateArchiveInternal(archivePath, undefined, options);
     await validated.cleanup();
-    return revision;
+    return validated.sourceRevision;
   } catch {
     throw new Error("Unable to read deployment revision");
   }
@@ -175,7 +195,8 @@ export async function beginDeploymentArchivePublish(
     const staging = await resolveOwnedFile(stagingArchive);
     const destinationTarget = await resolveFileTarget(destinationArchive);
     if (!samePath(staging.parent.path, destinationTarget.parent.path)) throw new Error("Not siblings");
-    stagedValidation = await validateArchiveInternal(staging.path, expectedRevision, options);
+    const validationOperations = { removeValidationRoot: operations.removeValidationRoot };
+    stagedValidation = await validateArchiveInternal(staging.path, expectedRevision, options, validationOperations);
     await stagedValidation.cleanup();
     stagedValidation = undefined;
 
@@ -191,25 +212,39 @@ export async function beginDeploymentArchivePublish(
 
     let published: OwnedFile;
     try {
-      published = await renameOwnedFile(staging, destinationTarget.path, operations, deadline);
+      await operations.beforePublish();
+      published = await linkOwnedFile(staging, destinationTarget.path, operations);
+      await unlinkOwnedFile(staging, operations);
     } catch (error: unknown) {
-      if (backup) await renameOwnedFile(backup, destinationTarget.path, operations, operations.monotonicNow() + RETRY_TIMEOUT_MS);
+      if (backup) {
+        try {
+          await linkOwnedFile(backup, destinationTarget.path, operations);
+          await unlinkOwnedFile(backup, operations);
+          backup = null;
+        } catch (restoreError: unknown) {
+          if (!isNodeError(restoreError, "EEXIST")) throw restoreError;
+        }
+      }
       throw error;
     }
 
-    let validation: ValidatedDeploymentArchive;
+    let validation: ValidatedDeploymentArchive | undefined;
+    let second: ValidatedDeploymentArchive | undefined;
     try {
-      validation = await validateArchiveInternal(destinationTarget.path, expectedRevision, options);
+      validation = await validateArchiveInternal(destinationTarget.path, expectedRevision, options, validationOperations);
       await operations.afterPublish();
-      const second = await validateArchiveInternal(destinationTarget.path, expectedRevision, options);
+      second = await validateArchiveInternal(destinationTarget.path, expectedRevision, options, validationOperations);
       await validation.cleanup();
+      validation = undefined;
       validation = second;
+      second = undefined;
     } catch {
+      await Promise.allSettled([validation?.cleanup(), second?.cleanup()].filter(Boolean) as Promise<void>[]);
       await restorePublishedFile(published, backup, quarantinePath, destinationTarget.path, operations);
       throw new ArchivePublishedValidationError();
     }
 
-    return createTransaction(validation, published, backup, quarantinePath, destinationTarget.path, operations);
+    return createTransaction(validation!, published, backup, quarantinePath, destinationTarget.path, operations);
   } catch (error: unknown) {
     await stagedValidation?.cleanup().catch(() => undefined);
     if (error instanceof ArchivePublishedValidationError) throw error;
@@ -243,13 +278,12 @@ function createTransaction(
         if (current) await restorePublishedFile(current, backup, quarantinePath, destinationPath, operations);
         current = null;
         backup = null;
-        lifecycle = "rolled-back";
       } else {
         if (backup) await unlinkOwnedFile(backup, operations);
         backup = null;
-        lifecycle = "finalized";
       }
       await validation.cleanup();
+      lifecycle = action === "rollback" ? "rolled-back" : "finalized";
     })().catch(() => {
       throw new Error(action === "rollback"
         ? "Unable to roll back deployment archive"
@@ -274,74 +308,45 @@ async function restorePublishedFile(
 ): Promise<void> {
   const deadline = operations.monotonicNow() + RETRY_TIMEOUT_MS;
   const quarantine = await renameOwnedFile(published, quarantinePath, operations, deadline);
-  if (backup) await renameOwnedFile(backup, destinationPath, operations, deadline);
+  if (backup) {
+    await linkOwnedFile(backup, destinationPath, operations);
+    await unlinkOwnedFile(backup, operations);
+  }
   await unlinkOwnedFile(quarantine, operations);
 }
 
 async function validateArchiveInternal(
   archivePath: string,
-  expectedRevision: string,
+  expectedRevision: string | undefined,
   options: SnapshotValidationOptions,
+  operations: ArchiveValidationOperations = {},
 ): Promise<ValidatedDeploymentArchive> {
-  const owned = await resolveOwnedFile(archivePath);
-  const compressed = await stat(owned.path);
-  if (compressed.size > MAX_DEPLOYMENT_ARCHIVE_BYTES) throw new Error("Archive too large");
-  const entryNames: string[] = [];
-  const seen = new Set<string>();
-  let totalSize = 0;
-  let buildId: string | undefined;
-  let inspectionError: unknown;
-  await tar.list({
-    file: owned.path,
-    strict: true,
-    onReadEntry: (entry) => {
-      if (inspectionError) return;
-      try {
-        const name = validateEntry(entry);
-        if (seen.has(name)) throw new Error("Duplicate archive entry");
-        seen.add(name);
-        entryNames.push(name);
-        if (entry.type === "File") totalSize += entry.size;
-        if (entryNames.length > MAX_DEPLOYMENT_ARCHIVE_ENTRIES || totalSize > MAX_DEPLOYMENT_ARCHIVE_BYTES) {
-          throw new Error("Archive limits exceeded");
-        }
-        const segments = name.split("/");
-        if (segments[0] === "snapshots" && segments.length >= 2) {
-          if (!buildId) buildId = segments[1];
-          else if (buildId !== segments[1]) throw new Error("Multiple snapshot builds");
-        }
-      } catch (error: unknown) {
-        inspectionError = error;
-      }
-    },
-  });
-  if (inspectionError) throw inspectionError;
-  if (entryNames.length === 0 || entryNames.some((name, index) => index > 0 && name < entryNames[index - 1]!)) {
-    throw new Error("Archive entries are not ordered");
-  }
-  if (!seen.has("active.json") || !seen.has("snapshots") || !buildId || !seen.has(`snapshots/${buildId}`)) {
-    throw new Error("Archive structure is incomplete");
-  }
   const extractionRoot = await mkdtemp(join(tmpdir(), "stsdle-deployment-archive-validate-"));
+  const immutableArchive = join(extractionRoot, "archive.tar.gz");
   const dataDir = join(extractionRoot, "data");
   let cleaned = false;
   const cleanup = async (): Promise<void> => {
     if (cleaned) return;
+    if (operations.removeValidationRoot) await operations.removeValidationRoot(extractionRoot);
+    else await rm(extractionRoot, { recursive: true, force: true });
     cleaned = true;
-    await rm(extractionRoot, { recursive: true, force: true });
   };
   try {
+    await copyArchiveBounded(archivePath, immutableArchive);
+    const inspected = createEntryInspector();
+    await inspectArchive(immutableArchive, inspected);
+    const { entryNames, buildId } = inspected.finish();
+    await operations.afterInspection?.();
     await mkdir(dataDir);
-    await tar.extract({
-      cwd: dataDir,
-      file: owned.path,
-      preservePaths: false,
-      strict: true,
-      unlink: true,
-    });
+    const extracted = createEntryInspector();
+    await inspectArchive(immutableArchive, extracted, dataDir);
+    const extractedResult = extracted.finish();
+    if (extractedResult.entryNames.join("\n") !== entryNames.join("\n")) {
+      throw new Error("Archive changed during extraction");
+    }
     await assertSafeExtractedTree(dataDir, entryNames);
     const loaded = await loadSafeActive(dataDir, options);
-    if (loaded.active.buildId !== buildId || loaded.sourceRevision !== expectedRevision) {
+    if (loaded.active.buildId !== buildId || expectedRevision !== undefined && loaded.sourceRevision !== expectedRevision) {
       throw new Error("Archive source identity changed");
     }
     return {
@@ -354,6 +359,126 @@ async function validateArchiveInternal(
   } catch (error: unknown) {
     await cleanup();
     throw error;
+  }
+}
+
+async function inspectArchive(
+  archivePath: string,
+  inspector: ReturnType<typeof createEntryInspector>,
+  extractionDirectory?: string,
+): Promise<void> {
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    let settled = false;
+    let source: ReturnType<typeof createReadStream>;
+    let parser: tar.Parser | tar.Unpack;
+    const settle = (error?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      if (error === undefined) {
+        resolvePromise();
+        return;
+      }
+      source.destroy();
+      if (source.closed) rejectPromise(error);
+      else source.once("close", () => rejectPromise(error));
+    };
+    const filter = (_path: string, entry: Stats | ReadEntry): boolean => {
+      try {
+        return inspector.inspect(entry as ReadEntry);
+      } catch (error: unknown) {
+        const violation = error instanceof Error ? error : new Error("Unsafe archive entry");
+        queueMicrotask(() => {
+          parser.abort(violation);
+        });
+        return false;
+      }
+    };
+    const common = {
+      file: archivePath,
+      filter,
+      maxDecompressionRatio: 200,
+      maxMetaEntrySize: MAX_MANIFEST_BYTES,
+      strict: true,
+    };
+    parser = extractionDirectory === undefined
+      ? new tar.Parser({ ...common, onReadEntry: (entry) => entry.resume() })
+      : new tar.Unpack({
+        ...common,
+        cwd: extractionDirectory,
+        preservePaths: false,
+        unlink: true,
+      });
+    source = createReadStream(archivePath);
+    parser.on("error", settle);
+    source.on("error", settle);
+    parser.on(extractionDirectory === undefined ? "end" : "close", () => settle());
+    source.pipe(parser);
+  });
+}
+
+function createEntryInspector(): {
+  inspect(entry: ReadEntry): true;
+  finish(): { entryNames: string[]; buildId: string };
+} {
+  const entryNames: string[] = [];
+  const seen = new Set<string>();
+  let totalSize = 0;
+  let buildId: string | undefined;
+  return {
+    inspect(entry) {
+      const name = validateEntry(entry);
+      if (seen.has(name)) throw new Error("Duplicate archive entry");
+      if (entry.size > MAX_DEPLOYMENT_ENTRY_BYTES ||
+        /\/manifest\.json$/.test(name) && entry.size > MAX_MANIFEST_BYTES) {
+        throw new Error("Archive entry is too large");
+      }
+      seen.add(name);
+      entryNames.push(name);
+      if (entry.type === "File") totalSize += entry.size;
+      if (entryNames.length > MAX_DEPLOYMENT_ARCHIVE_ENTRIES || totalSize > MAX_DEPLOYMENT_UNCOMPRESSED_BYTES) {
+        throw new Error("Archive limits exceeded");
+      }
+      const segments = name.split("/");
+      if (segments[0] === "snapshots" && segments.length >= 2) {
+        if (!buildId) buildId = segments[1];
+        else if (buildId !== segments[1]) throw new Error("Multiple snapshot builds");
+      }
+      return true;
+    },
+    finish() {
+      if (entryNames.length === 0 || entryNames.some((name, index) => index > 0 && name < entryNames[index - 1]!)) {
+        throw new Error("Archive entries are not ordered");
+      }
+      if (!seen.has("active.json") || !seen.has("snapshots") || !buildId || !seen.has(`snapshots/${buildId}`)) {
+        throw new Error("Archive structure is incomplete");
+      }
+      return { entryNames, buildId };
+    },
+  };
+}
+
+async function copyArchiveBounded(sourcePath: string, destinationPath: string): Promise<void> {
+  const before = await lstat(sourcePath);
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error("Unsafe archive file");
+  const source = await open(sourcePath, "r");
+  let destination: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    const opened = await source.stat();
+    if (!sameIdentity(identityOf(opened), identityOf(before))) throw new Error("Archive identity changed");
+    if (opened.size > MAX_DEPLOYMENT_ARCHIVE_BYTES) throw new Error("Archive too large");
+    destination = await open(destinationPath, "wx", 0o600);
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let offset = 0;
+    for (;;) {
+      const { bytesRead } = await source.read(buffer, 0, buffer.length, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+      if (offset > MAX_DEPLOYMENT_ARCHIVE_BYTES) throw new Error("Archive too large");
+      await destination.write(buffer.subarray(0, bytesRead));
+    }
+    await destination.sync();
+  } finally {
+    await Promise.allSettled([source.close(), destination?.close()]);
   }
 }
 
@@ -384,27 +509,6 @@ function validateEntry(entry: ReadEntry): string {
   if (segments.length <= 2 && !isDirectory) throw new Error("Invalid snapshot directory entry");
   if (segments.length > 2 && isDirectory && name.endsWith("manifest.json")) throw new Error("Invalid archive entry");
   return name;
-}
-
-async function inspectManifestRevision(archivePath: string): Promise<string> {
-  let revision: string | undefined;
-  await tar.list({
-    file: archivePath,
-    strict: true,
-    onReadEntry: (entry) => {
-      const name = entry.path.replace(/\/$/, "");
-      if (/^snapshots\/[^/]+\/manifest\.json$/.test(name)) {
-        const chunks: Buffer[] = [];
-        entry.on("data", (chunk: Buffer) => chunks.push(chunk));
-        entry.on("end", () => {
-          const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          if (isRecord(value) && typeof value.sourceRevision === "string") revision = value.sourceRevision;
-        });
-      }
-    },
-  });
-  if (!revision || !SOURCE_REVISION_PATTERN.test(revision)) throw new Error("Invalid revision");
-  return revision;
 }
 
 async function loadSafeActive(
@@ -518,6 +622,28 @@ async function renameOwnedFile(
   }
 }
 
+async function linkOwnedFile(
+  file: OwnedFile,
+  targetPath: string,
+  operations: Pick<PublishOperations, "linkFile" | "monotonicNow" | "wait">,
+): Promise<OwnedFile> {
+  assertDirectChild(targetPath, file.parent.path);
+  const deadline = operations.monotonicNow() + RETRY_TIMEOUT_MS;
+  for (;;) {
+    await revalidateOwnedFile(file);
+    try {
+      await operations.linkFile(file.path, targetPath);
+      const linked = await resolveOwnedFile(targetPath);
+      if (!sameIdentity(linked.identity, file.identity)) throw new Error("Published archive identity changed");
+      await syncDirectoryIfSupported(file.parent.path);
+      return linked;
+    } catch (error: unknown) {
+      if (!isTransient(error) || operations.monotonicNow() >= deadline) throw error;
+      await operations.wait(RETRY_DELAY_MS);
+    }
+  }
+}
+
 async function unlinkOwnedFile(file: OwnedFile, operations: PublishOperations): Promise<void> {
   await revalidateOwnedFile(file);
   await operations.unlinkFile(file.path);
@@ -592,10 +718,6 @@ function samePath(left: string, right: string): boolean {
   return process.platform === "win32"
     ? left.toLocaleLowerCase("en-US") === right.toLocaleLowerCase("en-US")
     : left === right;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
