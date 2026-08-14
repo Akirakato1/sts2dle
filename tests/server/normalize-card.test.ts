@@ -149,8 +149,23 @@ describe("normalizeCard", () => {
     const analysis = analyzeSourceFeatures([
       card("ABRASIVE"), card("COMET"), card("RESONANCE"), card("DUPLICATE_STRENGTH"),
     ]);
-    expect(analysis.powerCardCounts.get("Strength")).toBe(2);
-    expect(analysis.powerCardCounts.get("Afterimage")).toBe(1);
+    expect(analysis.powerCardCounts.get("strength")).toBe(2);
+    expect(analysis.powerCardCounts.get("afterimage")).toBe(1);
+  });
+
+  it("keeps distinct singleton power keys separate when their display names match", () => {
+    const first = structuredClone(card("RESONANCE"));
+    first.id = "GUARD_A";
+    first.powers_applied = [{ power: "Guard", power_key: "guard_a", amount: 1 }];
+    const second = structuredClone(first);
+    second.id = "GUARD_B";
+    second.powers_applied = [{ power: "Guard", power_key: "guard_b", amount: 1 }];
+
+    const analysis = analyzeSourceFeatures([first, second]);
+    expect(analysis.powerCardCounts.get("guard_a")).toBe(1);
+    expect(analysis.powerCardCounts.get("guard_b")).toBe(1);
+    expect(normalizeCard(first, BASE_URL, analysis.powerCardCounts).base.powers).toEqual(["Unique Buff"]);
+    expect(normalizeCard(second, BASE_URL, analysis.powerCardCounts).base.powers).toEqual(["Unique Buff"]);
   });
 
   it("returns immutable source-frequency data and rejects conflicting power displays", () => {

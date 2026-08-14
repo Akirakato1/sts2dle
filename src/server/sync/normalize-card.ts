@@ -29,6 +29,7 @@ const OFFICIAL_ARTWORK_CDN_ORIGIN = "https://cdn.spire-codex.com";
 
 export interface SourceFeatureAnalysis {
   powerCardCounts: ReadonlyMap<string, number>;
+  powerDisplayNamesByKey: ReadonlyMap<string, string>;
   observedTargets: ReadonlySet<CardTarget>;
   observedKeywords: ReadonlySet<CardKeyword>;
   singletonPowerCount: number;
@@ -110,17 +111,17 @@ export function analyzeSourceFeatures(cards: readonly RawSpireCard[]): SourceFea
   }
   for (const keys of singletonKeysByCard.values()) {
     for (const key of keys) {
-      const displayName = powerKeyNames.get(key)!;
-      powerCardCounts.set(displayName, (powerCardCounts.get(displayName) ?? 0) + 1);
+      powerCardCounts.set(key, (powerCardCounts.get(key) ?? 0) + 1);
     }
   }
-  const singletonKeys = new Set([...powerKeyNames].filter(([, name]) => powerCardCounts.get(name) === 1).map(([key]) => key));
+  const singletonKeys = new Set([...powerKeyNames].filter(([key]) => powerCardCounts.get(key) === 1).map(([key]) => key));
   const publicCardNamesWithMultipleSingletonKeys = cards
     .filter((card) => [...(singletonKeysByCard.get(card.id) ?? [])].filter((key) => singletonKeys.has(key)).length > 1)
     .map((card) => card.name);
   const singletonPowerCount = [...powerCardCounts.values()].filter((count) => count === 1).length;
   return {
     powerCardCounts: new ImmutableMap(powerCardCounts),
+    powerDisplayNamesByKey: new ImmutableMap(powerKeyNames),
     observedTargets: new ImmutableSet(observedTargets),
     observedKeywords: new ImmutableSet(observedKeywords),
     singletonPowerCount,
@@ -133,7 +134,7 @@ function buildPowers(raw: RawSpireCard, powerCardCounts: ReadonlyMap<string, num
   const recurring = new Set<string>();
   let hasUnique = false;
   for (const power of raw.powers_applied ?? []) {
-    if (powerCardCounts.get(power.power) === 1) hasUnique = true;
+    if (powerCardCounts.get(power.power_key) === 1) hasUnique = true;
     else recurring.add(power.power);
   }
   return [...recurring].sort((left, right) => left.localeCompare(right, "en-US")).concat(hasUnique ? [UNIQUE_POWER] : []);
