@@ -805,7 +805,7 @@ test("Hardcore Daily keeps a separate answer, progress domain, and secret-free s
   expect(codexGuard.blockedRequests).toEqual([]);
 });
 
-test("Practice locks its setting after a guess or orb, restores the round, and replaces it only on request", async ({ page, request }) => {
+test("Practice manual filters explain, suppress, match, persist, restore assistance, and reset", async ({ page, request }) => {
   const model = await loadFixtureModel(request);
   const codexGuard = await prepareOfflinePage(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -813,67 +813,156 @@ test("Practice locks its setting after a guess or orb, restores the round, and r
   await page.getByRole("button", { name: "Practice" }).click();
   await expect(page.getByRole("button", { name: "Practice" })).toHaveAttribute("aria-current", "page");
   expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(PRACTICE_ROUND_IDS[0]);
-  const hardcoreToggle = page.getByRole("checkbox", { name: "Hardcore Practice" });
-  await expect(hardcoreToggle).toBeEnabled();
-  await expect(hardcoreToggle).not.toBeChecked();
-  await hardcoreToggle.check();
-  await expect(page.getByRole("region", { name: "Orb inventory" })).toHaveCount(0);
 
-  await submitGuessAndWait(page, model.practiceWrongGuess);
-  await expect(hardcoreToggle).toBeDisabled();
-  await expect(page.getByText("Hardcore is locked after your first accepted guess or orb.")).toBeVisible();
-  await page.getByRole("button", { name: "End game" }).click();
-  await expect(page.getByRole("heading", { name: "Accepted answers" })).toBeVisible();
-  for (const acceptedId of model.practiceAnswer.acceptedCardIds) {
-    const accepted = model.cards.find((card) => card.id === acceptedId)!;
-    await expect(page.getByRole("heading", { name: accepted.name, level: 3, exact: true })).toBeVisible();
-  }
+  const filterMode = page.getByRole("checkbox", { name: "Filter Mode" });
+  await expect(filterMode).toBeEnabled();
+  await expect(filterMode).not.toBeChecked();
+  await filterMode.check();
+  const firstHelp = page.getByRole("dialog", { name: "Filter help" });
+  await expect(firstHelp).toBeVisible();
+  await firstHelp.getByRole("button", { name: "Close filter help" }).click();
+  expect(await page.evaluate(() => localStorage.getItem("stsdle:filter-help-dismissed:v1"))).toBe("1");
 
-  await expect(hardcoreToggle).toBeEnabled();
-  await hardcoreToggle.uncheck();
-  const terminalPractice = await storedRound(page, "stsdle:round:practice:v1");
-  expect(terminalPractice.round.hardcore).toBe(true);
-  expect(terminalPractice.practiceHardcoreChoice).toBe(false);
   await page.reload();
   await page.getByRole("button", { name: "Practice" }).click();
-  await expect(hardcoreToggle).toBeEnabled();
-  await expect(hardcoreToggle).not.toBeChecked();
-  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId)
-    .toBe(terminalPractice.round.roundId);
-  await page.getByRole("button", { name: "New Practice Round" }).click();
-  await expect(hardcoreToggle).not.toBeChecked();
-  await expect(page.getByRole("region", { name: "Orb inventory" })).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled();
-  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(PRACTICE_ROUND_IDS[1]);
+  await expect(filterMode).toBeChecked();
+  await expect(page.getByRole("region", { name: "Practice filters" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Filter help" })).toHaveCount(0);
 
+  const helpTrigger = page.getByRole("button", { name: "Filter help" });
+  await helpTrigger.click();
+  const help = page.getByRole("dialog", { name: "Filter help" });
+  await expect(help).toContainText("Disable accepts any value for that group and preserves your checks.");
+  await expect(help).toContainText("An enabled group with nothing checked matches no cards.");
+  await expect(help).toContainText("Class, Type, Mana, and Rarity use OR within each group.");
+  await expect(help).toContainText("Keywords use AND");
+  await expect(help).toContainText("Enabled groups combine with AND.");
+  await expect(help).toContainText("Base and upgraded forms are evaluated separately");
+  await page.keyboard.press("Escape");
+  await expect(help).toBeHidden();
+  await expect(helpTrigger).toBeFocused();
+
+  const visibility = page.getByRole("group", { name: "Candidate visibility" });
+  await expect(visibility).toBeVisible();
+  await expect(visibility).toHaveClass(/candidate-visibility--disabled/);
+  for (const label of ["Neutral", "Green", "Red"]) {
+    await expect(visibility.getByRole("checkbox", { name: label })).toBeDisabled();
+  }
+  const disabledAssistance = page.locator(".card-search__assistance-slot--disabled");
+  await expect(disabledAssistance).toBeVisible();
+  await expect(disabledAssistance).toHaveAttribute("inert", "");
+  const suppressedOrbs = disabledAssistance.locator(".orb-button");
+  await expect(suppressedOrbs).toHaveCount(3);
+  for (const orb of await suppressedOrbs.all()) {
+    await expect(orb).toBeVisible();
+    expect(await orb.evaluate((button) => button.closest("[inert]") !== null)).toBe(true);
+  }
+  const suppressionStyle = await disabledAssistance.evaluate((element) => ({
+    opacity: Number.parseFloat(getComputedStyle(element).opacity),
+    pointerEvents: getComputedStyle(element).pointerEvents,
+  }));
+  expect(suppressionStyle.opacity).toBeLessThan(.5);
+  expect(suppressionStyle.pointerEvents).toBe("none");
+  await openEmptySearch(page);
+  await expect(page.locator(".card-search__option--green, .card-search__option--red")).toHaveCount(0);
+  await expect(page.locator(".card-search__option--neutral")).not.toHaveCount(0);
+
+  const classGroup = page.getByRole("group", { name: "Class" });
+  await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  await expect(classGroup.getByText("Choose at least one.")).toBeVisible();
+  await openEmptySearch(page);
+  await expect(page.getByRole("status").filter({ hasText: "No visible candidates" }))
+    .toHaveText("No visible candidates");
+
+  await classGroup.getByRole("checkbox", { name: "Silent" }).check();
+  await classGroup.getByRole("checkbox", { name: "Event" }).check();
+  await openEmptySearch(page);
+  await expect(page.getByRole("option")).toHaveCount(8);
+  expect(await page.getByRole("option").locator(".card-search__name").allTextContents()).toEqual([
+    "Afterimage", "Afterimage Pair", "Apparition", "Apparition Pair",
+    "Mad Science", "Mad Science Pair", "Malaise", "Malaise Pair",
+  ]);
+  await expect(page.getByText("Alchemize", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Falling Star", { exact: true })).toHaveCount(0);
+
+  const keywordGroup = page.getByRole("group", { name: "Keywords" });
+  await keywordGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  await expect(keywordGroup.getByText("Choose at least one.")).toBeVisible();
+  await keywordGroup.getByRole("checkbox", { name: "Exhaust" }).check();
+  await keywordGroup.getByRole("checkbox", { name: "Ethereal" }).check();
+  await openEmptySearch(page);
+  expect(await page.getByRole("option").locator(".card-search__name").allTextContents())
+    .toEqual(["Apparition", "Apparition Pair"]);
+  const apparition = model.cards.find((card) => card.id === "APPARITION")!;
+  await expect(cardOption(page, apparition).getByText("Base only", { exact: true })).toBeVisible();
+  await expect(page.getByText("Alchemize", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Dazed", { exact: true })).toHaveCount(0);
+
+  await keywordGroup.getByRole("checkbox", { name: "Disable" }).check();
+  await classGroup.getByRole("checkbox", { name: "Disable" }).check();
+  const manaGroup = page.getByRole("group", { name: "Mana" });
+  await manaGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  await manaGroup.getByRole("checkbox", { name: "0" }).check();
+  await openEmptySearch(page);
+  const alchemize = model.cards.find((card) => card.id === "ALCHEMIZE")!;
+  await expect(cardOption(page, alchemize).getByText("Upgrade only", { exact: true })).toBeVisible();
+  await manaGroup.getByRole("checkbox", { name: "0" }).uncheck();
+  await manaGroup.getByRole("checkbox", { name: "1" }).check();
+  await openEmptySearch(page);
+  await expect(cardOption(page, alchemize).getByText("Base only", { exact: true })).toBeVisible();
+
+  await manaGroup.getByRole("checkbox", { name: "Disable" }).check();
+  await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  await keywordGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  await keywordGroup.getByRole("checkbox", { name: "Exhaust" }).uncheck();
+  await keywordGroup.getByRole("checkbox", { name: "Ethereal" }).uncheck();
+  await keywordGroup.getByRole("checkbox", { name: "Innate" }).check();
+  await openEmptySearch(page);
+  const afterimage = model.cards.find((card) => card.id === "AFTERIMAGE")!;
+  await expect(cardOption(page, afterimage).getByText("Upgrade only", { exact: true })).toBeVisible();
+  await expect(page.getByText("Apparition", { exact: true })).toHaveCount(0);
+  const search = page.getByRole("combobox", { name: "Guess a card" });
+  await search.fill("after");
+  expect(await page.getByRole("option").locator(".card-search__name").allTextContents())
+    .toEqual(["Afterimage", "Afterimage Pair"]);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Practice" }).click();
+  await expect(filterMode).toBeChecked();
+  await expect(classGroup.getByRole("checkbox", { name: "Disable" })).not.toBeChecked();
+  await expect(classGroup.getByRole("checkbox", { name: "Silent" })).toBeChecked();
+  await expect(classGroup.getByRole("checkbox", { name: "Event" })).toBeChecked();
+  await expect(manaGroup.getByRole("checkbox", { name: "Disable" })).toBeChecked();
+  await expect(manaGroup.getByRole("checkbox", { name: "1" })).toBeChecked();
+  await expect(keywordGroup.getByRole("checkbox", { name: "Disable" })).not.toBeChecked();
+  await expect(keywordGroup.getByRole("checkbox", { name: "Innate" })).toBeChecked();
+  await openEmptySearch(page);
+  await expect(cardOption(page, afterimage).getByText("Upgrade only", { exact: true })).toBeVisible();
+
+  await filterMode.uncheck();
+  await expect(page.getByRole("region", { name: "Practice filters" })).toHaveCount(0);
+  for (const label of ["Neutral", "Green", "Red"]) {
+    await expect(visibility.getByRole("checkbox", { name: label })).toBeEnabled();
+    await expect(visibility.getByRole("checkbox", { name: label })).toBeChecked();
+  }
   const revealButton = page.getByRole("button", { name: "Reveal Orb, available" });
+  await expect(revealButton).toBeEnabled();
   await revealButton.click();
   await expect(revealButton).toHaveAttribute("aria-pressed", "true");
-  const revealHeader = page.locator('.guess-grid__header[data-feature="rarity"]');
-  await revealHeader.getByRole("button", { name: "Rarity feature heading. Use Reveal Orb." }).click();
-  await expect(page.getByLabel("Reveal Orb, used")).toBeVisible();
-  await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
-  await expect(hardcoreToggle).toBeDisabled();
-  const persistedRound = await storedRound(page, "stsdle:round:practice:v1");
-  expect(persistedRound.round.roundId).toBe(PRACTICE_ROUND_IDS[1]);
-
-  await page.reload();
-  await page.getByRole("button", { name: "Practice" }).click();
-  await expect(page.getByRole("button", { name: "Practice" })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByLabel("Reveal Orb, used")).toBeVisible();
-  await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
-  await expect(hardcoreToggle).toBeDisabled();
-  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId)
-    .toBe(PRACTICE_ROUND_IDS[1]);
+  await visibility.getByRole("checkbox", { name: "Neutral" }).uncheck();
+  await openEmptySearch(page);
+  await expect(page.getByRole("status").filter({ hasText: "No visible candidates" }))
+    .toHaveText("No visible candidates");
+  await visibility.getByRole("checkbox", { name: "Neutral" }).check();
 
   await page.getByRole("button", { name: "End game" }).click();
+  await expect(page.getByRole("heading", { name: "Accepted answers" })).toBeVisible();
   await page.getByRole("button", { name: "New Practice Round" }).click();
-  await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled();
+  await expect(filterMode).not.toBeChecked();
+  await expect(page.getByRole("region", { name: "Practice filters" })).toHaveCount(0);
   await expect(page.getByRole("rowheader")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reveal Orb, available" })).toBeVisible();
-  const replacementRoundId = (await storedRound(page, "stsdle:round:practice:v1")).round.roundId;
-  expect(replacementRoundId).toBe(PRACTICE_ROUND_IDS[2]);
-  expect(replacementRoundId).not.toBe(persistedRound.round.roundId);
+  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(PRACTICE_ROUND_IDS[1]);
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
 });
@@ -1151,7 +1240,7 @@ for (const viewport of [
   { width: 768, height: 1024, scrollerOverflows: true },
   { width: 1440, height: 900, scrollerOverflows: false },
 ]) {
-  test(`keeps ${viewport.width}x${viewport.height} shell, tray, controls, hint, and candidates contained while the guess grid owns overflow`, async ({ page, request }) => {
+  test(`keeps ${viewport.width}x${viewport.height} game and Practice filters contained with accessible targets`, async ({ page, request }) => {
     const model = await loadFixtureModel(request);
     const codexGuard = await prepareOfflinePage(page);
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -1397,6 +1486,113 @@ for (const viewport of [
     } else {
       expect(dimensions.scrollerScrollWidth).toBeLessThanOrEqual(dimensions.scrollerClientWidth);
     }
+
+    await page.getByRole("button", { name: "Practice" }).click();
+    const filterMode = page.getByRole("checkbox", { name: "Filter Mode" });
+    await expectAccessibleTarget(page.locator(".practice-controls__filter"));
+    await expectAccessibleTarget(page.getByRole("button", { name: "End game" }));
+    await filterMode.check();
+    const filterHelp = page.getByRole("dialog", { name: "Filter help" });
+    await expect(filterHelp).toBeVisible();
+    await expectAccessibleTarget(filterHelp.getByRole("button", { name: "Close filter help" }));
+    const filterHelpGeometry = await filterHelp.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const root = document.documentElement;
+      return {
+        rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        pageClientWidth: root.clientWidth,
+        pageScrollWidth: root.scrollWidth,
+        viewportHeight: window.innerHeight,
+      };
+    });
+    expect(filterHelpGeometry.rect.left).toBeGreaterThanOrEqual(0);
+    expect(filterHelpGeometry.rect.top).toBeGreaterThanOrEqual(0);
+    expect(filterHelpGeometry.rect.right).toBeLessThanOrEqual(filterHelpGeometry.pageClientWidth);
+    expect(filterHelpGeometry.rect.bottom).toBeLessThanOrEqual(filterHelpGeometry.viewportHeight);
+    expect(filterHelpGeometry.scrollHeight).toBeGreaterThanOrEqual(filterHelpGeometry.clientHeight);
+    expect(filterHelpGeometry.overflowY).toBe("auto");
+    expect(filterHelpGeometry.pageScrollWidth).toBeLessThanOrEqual(filterHelpGeometry.pageClientWidth);
+    await filterHelp.getByRole("button", { name: "Close filter help" }).click();
+
+    const filterPanel = page.getByRole("region", { name: "Practice filters" });
+    const filterHelpTrigger = filterPanel.getByRole("button", { name: "Filter help" });
+    await expectAccessibleTarget(filterHelpTrigger);
+    const filterGroups = filterPanel.getByRole("group");
+    for (const group of await filterGroups.all()) {
+      await expectAccessibleTarget(group.locator(".practice-filter__choice--disable"));
+    }
+    const classGroup = filterPanel.getByRole("group", { name: "Class" });
+    await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+    await expect(classGroup.getByText("Choose at least one.")).toBeVisible();
+    const filterGeometry = await filterPanel.evaluate((panel) => {
+      const panelRect = panel.getBoundingClientRect();
+      const shellRect = document.querySelector<HTMLElement>(".app-shell")!.getBoundingClientRect();
+      const root = document.documentElement;
+      const rectOf = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      };
+      return {
+        panel: rectOf(panel),
+        shell: rectOf(document.querySelector<HTMLElement>(".app-shell")!),
+        groups: [...panel.querySelectorAll(".practice-filter__group")].map(rectOf),
+        warnings: [...panel.querySelectorAll(".practice-filter__warning")].map(rectOf),
+        pageClientWidth: root.clientWidth,
+        pageScrollWidth: root.scrollWidth,
+        shellWidth: shellRect.width,
+        panelWidth: panelRect.width,
+      };
+    });
+    expect(filterGeometry.panel.left).toBeGreaterThanOrEqual(filterGeometry.shell.left - 1);
+    expect(filterGeometry.panel.right).toBeLessThanOrEqual(filterGeometry.shell.right + 1);
+    expect(filterGeometry.panelWidth).toBeLessThanOrEqual(filterGeometry.shellWidth + 1);
+    expect(filterGeometry.groups).toHaveLength(5);
+    expect(filterGeometry.warnings).toHaveLength(1);
+    for (const rect of [...filterGeometry.groups, ...filterGeometry.warnings]) {
+      expect(rect.left).toBeGreaterThanOrEqual(filterGeometry.panel.left - 1);
+      expect(rect.right).toBeLessThanOrEqual(filterGeometry.panel.right + 1);
+      expect(rect.top).toBeGreaterThanOrEqual(filterGeometry.panel.top - 1);
+      expect(rect.bottom).toBeLessThanOrEqual(filterGeometry.panel.bottom + 1);
+    }
+    expect(filterGeometry.pageScrollWidth).toBeLessThanOrEqual(filterGeometry.pageClientWidth);
+
+    await classGroup.getByRole("checkbox", { name: "Disable" }).check();
+    const manaGroup = filterPanel.getByRole("group", { name: "Mana" });
+    await manaGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+    await manaGroup.getByRole("checkbox", { name: "1" }).check();
+    await openEmptySearch(page);
+    const alchemize = model.cards.find((card) => card.id === "ALCHEMIZE")!;
+    const baseOnlyOption = cardOption(page, alchemize);
+    await expect(baseOnlyOption.getByText("Base only", { exact: true })).toBeVisible();
+    await expectAccessibleTarget(baseOnlyOption);
+    const baseBadgeContained = await baseOnlyOption.evaluate((row) => {
+      const rowRect = row.getBoundingClientRect();
+      const badgeRect = row.querySelector<HTMLElement>(".card-search__form-badge")!.getBoundingClientRect();
+      return badgeRect.left >= rowRect.left && badgeRect.right <= rowRect.right
+        && badgeRect.top >= rowRect.top && badgeRect.bottom <= rowRect.bottom;
+    });
+    expect(baseBadgeContained).toBe(true);
+
+    await manaGroup.getByRole("checkbox", { name: "1" }).uncheck();
+    await manaGroup.getByRole("checkbox", { name: "0" }).check();
+    await openEmptySearch(page);
+    const upgradeOnlyOption = cardOption(page, alchemize);
+    await expect(upgradeOnlyOption.getByText("Upgrade only", { exact: true })).toBeVisible();
+    const upgradeBadgeContained = await upgradeOnlyOption.evaluate((row) => {
+      const rowRect = row.getBoundingClientRect();
+      const badgeRect = row.querySelector<HTMLElement>(".card-search__form-badge")!.getBoundingClientRect();
+      return badgeRect.left >= rowRect.left && badgeRect.right <= rowRect.right
+        && badgeRect.top >= rowRect.top && badgeRect.bottom <= rowRect.bottom;
+    });
+    expect(upgradeBadgeContained).toBe(true);
+    const filterPageOverflow = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(filterPageOverflow.scrollWidth).toBeLessThanOrEqual(filterPageOverflow.clientWidth);
     expect(codexGuard.attemptedRequests).toEqual([]);
     expect(codexGuard.blockedRequests).toEqual([]);
   });
