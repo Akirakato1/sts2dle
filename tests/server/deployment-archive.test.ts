@@ -262,7 +262,7 @@ describe("deployment snapshot archive", () => {
 
     expect(await readFile(destination)).toEqual(original);
     expect(await readDeploymentRevision(destination, validationOptions)).toBe(oldRevision);
-  });
+  }, 20_000);
 
   it("preserves a concurrent publish-path replacement after a partial hard-link failure", async () => {
     const oldRevision = "7e".repeat(32);

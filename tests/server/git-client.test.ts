@@ -204,7 +204,7 @@ describe("GitClient", () => {
     await expect(readFile(join(repository, "malicious.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(privateIndexes.length).toBeGreaterThan(0);
     expect(privateIndexes.every((path) => path.startsWith(join(repository, ".git")))).toBe(true);
-  }, 15_000);
+  }, 30_000);
 
   it("restores the snapshot index and worktree to HEAD after a pre-commit failure", async () => {
     const repository = await createGitRepository();

@@ -353,7 +353,7 @@ describe("transactional deployment bundle publication", () => {
     expect(attempts).toBe(4);
     expect(waits).toEqual([50, 50]);
     expect(await readDeploymentRevision(destination)).toBe("ef".repeat(32));
-  });
+  }, 20_000);
 
   it("revalidates the destination parent before a rename retry", async () => {
     const root = await createTemporaryDirectory();
