@@ -871,6 +871,7 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await expect(help).toContainText("An enabled group with nothing checked matches no cards.");
   await expect(help).toContainText("Class, Type, Mana, and Rarity use OR within each group.");
   await expect(help).toContainText("Keywords use AND");
+  await expect(help).toContainText("None means that form has no keywords and clears keyword choices.");
   await expect(help).toContainText("Enabled groups combine with AND.");
   await expect(help).toContainText("Base and upgraded forms are evaluated separately");
   await page.keyboard.press("Escape");
@@ -951,13 +952,43 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await expect(cardOption(page, alchemize).getByText("Base only", { exact: true })).toBeVisible();
 
   await manaGroup.getByRole("checkbox", { name: "Disable" }).check();
-  await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  const keywordChoices = keywordGroup.getByRole("checkbox");
+  await expect(keywordChoices.last()).toHaveAccessibleName("None");
   await keywordGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  const exhaustChoice = keywordGroup.getByRole("checkbox", { name: "Exhaust" });
+  const innateChoice = keywordGroup.getByRole("checkbox", { name: "Innate" });
+  const noneChoice = keywordGroup.getByRole("checkbox", { name: "None" });
+  await exhaustChoice.check();
+  await noneChoice.check();
+  await expect(exhaustChoice).not.toBeChecked();
+  await expect(noneChoice).toBeChecked();
+  await innateChoice.check();
+  await expect(noneChoice).not.toBeChecked();
+  await expect(innateChoice).toBeChecked();
+  await noneChoice.check();
+  await expect(innateChoice).not.toBeChecked();
+  await openEmptySearch(page);
+  const afterimage = model.cards.find((card) => card.id === "AFTERIMAGE")!;
+  await expect(cardOption(page, afterimage).getByText("Base only", { exact: true })).toBeVisible();
+  const keywordFeatures = ["eternal", "ethereal", "exhaust", "innate", "retain", "sly"] as const;
+  const keywordFree = model.cards.find((card) => card.id !== orbGuess.id
+    && keywordFeatures.every((feature) => !card.base[feature] && !card.upgraded[feature]));
+  expect(keywordFree).toBeDefined();
+  const keywordFreeOption = cardOption(page, keywordFree!);
+  await expect(keywordFreeOption).toBeVisible();
+  await expect(keywordFreeOption.getByText(/^(?:Base|Upgrade) only$/)).toHaveCount(0);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Practice" }).click();
+  await expect(filterMode).toBeChecked();
+  await expect(keywordGroup.getByRole("checkbox", { name: "None" })).toBeChecked();
+
+  await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
   await keywordGroup.getByRole("checkbox", { name: "Exhaust" }).uncheck();
   await keywordGroup.getByRole("checkbox", { name: "Ethereal" }).uncheck();
   await keywordGroup.getByRole("checkbox", { name: "Innate" }).check();
+  await expect(keywordGroup.getByRole("checkbox", { name: "None" })).not.toBeChecked();
   await openEmptySearch(page);
-  const afterimage = model.cards.find((card) => card.id === "AFTERIMAGE")!;
   await expect(cardOption(page, afterimage).getByText("Upgrade only", { exact: true })).toBeVisible();
   await expect(page.getByText("Apparition", { exact: true })).toHaveCount(0);
   const search = page.getByRole("combobox", { name: "Guess a card" });
