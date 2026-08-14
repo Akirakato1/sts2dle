@@ -289,9 +289,9 @@ describe("buildSnapshot", () => {
     });
     const dazed = cards.find(({ id }) => id === "DAZED");
     expect(dazed).toBeDefined();
-    expect(Object.keys(dazed!.base)).toHaveLength(10);
+    expect(Object.keys(dazed!.base)).toHaveLength(7);
     expect(Object.keys(dazed!.base)).toEqual([...FEATURE_ORDER].sort());
-    expect(dazed!.base).not.toHaveProperty("unplayable");
+    expect(dazed!.base.keywords).toContain("Unplayable");
     const spriteMap = JSON.parse(await readFile(join(activated.path, "sprite-map.json"), "utf8")) as {
       cards: Record<string, { candidate: unknown; guess: unknown }>;
     };

@@ -26,12 +26,9 @@ function card(id: string): CardIdentity {
     cardType: "Attack",
     mana: 1,
     rarity: "Common",
-    eternal: false,
-    ethereal: false,
-    exhaust: false,
-    innate: false,
-    retain: false,
-    sly: false,
+    target: "AnyEnemy",
+    powers: [],
+    keywords: [],
   } as const;
   return {
     id,

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/server/config.js";
 import { assertAllowedImageUrl } from "../../src/server/images/url-policy.js";
 import { RawSpireCardsSchema } from "../../src/server/spire-codex/schema.js";
-import { normalizeCard } from "../../src/server/sync/normalize-card.js";
+import { analyzeSourceFeatures, normalizeCard } from "../../src/server/sync/normalize-card.js";
 import { baseKey, pairKey } from "../../src/shared/feature-keys.js";
 
 const cards = RawSpireCardsSchema.parse(fixture);
@@ -19,6 +19,11 @@ function rawCard(overrides: Record<string, unknown>) {
   return RawSpireCardsSchema.parse([{ ...card("FALLING_STAR"), ...overrides }])[0]!;
 }
 
+const featureAnalysis = analyzeSourceFeatures(cards);
+function normalize(raw: ReturnType<typeof card>) {
+  return normalizeCard(raw, BASE_URL, featureAnalysis.powerCardCounts);
+}
+
 describe("normalizeCard", () => {
   it("uses Codex canonical keys for Falling Star instead of localized display fields", () => {
     const fallingStar = rawCard({
@@ -31,7 +36,7 @@ describe("normalizeCard", () => {
       rarity_key: "Basic",
     });
 
-    expect(normalizeCard(fallingStar, BASE_URL).base).toMatchObject({
+    expect(normalize(fallingStar).base).toMatchObject({
       cardClass: "Regent",
       cardType: "Attack",
       rarity: "Basic",
@@ -42,7 +47,7 @@ describe("normalizeCard", () => {
     ["Attack", "Attack"], ["Skill", "Skill"], ["Power", "Power"],
     ["Quest", "Quest"], ["Status", "Status"], ["Curse", "Curse"],
   ] as const)("uses type_key %s as the feature card type", (typeKey, expected) => {
-    expect(normalizeCard(rawCard({ type: "Localized", type_key: typeKey }), BASE_URL).base.cardType)
+    expect(normalize(rawCard({ type: "Localized", type_key: typeKey })).base.cardType)
       .toBe(expected);
   });
 
@@ -51,21 +56,21 @@ describe("normalizeCard", () => {
     ["Event", "Event"], ["Quest", "Quest"], ["Rare", "Rare"], ["Status", "Status"],
     ["Token", "Token"], ["Uncommon", "Uncommon"],
   ] as const)("uses rarity_key %s as the feature rarity", (rarityKey, expected) => {
-    expect(normalizeCard(rawCard({ rarity: null, rarity_key: rarityKey }), BASE_URL).base.rarity)
+    expect(normalize(rawCard({ rarity: null, rarity_key: rarityKey })).base.rarity)
       .toBe(expected);
   });
   it("applies keyword-only upgrades without an upgraded description", () => {
-    expect(normalizeCard(card("AFTERIMAGE"), BASE_URL).upgraded.innate).toBe(true);
+    expect(normalize(card("AFTERIMAGE")).upgraded.keywords).toContain("Innate");
   });
 
   it("uses the official canonical CDN URL for hosted Spire Codex card artwork", () => {
-    expect(normalizeCard(card("ALCHEMIZE"), "https://spire-codex.com").artUrl)
+    expect(normalizeCard(card("ALCHEMIZE"), "https://spire-codex.com", featureAnalysis.powerCardCounts).artUrl)
       .toBe("https://cdn.spire-codex.com/cards/alchemize.webp");
   });
 
   it("allows canonical official artwork with the default production configuration", () => {
     const config = loadConfig({});
-    const normalized = normalizeCard(card("ALCHEMIZE"), config.spireCodexBaseUrl);
+    const normalized = normalizeCard(card("ALCHEMIZE"), config.spireCodexBaseUrl, featureAnalysis.powerCardCounts);
 
     expect(() => assertAllowedImageUrl(
       normalized.artUrl,
@@ -75,11 +80,11 @@ describe("normalizeCard", () => {
   });
 
   it("removes base keywords when an upgrade requests it", () => {
-    expect(normalizeCard(card("APPARITION"), BASE_URL).upgraded.ethereal).toBe(false);
+    expect(normalize(card("APPARITION")).upgraded.keywords).not.toContain("Ethereal");
   });
 
   it("uses a numeric upgrade cost as the effective mana", () => {
-    expect(normalizeCard(card("ALCHEMIZE"), BASE_URL).upgraded.mana).toBe(0);
+    expect(normalize(card("ALCHEMIZE")).upgraded.mana).toBe(0);
   });
 
   it("maps cost -1 without the X-cost flag to None", () => {
@@ -87,15 +92,15 @@ describe("normalizeCard", () => {
     raw.cost = -1;
     raw.is_x_cost = null;
 
-    expect(normalizeCard(raw, BASE_URL).base.mana).toBe("None");
+    expect(normalize(raw).base.mana).toBe("None");
   });
 
   it("maps status cards to the neutral class", () => {
-    expect(normalizeCard(card("DAZED"), BASE_URL).base.cardClass).toBe("Neutral");
+    expect(normalize(card("DAZED")).base.cardClass).toBe("Neutral");
   });
 
   it("preserves the event class and missing full-card URLs", () => {
-    const normalized = normalizeCard(card("MAD_SCIENCE"), BASE_URL);
+    const normalized = normalize(card("MAD_SCIENCE"));
     expect(normalized.base.cardClass).toBe("Event");
     expect(normalized.baseCardUrl).toBeNull();
     expect(normalized.upgradedCardUrl).toBeNull();
@@ -106,14 +111,14 @@ describe("normalizeCard", () => {
     raw.cost = 0;
     raw.is_x_cost = true;
 
-    expect(normalizeCard(raw, BASE_URL).base.mana).toBe("X");
+    expect(normalize(raw).base.mana).toBe("X");
   });
 
-  it("does not include unplayable in the normalized feature vector", () => {
-    expect(Object.hasOwn(normalizeCard(card("DAZED"), BASE_URL).base, "unplayable")).toBe(false);
+  it("includes Unplayable in canonical keyword arrays", () => {
+    expect(normalize(card("DAZED")).base.keywords).toContain("Unplayable");
   });
 
-  it("uses the same generated keys when raw Unplayable is removed", () => {
+  it("uses different generated keys when raw Unplayable is removed", () => {
     const rawWithKeyword = structuredClone(card("DAZED"));
     const rawWithoutKeyword = structuredClone(rawWithKeyword);
     rawWithoutKeyword.id = "DAZED_PLAYABLE_FIXTURE";
@@ -121,15 +126,52 @@ describe("normalizeCard", () => {
     rawWithoutKeyword.keywords_key = rawWithoutKeyword.keywords_key?.filter(
       (keyword) => keyword.toLowerCase() !== "unplayable",
     ) ?? [];
-    const first = normalizeCard(rawWithKeyword, BASE_URL);
-    const second = normalizeCard(rawWithoutKeyword, BASE_URL);
+    const first = normalize(rawWithKeyword);
+    const second = normalize(rawWithoutKeyword);
 
-    expect(baseKey(first.base)).toBe(baseKey(second.base));
-    expect(pairKey(first)).toBe(pairKey(second));
+    expect(baseKey(first.base)).not.toBe(baseKey(second.base));
+    expect(pairKey(first)).not.toBe(pairKey(second));
   });
 
   it("reuses base features for cards without an upgrade", () => {
-    const normalized = normalizeCard(card("DAZED"), BASE_URL);
+    const normalized = normalize(card("DAZED"));
     expect(normalized.upgraded).toEqual(normalized.base);
+  });
+
+  it("requires strict raw target and power-entry data", () => {
+    expect(() => RawSpireCardsSchema.parse([{ ...card("ALCHEMIZE"), target: "Hand" }])).toThrow();
+    expect(() => RawSpireCardsSchema.parse([{
+      ...card("ALCHEMIZE"), powers_applied: [{ power: "Weak" }],
+    }])).toThrow();
+  });
+
+  it("counts each power key once per source card", () => {
+    const analysis = analyzeSourceFeatures([
+      card("ABRASIVE"), card("COMET"), card("RESONANCE"), card("DUPLICATE_STRENGTH"),
+    ]);
+    expect(analysis.powerCardCounts.get("Strength")).toBe(2);
+    expect(analysis.powerCardCounts.get("Afterimage")).toBe(1);
+  });
+
+  it("returns immutable source-frequency data and rejects conflicting power displays", () => {
+    const analysis = analyzeSourceFeatures([card("RESONANCE")]);
+    expect((analysis.powerCardCounts as unknown as { set?: unknown }).set).toBeUndefined();
+
+    const conflicting = structuredClone(card("RESONANCE"));
+    conflicting.id = "CONFLICTING_STRENGTH";
+    conflicting.powers_applied = [{ power: "Might", power_key: "strength", amount: 1 }];
+    expect(() => analyzeSourceFeatures([card("RESONANCE"), conflicting])).toThrow(/conflicting power display names/i);
+  });
+
+  it("normalizes canonical target, power, and keyword arrays", () => {
+    const analysis = analyzeSourceFeatures([
+      card("ABRASIVE"), card("COMET"), card("RESONANCE"), card("DUPLICATE_STRENGTH"),
+    ]);
+    const counts = analysis.powerCardCounts;
+    expect(normalizeCard(card("AFTERIMAGE"), BASE_URL, counts).base.powers).toEqual(["Unique Buff"]);
+    expect(normalizeCard(card("COMET"), BASE_URL, counts).base.powers).toEqual(["Vulnerable", "Weak"]);
+    expect(normalizeCard(card("DAZED"), BASE_URL, counts).base.keywords).toContain("Unplayable");
+    expect(normalizeCard(card("APPARITION"), BASE_URL, counts).upgraded.keywords).not.toContain("Ethereal");
+    expect(normalizeCard(card("RESONANCE"), BASE_URL, counts).base.target).toBe("AllEnemies");
   });
 });

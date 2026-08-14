@@ -54,7 +54,7 @@ async function snapshot(root: string, buildId: string): Promise<string> {
   const directory = join(root, "snapshots", buildId);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "manifest.json"), JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceRevision: buildId.split("-")[0],
   }));
   return directory;
@@ -241,7 +241,7 @@ describe("pruneSupersededFixtureSnapshots", () => {
     const unrelatedRoot = await temporaryDirectory("stsdle-e2e-outside-");
     const supersededPath = await snapshot(dataDir, "fixtureabc12-100");
     await writeFile(join(unrelatedRoot, "manifest.json"), JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       sourceRevision: "outside",
     }));
 
@@ -293,7 +293,7 @@ describe("withE2eFixtureDataLock", () => {
     expect(pointer.buildId).toBe(secondSnapshot.buildId);
     expect(snapshotDirectories).toEqual([secondSnapshot.buildId]);
     await expect(validateSnapshot(secondSnapshot.path, VALIDATION_OPTIONS)).resolves.toMatchObject({
-      cardCount: 7,
+      cardCount: 11,
     });
   });
 

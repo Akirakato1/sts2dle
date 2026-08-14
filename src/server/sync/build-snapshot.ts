@@ -8,7 +8,7 @@ import { assertAllowedImageUrl, parseAllowedImageOrigins } from "../images/url-p
 import { fallbackFilename, fallbackUrl } from "../images/fallback-path.js";
 import type { RawSpireCard } from "../spire-codex/schema.js";
 import type { SpireCodexClient } from "../spire-codex/client.js";
-import { normalizeCard } from "./normalize-card.js";
+import { analyzeSourceFeatures, normalizeCard } from "./normalize-card.js";
 import type { SnapshotStore } from "./snapshot-store.js";
 import {
   SnapshotValidationError,
@@ -74,9 +74,11 @@ async function buildSnapshotLocked(
   );
   const rawCards = [...fetched.cards].sort(compareRawCardIds);
   rejectDuplicateIds(rawCards);
+  const sourceFeatures = analyzeSourceFeatures(rawCards);
   const cards = markDuplicateNames(rawCards.map((raw) => normalizeCard(
     raw,
     dependencies.baseUrl ?? DEFAULT_BASE_URL,
+    sourceFeatures.powerCardCounts,
   )));
   validateRemoteImageUrls(cards, allowedArtworkOrigins, allowedFullCardOrigins);
   const groups = buildGroups(cards);
@@ -101,7 +103,7 @@ async function buildSnapshotLocked(
     ]);
     const files = await hashEmittedFiles(staging.path, dependencies.hashFileImpl ?? hashFile);
     const manifest: SnapshotManifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       sourceRevision: fetched.sourceRevision,
       sourceLastModified: fetched.lastModified,
       fetchedAt: fetched.fetchedAt,

@@ -56,7 +56,7 @@ function active(path: string, buildId = "prior-build"): ActivatedSnapshot {
     buildId,
     path,
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       sourceRevision: "prior-revision",
       sourceLastModified: null,
       fetchedAt: "2026-08-12T00:00:00.000Z",

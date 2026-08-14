@@ -7,7 +7,7 @@ function activated(path: string, buildId = "prebuilt-snapshot"): ActivatedSnapsh
     buildId,
     path,
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       sourceRevision: "prebuilt-revision",
       sourceLastModified: null,
       fetchedAt: "2026-08-12T00:00:00.000Z",

@@ -28,7 +28,7 @@ import { pairKey } from "../../src/shared/feature-keys.js";
 import { baseKey } from "../../src/shared/feature-keys.js";
 import { createDailyRandom, createPracticeRandom } from "../../src/shared/random.js";
 
-const base = { cardClass: "Silent" as const, cardType: "Skill" as const, mana: 1, rarity: "Rare" as const, eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false };
+const base = { cardClass: "Silent" as const, cardType: "Skill" as const, mana: 1, rarity: "Rare" as const, target: "Self" as const, powers: [], keywords: [] };
 const first = { id: "FIRST", name: "FIRST", hasUpgrade: false, artUrl: "https://art.example/first.png", baseCardUrl: null, upgradedCardUrl: null, base, upgraded: base };
 const secondVector = { ...base, mana: 2 };
 const second = { id: "SECOND", name: "SECOND", hasUpgrade: false, artUrl: "https://art.example/second.png", baseCardUrl: null, upgradedCardUrl: null, base: secondVector, upgraded: secondVector };
@@ -36,7 +36,7 @@ const cards = [first, second];
 const firstBaseKey = baseKey(first.base);
 const secondBaseKey = baseKey(second.base);
 const snapshot: LoadedSnapshot = {
-  manifest: { schemaVersion: 1, sourceRevision: "revision", sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00Z", generatedAt: "2026-08-12T00:00:00Z", cardCount: 2, upgradeCount: 0, baseGroupCount: 2, pairGroupCount: 2, files: {} },
+  manifest: { schemaVersion: 2, sourceRevision: "revision", sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00Z", generatedAt: "2026-08-12T00:00:00Z", cardCount: 2, upgradeCount: 0, baseGroupCount: 2, pairGroupCount: 2, files: {} },
   cards,
   baseGroups: [{ key: firstBaseKey, cardIds: [first.id] }, { key: secondBaseKey, cardIds: [second.id] }],
   pairGroups: [
@@ -349,12 +349,9 @@ describe("useGame", () => {
         { feature: "cardType", color: "green", displayValue: "Skill" },
         { feature: "mana", color: "green", displayValue: "2" },
         { feature: "rarity", color: "green", displayValue: "Rare" },
-        { feature: "eternal", color: "green", displayValue: "false" },
-        { feature: "ethereal", color: "green", displayValue: "false" },
-        { feature: "exhaust", color: "green", displayValue: "false" },
-        { feature: "innate", color: "green", displayValue: "false" },
-        { feature: "retain", color: "green", displayValue: "false" },
-        { feature: "sly", color: "green", displayValue: "false" },
+        { feature: "target", color: "green", displayValue: "Self" },
+        { feature: "powers", color: "green", displayValue: "" },
+        { feature: "keywords", color: "green", displayValue: "" },
       ] }],
       status: "won",
       terminalGuessCount: 1,

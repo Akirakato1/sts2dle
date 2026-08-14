@@ -117,17 +117,17 @@ describe("validateSnapshot", () => {
     const path = await createValidSnapshot();
 
     await expect(validateSnapshot(path, VALIDATION_OPTIONS)).resolves.toMatchObject({
-      cardCount: 7,
+      cardCount: 11,
       upgradeCount: 6,
-      baseGroupCount: 7,
-      pairGroupCount: 7,
+      baseGroupCount: 11,
+      pairGroupCount: 11,
       missingRawArtCardIds: [],
       fallbackCardIds: ["MAD_SCIENCE"],
-      candidateSprite: { width: 192, height: 192 },
-      guessSprite: { width: 480, height: 480 },
+      candidateSprite: { width: 256, height: 192 },
+      guessSprite: { width: 640, height: 480 },
     });
     const report = await validateSnapshot(path, VALIDATION_OPTIONS);
-    expect(Object.values(report.baseGroupHistogram).reduce((sum, value) => sum + value, 0)).toBe(7);
+    expect(Object.values(report.baseGroupHistogram).reduce((sum, value) => sum + value, 0)).toBe(11);
     expect(report.candidateSprite.bytes).toBeGreaterThan(0);
     expect(report.guessSprite.bytes).toBeGreaterThan(0);
   });
@@ -159,6 +159,15 @@ describe("validateSnapshot", () => {
     await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
 
     await expectIssues(path, [pattern]);
+  });
+
+  it("rejects the legacy snapshot schema version", async () => {
+    const path = await createValidSnapshot();
+    const manifest = await readJson<SnapshotManifest>(path, "manifest.json");
+    (manifest as { schemaVersion: number }).schemaVersion = 1;
+    await writeFile(join(path, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
+
+    await expectIssues(path, [/unsupported snapshot schema version/i]);
   });
 
   it.each([
@@ -245,12 +254,12 @@ describe("validateSnapshot", () => {
     await expect(validateSnapshot(path, {
       ...VALIDATION_OPTIONS,
       imageDecodeObserver,
-    })).resolves.toMatchObject({ cardCount: 7 });
+    })).resolves.toMatchObject({ cardCount: 11 });
 
     const requests = imageDecodeObserver.mock.calls.map(([request]) => request);
     expect(requests).toEqual(expect.arrayContaining([
-      { label: "candidate.webp", limitInputPixels: 192 * 192 },
-      { label: "guess.webp", limitInputPixels: 480 * 480 },
+      { label: "candidate.webp", limitInputPixels: 256 * 192 },
+      { label: "guess.webp", limitInputPixels: 640 * 480 },
     ]));
     expect(requests.filter(({ label }) => label.startsWith("fallback/"))).toHaveLength(2);
     expect(requests.filter(({ label }) => label.startsWith("fallback/")).every(
@@ -406,7 +415,7 @@ describe("validateSnapshot", () => {
     ["rarity", "Mythic", /unknown card rarity.*AFTERIMAGE/i],
     ["rarity", "None", /unknown card rarity.*AFTERIMAGE/i],
     ["mana", -5, /unknown mana value.*AFTERIMAGE/i],
-    ["exhaust", "sometimes", /unknown keyword value.*exhaust.*AFTERIMAGE/i],
+    ["target", "Hand", /unknown card target.*AFTERIMAGE/i],
   ] as const)("rejects an unknown %s feature value", async (field, value, pattern) => {
     const path = await createValidSnapshot();
     const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
@@ -417,13 +426,29 @@ describe("validateSnapshot", () => {
   });
 
   it.each([
-    ["base", "unplayable", true, /invalid base feature keys.*DAZED.*unplayable/i],
-    ["upgraded", "unplayable", false, /invalid upgraded feature keys.*DAZED.*unplayable/i],
+    ["base", "eternal", true, /invalid base feature keys.*DAZED.*eternal/i],
+    ["upgraded", "innate", false, /invalid upgraded feature keys.*DAZED.*innate/i],
     ["base", "mana", "–", /unknown mana value.*DAZED/i],
   ] as const)("rejects rehashed legacy %s feature %s", async (variant, field, value, pattern) => {
     const path = await createValidSnapshot();
     const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
     cards.find(({ id }) => id === "DAZED")![variant][field] = value;
+    await writeJsonAndRehash(path, "cards.json", cards);
+
+    await expectIssues(path, [pattern]);
+  });
+
+  it.each([
+    ["missing feature", (base: Record<string, unknown>) => { delete base.keywords; }, /invalid base feature keys.*missing=keywords/i],
+    ["duplicate powers", (base: Record<string, unknown>) => { base.powers = ["Weak", "Weak"]; }, /duplicate powers/i],
+    ["unsorted powers", (base: Record<string, unknown>) => { base.powers = ["Weak", "Vulnerable"]; }, /non-canonical powers/i],
+    ["duplicate keywords", (base: Record<string, unknown>) => { base.keywords = ["Exhaust", "Exhaust"]; }, /duplicate keywords/i],
+    ["out-of-order keywords", (base: Record<string, unknown>) => { base.keywords = ["Exhaust", "Ethereal"]; }, /non-canonical keywords/i],
+    ["unknown keyword", (base: Record<string, unknown>) => { base.keywords = ["Flying"]; }, /unknown keyword.*flying/i],
+  ] as const)("rejects %s canonical feature arrays", async (_label, mutate, pattern) => {
+    const path = await createValidSnapshot();
+    const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
+    mutate(cards.find(({ id }) => id === "AFTERIMAGE")!.base);
     await writeJsonAndRehash(path, "cards.json", cards);
 
     await expectIssues(path, [pattern]);
@@ -443,21 +468,23 @@ describe("validateSnapshot", () => {
     await expectIssues(path, [new RegExp(`invalid ${variant} feature keys.*${cardId}.*futureKeyword`, "i")]);
   });
 
-  it("accepts semantically equal non-upgradable features with different property order", async () => {
+  it("accepts semantically equal non-upgradable features with distinct array references", async () => {
     const path = await createValidSnapshot();
     const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
     const dazed = cards.find(({ id }) => id === "DAZED")!;
     dazed.upgraded = Object.fromEntries(Object.entries(dazed.upgraded).reverse());
+    dazed.upgraded.powers = [...dazed.base.powers];
+    dazed.upgraded.keywords = [...dazed.base.keywords];
     await writeJsonAndRehash(path, "cards.json", cards);
 
-    await expect(validateSnapshot(path, VALIDATION_OPTIONS)).resolves.toMatchObject({ cardCount: 7 });
+    await expect(validateSnapshot(path, VALIDATION_OPTIONS)).resolves.toMatchObject({ cardCount: 11 });
   });
 
   it("still rejects a changed feature on a non-upgradable card", async () => {
     const path = await createValidSnapshot();
     const cards = await readJson<Array<Record<string, any>>>(path, "cards.json");
     const dazed = cards.find(({ id }) => id === "DAZED")!;
-    dazed.upgraded.innate = !dazed.base.innate;
+    dazed.upgraded.keywords = ["Ethereal"];
     await writeJsonAndRehash(path, "cards.json", cards);
 
     await expectIssues(path, [/non-upgradable card has different effective upgraded features.*DAZED/i]);
@@ -549,9 +576,9 @@ describe("validateSnapshot", () => {
     await writeJsonAndRehash(path, "cards.json", cards);
 
     await expectIssues(path, [
+      /duplicate-name marker.*ABRASIVE.*expected true/i,
       /duplicate-name marker.*AFTERIMAGE.*expected true/i,
-      /duplicate-name marker.*ALCHEMIZE.*expected true/i,
-      /duplicate-name marker.*APPARITION.*expected absent/i,
+      /duplicate-name marker.*ALCHEMIZE.*expected absent/i,
     ]);
   });
 

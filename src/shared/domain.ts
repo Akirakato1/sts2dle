@@ -1,7 +1,6 @@
 export const FEATURE_ORDER = [
   "cardClass", "cardType", "mana", "rarity",
-  "eternal", "ethereal", "exhaust", "innate",
-  "retain", "sly",
+  "target", "powers", "keywords",
 ] as const;
 
 export type FeatureName = (typeof FEATURE_ORDER)[number];
@@ -17,18 +16,26 @@ export const CARD_RARITIES = [
 ] as const;
 export type CardRarity = (typeof CARD_RARITIES)[number];
 export type ManaValue = number | "X" | "None";
+export const CARD_TARGETS = [
+  "Self", "AnyEnemy", "AllEnemies", "RandomEnemy",
+  "AnyAlly", "AllAllies", "None",
+] as const;
+export type CardTarget = (typeof CARD_TARGETS)[number];
+
+export const CARD_KEYWORDS = [
+  "Eternal", "Ethereal", "Exhaust", "Innate", "Retain", "Sly", "Unplayable",
+] as const;
+export type CardKeyword = (typeof CARD_KEYWORDS)[number];
+export const UNIQUE_POWER = "Unique Buff" as const;
 
 export interface FeatureVector {
   cardClass: CardClass;
   cardType: CardType;
   mana: ManaValue;
   rarity: CardRarity;
-  eternal: boolean;
-  ethereal: boolean;
-  exhaust: boolean;
-  innate: boolean;
-  retain: boolean;
-  sly: boolean;
+  target: CardTarget;
+  powers: string[];
+  keywords: CardKeyword[];
 }
 
 export interface CardIdentity {
@@ -55,7 +62,7 @@ export interface SpriteMap {
 }
 
 export interface SnapshotManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   sourceRevision: string;
   sourceLastModified: string | null;
   fetchedAt: string;

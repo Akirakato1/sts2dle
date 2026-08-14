@@ -5,12 +5,12 @@ import { loadSnapshot as sourceLoadSnapshot, type SpriteAtlasPreloader } from ".
 const card = {
   id: "ALCHEMIZE", name: "Alchemize", hasUpgrade: true, artUrl: "https://art.example/a.png",
   baseCardUrl: "https://cards.example/a.png", upgradedCardUrl: "https://cards.example/a-plus.png",
-  base: { cardClass: "Silent", cardType: "Skill", mana: 1, rarity: "Rare", eternal: false, ethereal: false, exhaust: true, innate: false, retain: false, sly: false },
-  upgraded: { cardClass: "Silent", cardType: "Skill", mana: 0, rarity: "Rare", eternal: false, ethereal: false, exhaust: true, innate: false, retain: false, sly: false },
+  base: { cardClass: "Silent", cardType: "Skill", mana: 1, rarity: "Rare", target: "Self", powers: [], keywords: ["Exhaust"] },
+  upgraded: { cardClass: "Silent", cardType: "Skill", mana: 0, rarity: "Rare", target: "Self", powers: [], keywords: ["Exhaust"] },
 };
 
 const REVISION = "ab".repeat(32);
-const manifest = { schemaVersion: 1, sourceRevision: REVISION, sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00.000Z", generatedAt: "2026-08-12T00:00:00.000Z", cardCount: 1, upgradeCount: 1, baseGroupCount: 1, pairGroupCount: 1, files: {} };
+const manifest = { schemaVersion: 2, sourceRevision: REVISION, sourceLastModified: null, fetchedAt: "2026-08-12T00:00:00.000Z", generatedAt: "2026-08-12T00:00:00.000Z", cardCount: 1, upgradeCount: 1, baseGroupCount: 1, pairGroupCount: 1, files: {} };
 const baseGroups = [{ key: "base", cardIds: ["ALCHEMIZE"] }];
 const pairGroups = [{ key: "pair", cardIds: ["ALCHEMIZE"] }];
 const spriteMap = { candidate: { url: "/candidate.png", width: 1, height: 1, displayScale: 1 }, guess: { url: "/guess.png", width: 1, height: 1, displayScale: 1 }, cards: { ALCHEMIZE: { candidate: { x: 0, y: 0, width: 1, height: 1 }, guess: { x: 0, y: 0, width: 1, height: 1 } } } };
@@ -91,6 +91,10 @@ describe("loadSnapshot", () => {
   test.each([
     ["unplayable feature", { ...card.base, unplayable: true }],
     ["en dash mana", { ...card.base, mana: "\u2013" }],
+    ["duplicate powers", { ...card.base, powers: ["Weak", "Weak"] }],
+    ["unsorted powers", { ...card.base, powers: ["Weak", "Vulnerable"] }],
+    ["duplicate keywords", { ...card.base, keywords: ["Exhaust", "Exhaust"] }],
+    ["out-of-order keywords", { ...card.base, keywords: ["Exhaust", "Ethereal"] }],
   ])("rejects a feature vector with %s", async (_label, base) => {
     const invalidCard = { ...card, base, upgraded: base };
     await expect(loadSnapshot(jsonFetch({

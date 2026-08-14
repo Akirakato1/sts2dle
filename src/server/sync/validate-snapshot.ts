@@ -14,7 +14,14 @@ import type {
   SpriteMap,
   SpriteRect,
 } from "../../shared/domain.js";
-import { CARD_RARITIES, CARD_TYPES, FEATURE_ORDER } from "../../shared/domain.js";
+import {
+  CARD_KEYWORDS,
+  CARD_RARITIES,
+  CARD_TARGETS,
+  CARD_TYPES,
+  FEATURE_ORDER,
+  UNIQUE_POWER,
+} from "../../shared/domain.js";
 import { isCanonicalIsoTimestamp, SOURCE_REVISION_PATTERN } from "../../shared/snapshot-schema.js";
 import type { ActivatedSnapshot } from "./build-snapshot.js";
 import { assertAllowedImageUrl, parseAllowedImageOrigins } from "../images/url-policy.js";
@@ -31,7 +38,8 @@ const REQUIRED_HASHED_FILES = [
 const CARD_CLASSES = new Set(["Ironclad", "Silent", "Defect", "Necrobinder", "Regent", "Neutral", "Event"]);
 const CARD_TYPE_VALUES = new Set(CARD_TYPES);
 const CARD_RARITY_VALUES = new Set(CARD_RARITIES);
-const KEYWORDS = ["eternal", "ethereal", "exhaust", "innate", "retain", "sly"] as const;
+const CARD_TARGET_VALUES = new Set(CARD_TARGETS);
+const CARD_KEYWORD_VALUES = new Set(CARD_KEYWORDS);
 const MAX_ATLAS_DIMENSION = 8192;
 const FALLBACK_WIDTH = 400;
 const FALLBACK_HEIGHT = 520;
@@ -159,7 +167,7 @@ export async function loadActivatedSnapshot(
 }
 
 function validateManifestShape(manifest: Record<string, unknown>, issues: string[]): void {
-  if (manifest.schemaVersion !== 1) issues.push("Unsupported snapshot schema version");
+  if (manifest.schemaVersion !== 2) issues.push("Unsupported snapshot schema version");
   if (typeof manifest.sourceRevision !== "string" || !SOURCE_REVISION_PATTERN.test(manifest.sourceRevision)) {
     issues.push("Invalid manifest field: sourceRevision");
   }
@@ -295,7 +303,15 @@ function featureVectorsEqual(
   left: Record<string, unknown>,
   right: Record<string, unknown>,
 ): boolean {
-  return FEATURE_ORDER.every((feature) => left[feature] === right[feature]);
+  return FEATURE_ORDER.every((feature) => {
+    const leftValue = left[feature];
+    const rightValue = right[feature];
+    if (Array.isArray(leftValue) || Array.isArray(rightValue)) {
+      return Array.isArray(leftValue) && Array.isArray(rightValue) &&
+        leftValue.length === rightValue.length && leftValue.every((value, index) => value === rightValue[index]);
+    }
+    return leftValue === rightValue;
+  });
 }
 
 function validateRevealUrl(
@@ -375,10 +391,51 @@ function validateFeatureVector(
   if (!CARD_TYPE_VALUES.has(String(value.cardType) as (typeof CARD_TYPES)[number])) issues.push(`Unknown card type in ${variant} features for ${cardId}`);
   if (!CARD_RARITY_VALUES.has(String(value.rarity) as (typeof CARD_RARITIES)[number])) issues.push(`Unknown card rarity in ${variant} features for ${cardId}`);
   if (!isMana(value.mana)) issues.push(`Unknown mana value in ${variant} features for ${cardId}`);
-  for (const keyword of KEYWORDS) {
-    if (typeof value[keyword] !== "boolean") {
-      issues.push(`Unknown keyword value ${keyword} in ${variant} features for ${cardId}`);
+  if (!CARD_TARGET_VALUES.has(String(value.target) as (typeof CARD_TARGETS)[number])) {
+    issues.push(`Unknown card target in ${variant} features for ${cardId}`);
+  }
+  validateCanonicalPowers(value.powers, variant, cardId, issues);
+  validateCanonicalKeywords(value.keywords, variant, cardId, issues);
+}
+
+function validateCanonicalPowers(
+  value: unknown,
+  variant: "base" | "upgraded",
+  cardId: string,
+  issues: string[],
+): void {
+  if (!Array.isArray(value) || !value.every((power) => typeof power === "string" && power.length > 0)) {
+    issues.push(`Invalid powers in ${variant} features for ${cardId}`);
+    return;
+  }
+  if (new Set(value).size !== value.length) issues.push(`Duplicate powers in ${variant} features for ${cardId}`);
+  const recurring = value.filter((power) => power !== UNIQUE_POWER);
+  const expected = [...recurring].sort((left, right) => left.localeCompare(right, "en-US"));
+  if (value.includes(UNIQUE_POWER)) expected.push(UNIQUE_POWER);
+  if (value.length !== expected.length || value.some((power, index) => power !== expected[index])) {
+    issues.push(`Non-canonical powers in ${variant} features for ${cardId}`);
+  }
+}
+
+function validateCanonicalKeywords(
+  value: unknown,
+  variant: "base" | "upgraded",
+  cardId: string,
+  issues: string[],
+): void {
+  if (!Array.isArray(value)) {
+    issues.push(`Invalid keywords in ${variant} features for ${cardId}`);
+    return;
+  }
+  for (const keyword of value) {
+    if (!CARD_KEYWORD_VALUES.has(String(keyword) as (typeof CARD_KEYWORDS)[number])) {
+      issues.push(`Unknown keyword ${String(keyword).toLowerCase()} in ${variant} features for ${cardId}`);
     }
+  }
+  if (new Set(value).size !== value.length) issues.push(`Duplicate keywords in ${variant} features for ${cardId}`);
+  const expected = CARD_KEYWORDS.filter((keyword) => value.includes(keyword));
+  if (value.length !== expected.length || value.some((keyword, index) => keyword !== expected[index])) {
+    issues.push(`Non-canonical keywords in ${variant} features for ${cardId}`);
   }
 }
 
@@ -687,7 +744,24 @@ function isFeatureVector(value: unknown): value is FeatureVector {
     FEATURE_ORDER.every((feature) => Object.hasOwn(value, feature)) &&
     CARD_CLASSES.has(String(value.cardClass)) && CARD_TYPE_VALUES.has(String(value.cardType) as (typeof CARD_TYPES)[number]) &&
     CARD_RARITY_VALUES.has(String(value.rarity) as (typeof CARD_RARITIES)[number]) && isMana(value.mana) &&
-    KEYWORDS.every((keyword) => typeof value[keyword] === "boolean");
+    CARD_TARGET_VALUES.has(String(value.target) as (typeof CARD_TARGETS)[number]) &&
+    isCanonicalPowerArray(value.powers) && isCanonicalKeywordArray(value.keywords);
+}
+
+function isCanonicalPowerArray(value: unknown): value is string[] {
+  if (!Array.isArray(value) || !value.every((power) => typeof power === "string" && power.length > 0)) return false;
+  if (new Set(value).size !== value.length) return false;
+  const recurring = value.filter((power) => power !== UNIQUE_POWER);
+  const expected = [...recurring].sort((left, right) => left.localeCompare(right, "en-US"));
+  if (value.includes(UNIQUE_POWER)) expected.push(UNIQUE_POWER);
+  return value.length === expected.length && value.every((power, index) => power === expected[index]);
+}
+
+function isCanonicalKeywordArray(value: unknown): value is (typeof CARD_KEYWORDS)[number][] {
+  if (!Array.isArray(value) || !value.every((keyword) => CARD_KEYWORD_VALUES.has(String(keyword) as (typeof CARD_KEYWORDS)[number]))) return false;
+  if (new Set(value).size !== value.length) return false;
+  const expected = CARD_KEYWORDS.filter((keyword) => value.includes(keyword));
+  return value.length === expected.length && value.every((keyword, index) => keyword === expected[index]);
 }
 
 function isMana(value: unknown): boolean {
