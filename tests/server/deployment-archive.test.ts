@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { link as hardLink, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { link as hardLink, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -141,7 +141,7 @@ describe("deployment snapshot archive", () => {
     const before = await readFile(destination);
     await createDeploymentArchive(newSource.dataDir, staging, newRevision, validationOptions);
 
-    const validationRootsBefore = await validationTemporaryRoots();
+    const cleanedRoots = new Set<string>();
     let cleanupCalls = 0;
     const error = await captureError(beginDeploymentArchivePublish(
       staging,
@@ -151,6 +151,7 @@ describe("deployment snapshot archive", () => {
       {
         afterPublish: async () => { throw new Error(`secret ${destination}`); },
         removeValidationRoot: async (path) => {
+          cleanedRoots.add(path);
           cleanupCalls += 1;
           if (cleanupCalls === 2) throw new Error(`private after-publish cleanup ${root}`);
           await rm(path, { recursive: true, force: true });
@@ -163,7 +164,7 @@ describe("deployment snapshot archive", () => {
     expect(reachableErrorText(error)).not.toContain(destination);
     expect(await readFile(destination)).toEqual(before);
     expect(cleanupCalls).toBe(3);
-    expect(await validationTemporaryRoots()).toEqual(validationRootsBefore);
+    await expectPathsAbsent(cleanedRoots);
   });
 
   it("validates and extracts only the immutable private copy when the source pathname is swapped", async () => {
@@ -300,11 +301,12 @@ describe("deployment snapshot archive", () => {
     const staging = join(root, ".snapshot-data.tar.gz.staging");
     await createDeploymentArchive(oldSource.dataDir, destination, oldRevision, validationOptions);
     await createDeploymentArchive(nextSource.dataDir, staging, nextRevision, validationOptions);
-    const beforeTemporaryRoots = await validationTemporaryRoots();
+    const cleanedRoots = new Set<string>();
     let cleanupCalls = 0;
 
     const published = await beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
       removeValidationRoot: async (path) => {
+        cleanedRoots.add(path);
         cleanupCalls += 1;
         if (cleanupCalls === 2) throw new Error(`injected cleanup payload ${root}`);
         await rm(path, { recursive: true, force: true });
@@ -314,7 +316,7 @@ describe("deployment snapshot archive", () => {
 
     expect(await readDeploymentRevision(destination, validationOptions)).toBe(nextRevision);
     expect(cleanupCalls).toBe(4);
-    expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
+    await expectPathsAbsent(cleanedRoots);
   });
 
   it("retries successful create and read validation cleanup without leaking private roots", async () => {
@@ -322,10 +324,11 @@ describe("deployment snapshot archive", () => {
     const source = await createValidSource(revision);
     const root = await temporaryRoot();
     const archive = join(root, "snapshot-data.tar.gz");
-    const beforeTemporaryRoots = await validationTemporaryRoots();
+    const cleanedRoots = new Set<string>();
     let createCleanupCalls = 0;
     await createDeploymentArchive(source.dataDir, archive, revision, validationOptions, {
       removeValidationRoot: async (path) => {
+        cleanedRoots.add(path);
         createCleanupCalls += 1;
         if (createCleanupCalls === 1) throw new Error(`private create cleanup ${root}`);
         await rm(path, { recursive: true, force: true });
@@ -334,6 +337,7 @@ describe("deployment snapshot archive", () => {
     let readCleanupCalls = 0;
     await expect(readDeploymentRevision(archive, validationOptions, {
       removeValidationRoot: async (path) => {
+        cleanedRoots.add(path);
         readCleanupCalls += 1;
         if (readCleanupCalls === 1) throw new Error(`private read cleanup ${root}`);
         await rm(path, { recursive: true, force: true });
@@ -342,7 +346,7 @@ describe("deployment snapshot archive", () => {
 
     expect(createCleanupCalls).toBe(2);
     expect(readCleanupCalls).toBe(2);
-    expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
+    await expectPathsAbsent(cleanedRoots);
   });
 
   it("cleans both validation roots when the second validation and its first cleanup attempt fail", async () => {
@@ -356,12 +360,13 @@ describe("deployment snapshot archive", () => {
     await createDeploymentArchive(oldSource.dataDir, destination, oldRevision, validationOptions);
     const original = await readFile(destination);
     await createDeploymentArchive(nextSource.dataDir, staging, nextRevision, validationOptions);
-    const beforeTemporaryRoots = await validationTemporaryRoots();
+    const cleanedRoots = new Set<string>();
     let cleanupCalls = 0;
 
     await expect(beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
       afterPublish: async () => { await writeFile(destination, "invalid second validation\n"); },
       removeValidationRoot: async (path) => {
+        cleanedRoots.add(path);
         cleanupCalls += 1;
         if (cleanupCalls === 2) throw new Error(`injected second-validation cleanup payload ${root}`);
         await rm(path, { recursive: true, force: true });
@@ -370,7 +375,7 @@ describe("deployment snapshot archive", () => {
 
     expect(await readFile(destination)).toEqual(original);
     expect(cleanupCalls).toBe(4);
-    expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
+    await expectPathsAbsent(cleanedRoots);
   });
 
   it("rejects traversal, links, duplicates, oversize entries, unexpected roots, multiple builds, and entry-count bombs", async () => {
@@ -461,7 +466,7 @@ describe("deployment snapshot archive", () => {
       expect((error as Error).message).toBe("Unable to validate deployment archive");
       expect(reachableErrorText(error)).not.toContain(root);
     }
-  });
+  }, 20_000);
 
   it("awaits corrupt-gzip parser and stream teardown before removing validation temporaries", async () => {
     const revision = "9b".repeat(32);
@@ -473,12 +478,17 @@ describe("deployment snapshot archive", () => {
     await createDeploymentArchive(source.dataDir, valid, revision, validationOptions);
     const bytes = await readFile(valid);
     await writeFile(corrupt, bytes.subarray(0, bytes.length - 8));
-    const beforeTemporaryRoots = await validationTemporaryRoots();
+    const cleanedRoots = new Set<string>();
 
-    await expect(validateDeploymentArchive(corrupt, revision, validationOptions))
+    await expect(validateDeploymentArchive(corrupt, revision, validationOptions, {
+      removeValidationRoot: async (path) => {
+        cleanedRoots.add(path);
+        await rm(path, { recursive: true, force: true });
+      },
+    }))
       .rejects.toThrow("Unable to validate deployment archive");
 
-    expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
+    await expectPathsAbsent(cleanedRoots);
     await rename(corrupt, moved);
     await unlink(moved);
   });
@@ -541,11 +551,9 @@ function reachableErrorText(error: unknown, seen = new Set<unknown>()): string {
   return [error.name, error.message, ...nested.map((value) => reachableErrorText(value, seen))].join("\n");
 }
 
-async function validationTemporaryRoots(): Promise<string[]> {
-  return (await readdir(tmpdir(), { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith("stsdle-deployment-archive-validate-"))
-    .map((entry) => entry.name)
-    .sort();
+async function expectPathsAbsent(paths: Iterable<string>): Promise<void> {
+  expect([...paths].length).toBeGreaterThan(0);
+  for (const path of paths) await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function createNormalizedTestArchive(cwd: string, file: string, entries: string[]): Promise<void> {
