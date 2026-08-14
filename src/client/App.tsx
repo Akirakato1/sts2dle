@@ -256,6 +256,13 @@ function RoundGame({
 
 function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
   const game = useGame(snapshot);
+  if (game.round?.mode === "practice" && (
+    typeof game.setPracticeFilterEnabled !== "function"
+    || typeof game.setPracticeFilterGroupDisabled !== "function"
+    || typeof game.setPracticeFilterValue !== "function"
+  )) {
+    throw new Error("Practice filter actions are unavailable.");
+  }
   const activeMode = game.activeMode ?? game.round?.mode ?? "daily";
   const modeLabels: Readonly<Record<PlayMode, string>> = {
     daily: "Daily",
@@ -280,9 +287,9 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
       onConsumeFilter={game.consumeFilter}
       onConsumeNegation={game.consumeNegation}
       onCandidateVisibility={game.setCandidateVisibility ?? ignoreCandidateVisibility}
-      onPracticeFilterEnabled={game.setPracticeFilterEnabled ?? ignoreCandidateVisibility}
-      onPracticeFilterGroupDisabled={game.setPracticeFilterGroupDisabled ?? ignoreCandidateVisibility}
-      onPracticeFilterValue={game.setPracticeFilterValue ?? ignoreCandidateVisibility}
+      onPracticeFilterEnabled={game.setPracticeFilterEnabled}
+      onPracticeFilterGroupDisabled={game.setPracticeFilterGroupDisabled}
+      onPracticeFilterValue={game.setPracticeFilterValue}
       onForfeitPractice={game.forfeitPractice ?? ignoreCandidateVisibility}
       onNextRound={game.nextPracticeRound ?? game.nextRound}
     />}
