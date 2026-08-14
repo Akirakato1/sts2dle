@@ -149,6 +149,7 @@ export function GameGuide(): React.JSX.Element {
               <li><GuideRowIcon kind="candidates" /><span>Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.</span></li>
               <li><GuideRowIcon kind="controls" /><span>Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.</span></li>
               <li><GuideRowIcon kind="controls" /><span>Ordinary values use OR; keywords and enabled groups use AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Keyword None matches a form with no keywords and clears other keyword choices.</span></li>
             </ul>
           </section>
           <section>

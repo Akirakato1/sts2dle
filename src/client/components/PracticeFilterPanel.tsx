@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 
-import type {
-  PracticeFilterGroupName,
-  PracticeFilterOptions,
-  PracticeFilterState,
-  PracticeFilterValue,
+import {
+  KEYWORD_FILTER_NONE,
+  type PracticeFilterGroupName,
+  type PracticeFilterOptions,
+  type PracticeFilterState,
+  type PracticeFilterValue,
 } from "../game/practice-filter.js";
 import { FEATURE_LABELS } from "./FeatureTile.js";
 
@@ -32,6 +33,7 @@ const GROUPS: readonly GroupDefinition[] = [
 ];
 
 function formatValue(group: PracticeFilterGroupName, value: PracticeFilterValue): string {
+  if (value === KEYWORD_FILTER_NONE) return "None";
   if (group === "keywords") return FEATURE_LABELS[value as keyof typeof FEATURE_LABELS];
   return String(value);
 }
@@ -185,6 +187,7 @@ export function PracticeFilterPanel({
           <li>An enabled group with nothing checked matches no cards.</li>
           <li>Class, Type, Mana, and Rarity use <strong>OR</strong> within each group.</li>
           <li>Keywords use <strong>AND</strong>: a card form must have every checked keyword.</li>
+          <li><strong>None</strong> means that form has no keywords and clears keyword choices.</li>
           <li>Enabled groups combine with <strong>AND</strong>.</li>
           <li>Base and upgraded forms are evaluated separately; one complete form must satisfy every enabled group.</li>
         </ul>

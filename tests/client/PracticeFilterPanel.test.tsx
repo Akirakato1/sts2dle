@@ -32,7 +32,7 @@ const OPTIONS: PracticeFilterOptions = {
   cardType: ["Attack", "Skill"],
   mana: [0, 1, "X", "None"],
   rarity: ["Common", "Rare"],
-  keywords: ["ethereal", "innate"],
+  keywords: ["ethereal", "innate", "none"],
 };
 
 function enabledState(): PracticeFilterState {
@@ -88,6 +88,8 @@ describe("PracticeFilterPanel checklists", () => {
     }
     expect(within(groups[2]!).getAllByRole("checkbox").map((input) => input.getAttribute("aria-label")))
       .toEqual(["Disable", "0", "1", "X", "None"]);
+    expect(within(groups[4]!).getAllByRole("checkbox").map((input) => input.getAttribute("aria-label")))
+      .toEqual(["Disable", "Ethereal", "Innate", "None"]);
   });
 
   test("retains selections while disabled and only disables value controls", () => {
@@ -110,10 +112,12 @@ describe("PracticeFilterPanel checklists", () => {
     fireEvent.click(within(screen.getByRole("group", { name: "Class" })).getByRole("checkbox", { name: "Disable" }));
     fireEvent.click(within(screen.getByRole("group", { name: "Class" })).getByRole("checkbox", { name: "Ironclad" }));
     fireEvent.click(within(screen.getByRole("group", { name: "Keywords" })).getByRole("checkbox", { name: "Innate" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Keywords" })).getByRole("checkbox", { name: "None" }));
 
     expect(onGroupDisabledChange).toHaveBeenCalledWith("cardClass", true);
     expect(onValueChange).toHaveBeenNthCalledWith(1, "cardClass", "Ironclad", false);
     expect(onValueChange).toHaveBeenNthCalledWith(2, "keywords", "innate", false);
+    expect(onValueChange).toHaveBeenNthCalledWith(3, "keywords", "none", true);
   });
 
   test("warns when an enabled group has no selected values", () => {
@@ -147,6 +151,7 @@ describe("PracticeFilterPanel help", () => {
     expect(dialog).toHaveTextContent("An enabled group with nothing checked matches no cards");
     expect(dialog).toHaveTextContent("Class, Type, Mana, and Rarity use OR within each group");
     expect(dialog).toHaveTextContent("Keywords use AND");
+    expect(dialog).toHaveTextContent("None means that form has no keywords and clears keyword choices");
     expect(dialog).toHaveTextContent("Enabled groups combine with AND");
     expect(dialog).toHaveTextContent("Base and upgraded forms are evaluated separately");
 

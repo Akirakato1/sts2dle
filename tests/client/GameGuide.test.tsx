@@ -41,6 +41,7 @@ describe("GameGuide", () => {
         "Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.",
         "Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.",
         "Ordinary values use OR; keywords and enabled groups use AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.",
+        "Keyword None matches a form with no keywords and clears other keyword choices.",
       ],
       "Name hints": [
         "After 5 wrong guesses, word-length lines appear.",
@@ -82,7 +83,7 @@ describe("GameGuide", () => {
         .toEqual(expected.icons);
       expect(row.querySelector(":scope > span:last-child")).toHaveTextContent(expected.label);
     }
-    expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(15);
+    expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(16);
     expect(dialog).not.toHaveTextContent("Hardcore Practice");
     expect(view.container.querySelector("details")).toBeNull();
   });
