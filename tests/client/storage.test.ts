@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 import { createRoundState, type RoundState } from "../../src/client/game/game-reducer.js";
+import { createDefaultPracticeFilter } from "../../src/client/game/practice-filter.js";
 import {
   CURRENT_ROUND_KEYS,
   CURRENT_ROUND_VERSION,
@@ -89,6 +90,12 @@ function round(mode: RoundState["mode"], status: RoundState["status"] = "playing
     status,
     terminalGuessCount: status === "playing" ? null : guesses.length,
     assistance,
+    practiceFilter: mode === "practice" ? {
+      ...createDefaultPracticeFilter(),
+      enabled: true,
+      cardClass: { disabled: false, selected: ["Silent"] },
+      keywords: { disabled: false, selected: ["eternal"] },
+    } : null,
   });
 }
 
@@ -121,16 +128,14 @@ describe("current round storage", () => {
       practice: "stsdle:round:practice:v1",
     });
     expect(CURRENT_ROUND_VERSION).toBe(4);
+    expect(PRACTICE_RULESET_VERSION).toBe("practice-v2");
   });
 
   test.each(["daily", "hardcore-daily", "practice"] as const)("round-trips complete %s state", (mode) => {
     const storage = new MemoryStorage();
     const source = round(mode, mode === "practice" ? "forfeited" : "won");
     saveCurrentRound(storage, identities[mode], source);
-    expect(loadCurrentRound(storage, identities[mode], cardsById, pairGroupsByKey, answer)).toEqual({
-      round: source,
-      practiceHardcoreChoice: mode === "practice" ? source.hardcore : null,
-    });
+    expect(loadCurrentRound(storage, identities[mode], cardsById, pairGroupsByKey, answer)).toEqual({ round: source });
     expect(storage.getItem(CURRENT_ROUND_KEYS[mode])).not.toContain("error");
   });
 
@@ -138,27 +143,80 @@ describe("current round storage", () => {
     const storage = new MemoryStorage();
     const source = round("practice", "won");
     saveCurrentRound(storage, identities.practice, source);
-    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer)).toEqual({
-      round: source,
-      practiceHardcoreChoice: source.hardcore,
-    });
+    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer)).toEqual({ round: source });
   });
 
-  test("round-trips the pending next Practice Hardcore choice in the fixed Practice envelope", () => {
+  test("new envelopes omit the obsolete pending Practice Hardcore choice", () => {
     const storage = new MemoryStorage();
     const source = round("practice", "forfeited");
-
-    saveCurrentRound(storage, identities.practice, source, true);
-
-    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer))
-      .toEqual({ round: source, practiceHardcoreChoice: true });
-    expect(stored(storage, "practice").practiceHardcoreChoice).toBe(true);
+    saveCurrentRound(storage, identities.practice, source);
+    expect(stored(storage, "practice")).not.toHaveProperty("practiceHardcoreChoice");
   });
 
-  test("rejects a missing or malformed pending Practice choice without touching other storage", () => {
-    assertRejected("practice", (value) => { delete value.practiceHardcoreChoice; }, round("practice", "forfeited"));
-    assertRejected("practice", (value) => { value.practiceHardcoreChoice = "yes"; }, round("practice", "forfeited"));
-    assertRejected("practice", (value) => { value.practiceHardcoreChoice = !value.round.hardcore; }, round("practice"));
+  test.each(["daily", "hardcore-daily"] as const)("loads a literal pre-filter %s envelope", (mode) => {
+    const storage = new MemoryStorage();
+    const source = round(mode);
+    const legacyEnvelope = {
+      version: 4,
+      mode,
+      sourceRevision: "abc",
+      ruleset: identities[mode].ruleset,
+      utcDate: "2026-08-12",
+      practiceHardcoreChoice: null,
+      round: {
+        mode,
+        hardcore: source.hardcore,
+        roundId: source.roundId,
+        hintSeed: source.hintSeed,
+        answer: source.answer,
+        guesses: source.guesses,
+        status: source.status,
+        terminalGuessCount: source.terminalGuessCount,
+        assistance: source.assistance,
+      },
+    };
+    storage.setItem(CURRENT_ROUND_KEYS[mode], JSON.stringify(legacyEnvelope));
+    expect(loadCurrentRound(storage, identities[mode], cardsById, pairGroupsByKey, answer)?.round)
+      .toEqual({ ...source, practiceFilter: null });
+  });
+
+  test("invalidates legacy Practice only, preserving both Dailies, stats, and unrelated data", () => {
+    const storage = new MemoryStorage();
+    const legacy = round("practice");
+    storage.setItem(CURRENT_ROUND_KEYS.practice, JSON.stringify({
+      version: 4,
+      mode: "practice",
+      sourceRevision: "abc",
+      ruleset: "practice-v1",
+      utcDate: null,
+      practiceHardcoreChoice: true,
+      round: { ...legacy, hardcore: true, assistance: null, practiceFilter: undefined, error: undefined },
+    }));
+    storage.setItem(CURRENT_ROUND_KEYS.daily, "daily progress");
+    storage.setItem(CURRENT_ROUND_KEYS["hardcore-daily"], "hardcore progress");
+    storage.setItem(DAILY_STATS_KEY, "daily stats");
+    storage.setItem(HARDCORE_DAILY_STATS_KEY, "hardcore stats");
+    storage.setItem("unrelated:key", "keep");
+
+    expect(loadCurrentRound(storage, identities.practice, cardsById, pairGroupsByKey, answer)).toBeNull();
+    expect(storage.getItem(CURRENT_ROUND_KEYS.practice)).toBeNull();
+    expect(storage.getItem(CURRENT_ROUND_KEYS.daily)).toBe("daily progress");
+    expect(storage.getItem(CURRENT_ROUND_KEYS["hardcore-daily"])).toBe("hardcore progress");
+    expect(storage.getItem(DAILY_STATS_KEY)).toBe("daily stats");
+    expect(storage.getItem(HARDCORE_DAILY_STATS_KEY)).toBe("hardcore stats");
+    expect(storage.getItem("unrelated:key")).toBe("keep");
+  });
+
+  test("strictly validates complete Practice filter groups and canonical snapshot values", () => {
+    assertRejected("practice", (value) => { value.round.practiceFilter.extra = true; });
+    assertRejected("practice", (value) => { delete value.round.practiceFilter.rarity; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.cardClass.selected = ["Silent", "Silent"]; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.cardClass.selected = [false]; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.cardClass.selected = ["Regent"]; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.mana.selected = [true]; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.mana.selected = [99]; });
+    assertRejected("practice", (value) => { value.round.practiceFilter.keywords.selected = ["retain"]; });
+    assertRejected("daily", (value) => { value.round.practiceFilter = createDefaultPracticeFilter(); });
   });
 
   test("rejects strict envelope identity and mode inconsistencies", () => {

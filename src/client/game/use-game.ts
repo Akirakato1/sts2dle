@@ -4,7 +4,8 @@ import type { LoadedSnapshot } from "../api/load-snapshot.js";
 import { createDailyRandom, createPracticeRandom } from "../../shared/random.js";
 import { selectAnswer, selectDistinctAnswer, type SelectedAnswer } from "../../shared/selection.js";
 import type { CandidateCategory, ConstraintOrbTarget, RevealOrbTarget } from "./assistance.js";
-import { createRoundState, gameReducer, isPracticeSettingsEditable, type GameAction, type PlayMode, type RoundState } from "./game-reducer.js";
+import { createRoundState, gameReducer, type GameAction, type PlayMode, type RoundState } from "./game-reducer.js";
+import type { PracticeFilterGroupName, PracticeFilterValue } from "./practice-filter.js";
 import { preloadAnswerImages } from "./preload-images.js";
 import {
   DAILY_RULESET_VERSION,
@@ -26,14 +27,15 @@ export interface UseGameResult {
   roundToken: number;
   dailyUtcDate: string;
   error: string | null;
-  practiceHardcoreChoice: boolean;
   submit(cardId: string): void;
   setMode(mode: PlayMode): void;
   consumeReveal(target: RevealOrbTarget): void;
   consumeFilter(target: ConstraintOrbTarget): void;
   consumeNegation(target: ConstraintOrbTarget): void;
   setCandidateVisibility(category: CandidateCategory, visible: boolean): void;
-  setPracticeHardcoreChoice(hardcore: boolean): void;
+  setPracticeFilterEnabled(enabled: boolean): void;
+  setPracticeFilterGroupDisabled(group: PracticeFilterGroupName, disabled: boolean): void;
+  setPracticeFilterValue(group: PracticeFilterGroupName, value: PracticeFilterValue, selected: boolean): void;
   forfeitPractice(): void;
   nextPracticeRound(): void;
   retryActiveMode(): void;
@@ -52,16 +54,14 @@ interface HookState {
   rounds: ReadonlyMap<PlayMode, RoundState>;
   errors: Readonly<Record<PlayMode, string | null>>;
   roundToken: number;
-  practiceHardcoreChoice: boolean;
 }
 
 type HookAction =
   | { type: "switch-mode"; mode: PlayMode }
-  | { type: "round-ready"; mode: PlayMode; round: RoundState; practiceHardcoreChoice?: boolean }
+  | { type: "round-ready"; mode: PlayMode; round: RoundState }
   | { type: "round-failed"; mode: PlayMode; error: string }
   | { type: "invalidate-dailies" }
-  | { type: "transition"; mode: PlayMode; previous: RoundState; round: RoundState }
-  | { type: "set-practice-choice"; hardcore: boolean };
+  | { type: "transition"; mode: PlayMode; previous: RoundState; round: RoundState };
 
 const INITIAL_ERRORS: Readonly<Record<PlayMode, string | null>> = {
   daily: null,
@@ -90,9 +90,6 @@ function hookReducer(state: HookState, action: HookAction): HookState {
         rounds,
         errors,
         roundToken: state.roundToken + (replacesActiveRound || completesInitialLoad ? 1 : 0),
-        practiceHardcoreChoice: action.mode === "practice" && previous === undefined
-          ? action.practiceHardcoreChoice ?? action.round.hardcore
-          : state.practiceHardcoreChoice,
       };
     }
     case "round-failed":
@@ -113,9 +110,6 @@ function hookReducer(state: HookState, action: HookAction): HookState {
     case "transition":
       if (state.rounds.get(action.mode) !== action.previous || action.previous === action.round) return state;
       return { ...state, rounds: new Map(state.rounds).set(action.mode, action.round) };
-    case "set-practice-choice":
-      if (state.practiceHardcoreChoice === action.hardcore) return state;
-      return { ...state, practiceHardcoreChoice: action.hardcore };
   }
 }
 
@@ -146,7 +140,6 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     rounds: new Map<PlayMode, RoundState>(),
     errors: INITIAL_ERRORS,
     roundToken: 0,
-    practiceHardcoreChoice: false,
   });
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -158,7 +151,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
   const activeUtcDateRef = useRef(activeUtcDate);
   const generations = useRef<Record<PlayMode, number>>({ daily: 0, "hardcore-daily": 0, practice: 0 });
   const pending = useRef<Record<PlayMode, boolean>>({ daily: false, "hardcore-daily": false, practice: false });
-  const persistedRounds = useRef(new Map<PlayMode, { round: RoundState; practiceHardcoreChoice: boolean | null }>());
+  const persistedRounds = useRef(new Map<PlayMode, RoundState>());
   const recordedCompletions = useRef(new Set<string>());
   const dailyAnswerPromises = useRef(new Map<string, Promise<SelectedAnswer>>());
   const groups = useMemo(() => ({
@@ -222,7 +215,6 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
 
   const startPractice = useCallback(async (
     forceNew: boolean,
-    hardcore: boolean,
     expectedTerminal?: Readonly<{ roundId: string; status: "won" | "forfeited" }>,
   ) => {
     const mode = "practice" as const;
@@ -247,7 +239,6 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
             type: "round-ready",
             mode,
             round: restored.round,
-            practiceHardcoreChoice: restored.practiceHardcoreChoice ?? restored.round.hardcore,
           });
           return;
         }
@@ -261,7 +252,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
         mode,
         round: createRoundState({
           mode,
-          hardcore,
+          hardcore: false,
           roundId: `practice:${uuid}`,
           hintSeed: uuid,
           answer,
@@ -276,7 +267,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
 
   useEffect(() => {
     if (storage) removeLegacyCurrentRoundKeys(storage);
-    void startPractice(false, false);
+    void startPractice(false);
     return () => {
       generations.current.practice += 1;
       pending.current.practice = false;
@@ -299,11 +290,10 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     for (const mode of ["daily", "hardcore-daily", "practice"] as const) {
       const round = state.rounds.get(mode);
       if (!round) continue;
-      const practiceHardcoreChoice = mode === "practice" ? state.practiceHardcoreChoice : null;
       const persisted = persistedRounds.current.get(mode);
-      if (persisted?.round === round && persisted.practiceHardcoreChoice === practiceHardcoreChoice) continue;
-      saveCurrentRound(storage, identityFor(mode, revision, activeUtcDate), round, practiceHardcoreChoice);
-      persistedRounds.current.set(mode, { round, practiceHardcoreChoice });
+      if (persisted === round) continue;
+      saveCurrentRound(storage, identityFor(mode, revision, activeUtcDate), round);
+      persistedRounds.current.set(mode, round);
       if (mode === "practice" || round.status !== "won") continue;
       const completionKey = `${mode}:${round.roundId}`;
       if (recordedCompletions.current.has(completionKey)) continue;
@@ -314,7 +304,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
       );
       recordedCompletions.current.add(completionKey);
     }
-  }, [activeUtcDate, revision, state.practiceHardcoreChoice, state.rounds, storage]);
+  }, [activeUtcDate, revision, state.rounds, storage]);
 
   const activeRound = state.rounds.get(state.activeMode) ?? null;
   useEffect(() => {
@@ -374,31 +364,37 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     applyToActive({ type: "submit", cardId, cardsById: snapshot.cardsById });
   }, [applyToActive, snapshot.cardsById]);
 
+  const setPracticeFilterEnabled = useCallback((enabled: boolean) => {
+    applyToActive({ type: "set-practice-filter-enabled", enabled });
+  }, [applyToActive]);
+
+  const setPracticeFilterGroupDisabled = useCallback((group: PracticeFilterGroupName, disabled: boolean) => {
+    applyToActive({ type: "set-practice-filter-group-disabled", group, disabled });
+  }, [applyToActive]);
+
+  const setPracticeFilterValue = useCallback((
+    group: PracticeFilterGroupName,
+    value: PracticeFilterValue,
+    selected: boolean,
+  ) => {
+    applyToActive({ type: "set-practice-filter-value", group, value, selected });
+  }, [applyToActive]);
+
   const setMode = useCallback((mode: PlayMode) => {
     const before = stateRef.current;
     dispatch({ type: "switch-mode", mode });
     if (before.rounds.has(mode) && before.errors[mode] === null) return;
     if (pending.current[mode] && before.errors[mode] === null) return;
-    if (mode === "practice") void startPractice(false, before.practiceHardcoreChoice);
+    if (mode === "practice") void startPractice(false);
     else void startDaily(mode, activeUtcDate);
   }, [activeUtcDate, dispatch, startDaily, startPractice]);
-
-  const setPracticeHardcoreChoice = useCallback((hardcore: boolean) => {
-    const current = stateRef.current;
-    const previous = current.rounds.get("practice");
-    if (previous?.status === "playing" && !isPracticeSettingsEditable(previous)) return;
-    dispatch({ type: "set-practice-choice", hardcore });
-    if (!previous) return;
-    const round = gameReducer(previous, { type: "set-practice-hardcore", hardcore });
-    if (round !== previous) dispatch({ type: "transition", mode: "practice", previous, round });
-  }, [dispatch]);
 
   const nextPracticeRound = useCallback(() => {
     const current = stateRef.current;
     if (current.activeMode !== "practice") return;
     const terminal = current.rounds.get("practice");
     if (!terminal || terminal.status === "playing") return;
-    return startPractice(true, current.practiceHardcoreChoice, {
+    return startPractice(true, {
       roundId: terminal.roundId,
       status: terminal.status,
     });
@@ -414,11 +410,11 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     }
     const practice = current.rounds.get("practice");
     if (!practice) {
-      void startPractice(false, current.practiceHardcoreChoice);
+      void startPractice(false);
       return;
     }
     if (practice.status !== "playing") {
-      void startPractice(true, current.practiceHardcoreChoice, {
+      void startPractice(true, {
         roundId: practice.roundId,
         status: practice.status,
       });
@@ -430,14 +426,15 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     roundToken: state.roundToken,
     dailyUtcDate: activeUtcDate,
     error: state.errors[state.activeMode],
-    practiceHardcoreChoice: state.practiceHardcoreChoice,
     submit,
     setMode,
     consumeReveal: (target: RevealOrbTarget) => applyToActive({ type: "consume-reveal", target }),
     consumeFilter: (target: ConstraintOrbTarget) => applyToActive({ type: "consume-filter", target }),
     consumeNegation: (target: ConstraintOrbTarget) => applyToActive({ type: "consume-negation", target }),
     setCandidateVisibility: (category: CandidateCategory, visible: boolean) => applyToActive({ type: "set-candidate-visibility", category, visible }),
-    setPracticeHardcoreChoice,
+    setPracticeFilterEnabled,
+    setPracticeFilterGroupDisabled,
+    setPracticeFilterValue,
     forfeitPractice: () => applyToActive({ type: "forfeit-practice" }),
     nextPracticeRound,
     retryActiveMode,

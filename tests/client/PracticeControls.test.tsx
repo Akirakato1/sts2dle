@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { PracticeControls } from "../../src/client/components/PracticeControls.js";
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 import type { RoundState } from "../../src/client/game/game-reducer.js";
+import { createDefaultPracticeFilter } from "../../src/client/game/practice-filter.js";
 
 afterEach(cleanup);
 
@@ -20,84 +21,50 @@ const playingRound: RoundState = {
   terminalGuessCount: null,
   error: null,
   assistance: createDefaultAssistance(),
+  practiceFilter: createDefaultPracticeFilter(),
 };
 
 describe("PracticeControls", () => {
-  test("allows the Hardcore choice and forfeit only while an editable Practice round is interactive", () => {
-    const onHardcoreChange = vi.fn();
+  test("offers End game while a Practice round is playing", () => {
     const onForfeit = vi.fn();
     render(<PracticeControls
       round={playingRound}
-      selectedHardcore={false}
-      settingsEditable
       disabled={false}
-      onHardcoreChange={onHardcoreChange}
       onForfeit={onForfeit}
       onNextRound={vi.fn()}
     />);
 
-    const toggle = screen.getByRole("checkbox", { name: "Hardcore Practice" });
-    expect(toggle).toBeEnabled();
-    fireEvent.click(toggle);
-    expect(onHardcoreChange).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("checkbox", { name: "Hardcore Practice" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "End game" }));
     expect(onForfeit).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "New Practice Round" })).not.toBeInTheDocument();
   });
 
-  test("locks the setting after the first accepted guess or orb and blocks forfeit during reveal or drag", () => {
+  test("blocks forfeit during reveal or drag", () => {
     const onForfeit = vi.fn();
     render(<PracticeControls
       round={{ ...playingRound, guesses: [{ cardId: "guess", results: [] }] }}
-      selectedHardcore={false}
-      settingsEditable={false}
       disabled
-      onHardcoreChange={vi.fn()}
       onForfeit={onForfeit}
       onNextRound={vi.fn()}
     />);
 
-    expect(screen.getByRole("checkbox", { name: "Hardcore Practice" })).toBeDisabled();
-    expect(screen.getByText(/locked after your first accepted guess or orb/i)).toBeVisible();
     const endGame = screen.getByRole("button", { name: "End game" });
     expect(endGame).toBeDisabled();
     fireEvent.click(endGame);
     expect(onForfeit).not.toHaveBeenCalled();
   });
 
-  test("uses interaction disabling to block forfeit without replacing the settings-editable gate", () => {
-    render(<PracticeControls
-      round={playingRound}
-      selectedHardcore={false}
-      settingsEditable
-      disabled
-      onHardcoreChange={vi.fn()}
-      onForfeit={vi.fn()}
-      onNextRound={vi.fn()}
-    />);
-
-    expect(screen.getByRole("checkbox", { name: "Hardcore Practice" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "End game" })).toBeDisabled();
-  });
-
-  test("keeps the next-round Hardcore choice editable after a terminal result", () => {
-    const onHardcoreChange = vi.fn();
+  test("offers New Practice Round after a terminal result", () => {
     const onNextRound = vi.fn();
     render(<PracticeControls
       round={{ ...playingRound, status: "forfeited", terminalGuessCount: 0 }}
-      selectedHardcore
-      settingsEditable
       disabled={false}
-      onHardcoreChange={onHardcoreChange}
       onForfeit={vi.fn()}
       onNextRound={onNextRound}
     />);
 
     expect(screen.queryByRole("button", { name: "End game" })).not.toBeInTheDocument();
-    const toggle = screen.getByRole("checkbox", { name: "Hardcore Practice" });
-    expect(toggle).toBeChecked();
-    fireEvent.click(toggle);
-    expect(onHardcoreChange).toHaveBeenCalledWith(false);
     fireEvent.click(screen.getByRole("button", { name: "New Practice Round" }));
     expect(onNextRound).toHaveBeenCalledOnce();
   });

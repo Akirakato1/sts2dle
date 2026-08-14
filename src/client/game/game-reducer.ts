@@ -8,6 +8,14 @@ import {
   type ConstraintOrbTarget,
   type RevealOrbTarget,
 } from "./assistance.js";
+import {
+  createDefaultPracticeFilter,
+  updatePracticeFilterGroupDisabled,
+  updatePracticeFilterGroupValue,
+  type PracticeFilterGroupName,
+  type PracticeFilterState,
+  type PracticeFilterValue,
+} from "./practice-filter.js";
 
 export type PlayMode = "daily" | "hardcore-daily" | "practice";
 export type RoundStatus = "playing" | "won" | "forfeited";
@@ -28,6 +36,7 @@ export interface RoundState {
   terminalGuessCount: number | null;
   error: string | null;
   assistance: AssistanceState | null;
+  practiceFilter: PracticeFilterState | null;
 }
 
 export type GameAction =
@@ -36,7 +45,9 @@ export type GameAction =
   | { type: "consume-filter"; target: ConstraintOrbTarget }
   | { type: "consume-negation"; target: ConstraintOrbTarget }
   | { type: "set-candidate-visibility"; category: CandidateCategory; visible: boolean }
-  | { type: "set-practice-hardcore"; hardcore: boolean }
+  | { type: "set-practice-filter-enabled"; enabled: boolean }
+  | { type: "set-practice-filter-group-disabled"; group: PracticeFilterGroupName; disabled: boolean }
+  | { type: "set-practice-filter-value"; group: PracticeFilterGroupName; value: PracticeFilterValue; selected: boolean }
   | { type: "forfeit-practice" }
   | { type: "replace-round"; round: RoundState };
 
@@ -50,8 +61,9 @@ export function createRoundState(options: {
   status?: RoundStatus;
   terminalGuessCount?: number | null;
   assistance?: AssistanceState | null;
+  practiceFilter?: PracticeFilterState | null;
 }): RoundState {
-  if ((options.mode === "daily" && options.hardcore)
+  if ((options.mode !== "hardcore-daily" && options.hardcore)
     || (options.mode === "hardcore-daily" && !options.hardcore)) {
     throw new RangeError(`Hardcore setting is inconsistent with ${options.mode} mode.`);
   }
@@ -68,17 +80,10 @@ export function createRoundState(options: {
     terminalGuessCount: options.terminalGuessCount ?? (status === "playing" ? null : guesses.length),
     error: null,
     assistance: options.hardcore ? null : (options.assistance ?? createDefaultAssistance()),
+    practiceFilter: options.mode === "practice"
+      ? (options.practiceFilter ?? createDefaultPracticeFilter())
+      : null,
   };
-}
-
-export function isPracticeSettingsEditable(round: RoundState): boolean {
-  return round.mode === "practice"
-    && round.status === "playing"
-    && round.guesses.length === 0
-    && (round.assistance === null
-      || (round.assistance.reveal === null
-        && round.assistance.filter === null
-        && round.assistance.negation === null));
 }
 
 function validFeature(feature: unknown): feature is RevealOrbTarget["feature"] {
@@ -138,13 +143,20 @@ export function gameReducer(state: RoundState, action: GameAction): RoundState {
           visibility: { ...state.assistance.visibility, [action.category]: action.visible },
         },
       };
-    case "set-practice-hardcore":
-      if (!isPracticeSettingsEditable(state) || state.hardcore === action.hardcore) return state;
-      return {
-        ...state,
-        hardcore: action.hardcore,
-        assistance: action.hardcore ? null : createDefaultAssistance(),
-      };
+    case "set-practice-filter-enabled":
+      if (state.mode !== "practice" || state.status !== "playing" || state.practiceFilter === null
+        || state.practiceFilter.enabled === action.enabled) return state;
+      return { ...state, practiceFilter: { ...state.practiceFilter, enabled: action.enabled } };
+    case "set-practice-filter-group-disabled": {
+      if (state.mode !== "practice" || state.status !== "playing" || state.practiceFilter === null) return state;
+      const practiceFilter = updatePracticeFilterGroupDisabled(state.practiceFilter, action.group, action.disabled);
+      return practiceFilter === state.practiceFilter ? state : { ...state, practiceFilter };
+    }
+    case "set-practice-filter-value": {
+      if (state.mode !== "practice" || state.status !== "playing" || state.practiceFilter === null) return state;
+      const practiceFilter = updatePracticeFilterGroupValue(state.practiceFilter, action.group, action.value, action.selected);
+      return practiceFilter === state.practiceFilter ? state : { ...state, practiceFilter };
+    }
     case "forfeit-practice":
       if (state.mode !== "practice" || state.status !== "playing") return state;
       return { ...state, status: "forfeited", terminalGuessCount: state.guesses.length, error: null };

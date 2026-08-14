@@ -13,6 +13,7 @@ import { REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid
 import { FEATURE_ORDER } from "../../src/shared/domain.js";
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 import type { RoundState } from "../../src/client/game/game-reducer.js";
+import { createDefaultPracticeFilter } from "../../src/client/game/practice-filter.js";
 
 const card = (id: string, name: string) => ({
   id, name, hasUpgrade: true, artUrl: `${id}.png`, baseCardUrl: `https://cards.example/${id}.png`, upgradedCardUrl: `https://cards.example/${id}-upgraded.png`,
@@ -79,6 +80,7 @@ function assistedRound(overrides: Partial<RoundState> = {}): RoundState {
     terminalGuessCount: null,
     error: null,
     assistance: createDefaultAssistance(),
+    practiceFilter: null,
     ...overrides,
   };
 }
@@ -484,9 +486,8 @@ describe("App snapshot cleanup", () => {
     expect(screen.queryByRole("group", { name: "Candidate visibility" })).not.toBeInTheDocument();
   });
 
-  test("reveals forfeited Practice answers and offers the terminal next-round choice without sharing", async () => {
+  test("reveals forfeited Practice answers and offers the next round without sharing", async () => {
     const nextPracticeRound = vi.fn();
-    const setPracticeHardcoreChoice = vi.fn();
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue({
       status: "ready",
@@ -501,15 +502,14 @@ describe("App snapshot cleanup", () => {
         terminalGuessCount: 0,
         error: null,
         assistance: createDefaultAssistance(),
+        practiceFilter: createDefaultPracticeFilter(),
       },
       roundToken: 2,
       dailyUtcDate: "2026-08-12",
       error: null,
-      practiceHardcoreChoice: true,
       submit: vi.fn(),
       setMode: vi.fn(),
       setCandidateVisibility: vi.fn(),
-      setPracticeHardcoreChoice,
       forfeitPractice: vi.fn(),
       nextPracticeRound,
       nextRound: nextPracticeRound,
@@ -518,10 +518,7 @@ describe("App snapshot cleanup", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Accepted answer" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
-    const choice = screen.getByRole("checkbox", { name: "Hardcore Practice" });
-    expect(choice).toBeChecked();
-    fireEvent.click(choice);
-    expect(setPracticeHardcoreChoice).toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("checkbox", { name: "Hardcore Practice" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "New Practice Round" }));
     expect(nextPracticeRound).toHaveBeenCalledOnce();
   });

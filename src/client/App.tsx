@@ -13,7 +13,7 @@ import { OrbTray } from "./components/OrbTray.js";
 import { ORB_LABELS } from "./components/OrbVisual.js";
 import { PracticeControls } from "./components/PracticeControls.js";
 import { useGame } from "./game/use-game.js";
-import { isPracticeSettingsEditable, type PlayMode, type RoundState } from "./game/game-reducer.js";
+import type { PlayMode, RoundState } from "./game/game-reducer.js";
 import { deriveNameHint } from "./game/name-hints.js";
 import type { CandidateCategory, ConstraintOrbTarget, OrbKind, RevealOrbTarget } from "./game/assistance.js";
 import { FEATURE_ORDER, type CardIdentity } from "../shared/domain.js";
@@ -26,13 +26,11 @@ interface RoundGameProps {
   roundKey: number;
   snapshot: LoadedSnapshot;
   utcDate: string;
-  practiceHardcoreChoice: boolean;
   onSubmit(cardId: string): void;
   onConsumeReveal(target: RevealOrbTarget): void;
   onConsumeFilter(target: ConstraintOrbTarget): void;
   onConsumeNegation(target: ConstraintOrbTarget): void;
   onCandidateVisibility(category: CandidateCategory, visible: boolean): void;
-  onPracticeHardcoreChange(hardcore: boolean): void;
   onForfeitPractice(): void;
   onNextRound(): void;
 }
@@ -114,10 +112,8 @@ function RoundGameBoard({
   roundKey,
   snapshot,
   utcDate,
-  practiceHardcoreChoice,
   onSubmit,
   onCandidateVisibility,
-  onPracticeHardcoreChange,
   onForfeitPractice,
   onNextRound,
   animateFromIndex,
@@ -137,10 +133,7 @@ function RoundGameBoard({
   return <main className="game-board" aria-label="Card guessing game">
     {round.mode === "practice" && <PracticeControls
       round={round}
-      selectedHardcore={practiceHardcoreChoice}
-      settingsEditable={round.status !== "playing" || isPracticeSettingsEditable(round)}
       disabled={isRevealing || draggingOrb !== null}
-      onHardcoreChange={onPracticeHardcoreChange}
       onForfeit={onForfeitPractice}
       onNextRound={onNextRound}
     />}
@@ -183,13 +176,11 @@ function RoundGame({
   roundKey,
   snapshot,
   utcDate,
-  practiceHardcoreChoice,
   onSubmit,
   onConsumeReveal,
   onConsumeFilter,
   onConsumeNegation,
   onCandidateVisibility,
-  onPracticeHardcoreChange,
   onForfeitPractice,
   onNextRound,
 }: RoundGameProps) {
@@ -218,10 +209,8 @@ function RoundGame({
       roundKey={roundKey}
       snapshot={snapshot}
       utcDate={utcDate}
-      practiceHardcoreChoice={practiceHardcoreChoice}
       onSubmit={onSubmit}
       onCandidateVisibility={onCandidateVisibility}
-      onPracticeHardcoreChange={onPracticeHardcoreChange}
       onForfeitPractice={onForfeitPractice}
       onNextRound={onNextRound}
       animateFromIndex={animateFromIndex}
@@ -252,13 +241,11 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
       roundKey={game.roundToken}
       snapshot={snapshot}
       utcDate={game.dailyUtcDate}
-      practiceHardcoreChoice={game.practiceHardcoreChoice ?? game.round.hardcore}
       onSubmit={game.submit}
       onConsumeReveal={game.consumeReveal}
       onConsumeFilter={game.consumeFilter}
       onConsumeNegation={game.consumeNegation}
       onCandidateVisibility={game.setCandidateVisibility ?? ignoreCandidateVisibility}
-      onPracticeHardcoreChange={game.setPracticeHardcoreChoice ?? ignoreCandidateVisibility}
       onForfeitPractice={game.forfeitPractice ?? ignoreCandidateVisibility}
       onNextRound={game.nextPracticeRound ?? game.nextRound}
     />}
