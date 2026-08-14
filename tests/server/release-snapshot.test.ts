@@ -63,12 +63,12 @@ describe("releaseSnapshot", () => {
     await releaseSnapshot({}, harness.dependencies);
 
     expect(harness.commitRecoveryOptions).toEqual({
-      publicationBackupName: ".snapshot-data.backup-00000000-0000-4000-8000-000000000000",
-      outputDir: "deploy/snapshot-data",
+      publicationBackupName: ".snapshot-data.tar.gz.backup-00000000-0000-4000-8000-000000000000",
+      outputDir: "deploy/snapshot-data.tar.gz",
     });
     expect(harness.completeSnapshotRecovery).toHaveBeenCalledWith(
-      ".snapshot-data.backup-00000000-0000-4000-8000-000000000000",
-      "deploy/snapshot-data",
+      ".snapshot-data.tar.gz.backup-00000000-0000-4000-8000-000000000000",
+      "deploy/snapshot-data.tar.gz",
     );
     expect(harness.recoveryCompletedBeforePush).toBe(true);
   });
@@ -254,7 +254,7 @@ describe("releaseSnapshot", () => {
     const repository = await createRealGitRepository();
     try {
       const realGit = new GitClient(repository, runBoundedProcess);
-      const snapshot = join(repository, "deploy", "snapshot-data", "active.json");
+      const snapshot = join(repository, "deploy", "snapshot-data.tar.gz");
       const dependencies: ReleaseSnapshotDependencies = {
         gitClient: {
           assertReady: async () => undefined,
@@ -284,13 +284,13 @@ describe("releaseSnapshot", () => {
           };
         },
         validatePublishedSnapshot: async () => undefined,
-        outputDir: join(repository, "deploy", "snapshot-data"),
+        outputDir: join(repository, "deploy", "snapshot-data.tar.gz"),
       };
 
       await expect(releaseSnapshot({}, dependencies)).rejects.toThrow("Card snapshot release failed");
 
       expect((await realGitCommand(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("");
-      expect((await realGitCommand(repository, ["diff", "--", "deploy/snapshot-data"])).trim()).toBe("");
+      expect((await realGitCommand(repository, ["diff", "--", "deploy/snapshot-data.tar.gz"])).trim()).toBe("");
       expect(await readFile(snapshot, "utf8")).toBe("old snapshot\n");
     } finally {
       await rm(repository, { recursive: true, force: true });
@@ -314,7 +314,7 @@ describe("buildSnapshotBundle", () => {
       },
       validateTemporarySnapshot: async () => { events.push("validate-temp"); },
       publishTemporarySnapshot: async (_temporary, outputDir) => {
-        expect(outputDir).toBe("C:\\repository\\deploy\\snapshot-data");
+        expect(outputDir).toBe("C:\\repository\\deploy\\snapshot-data.tar.gz");
         events.push("publish");
         return { active: PUBLISHED_ACTIVE, finalize, rollback };
       },
@@ -322,7 +322,7 @@ describe("buildSnapshotBundle", () => {
     };
 
     const active = await buildSnapshotBundle({
-      outputDir: "C:\\repository\\deploy\\snapshot-data",
+      outputDir: "C:\\repository\\deploy\\snapshot-data.tar.gz",
       dependencies,
     });
 
@@ -355,7 +355,7 @@ describe("buildSnapshotBundle", () => {
       validatePublishedSnapshot: async () => { throw new Error("raw validation payload"); },
     };
 
-    await expect(buildSnapshotBundle({ outputDir: "C:\\repository\\deploy\\snapshot-data", dependencies }))
+    await expect(buildSnapshotBundle({ outputDir: "C:\\repository\\deploy\\snapshot-data.tar.gz", dependencies }))
       .rejects.toThrow("Card snapshot build failed");
 
     expect(destination).toBe("head-snapshot");
@@ -381,7 +381,7 @@ describe("buildSnapshotBundle", () => {
     };
 
     const error = await captureError(buildSnapshotBundle({
-      outputDir: "C:\\repository\\deploy\\snapshot-data",
+      outputDir: "C:\\repository\\deploy\\snapshot-data.tar.gz",
       dependencies,
     }));
 
@@ -397,7 +397,7 @@ describe("buildSnapshotBundle", () => {
     });
 
     const error = await captureError(buildSnapshotBundle({
-      outputDir: "C:\\repository\\deploy\\snapshot-data",
+      outputDir: "C:\\repository\\deploy\\snapshot-data.tar.gz",
       config,
     }));
 
@@ -533,8 +533,8 @@ describe("snapshot build CLI", () => {
   it("requires one repository-relative --output path", () => {
     const root = "C:\\repository";
 
-    expect(resolveBuildOutput(root, ["--output", "deploy/snapshot-data"]))
-      .toBe("C:\\repository\\deploy\\snapshot-data");
+    expect(resolveBuildOutput(root, ["--output", "deploy/snapshot-data.tar.gz"]))
+      .toBe("C:\\repository\\deploy\\snapshot-data.tar.gz");
     expect(() => resolveBuildOutput(root, [])).toThrow("Invalid snapshot build output");
     expect(() => resolveBuildOutput(root, ["--output", "C:\\outside"]))
       .toThrow("Invalid snapshot build output");
@@ -549,7 +549,7 @@ describe("snapshot build CLI", () => {
     const output: string[] = [];
     const errors: string[] = [];
 
-    const exitCode = await runBuildCli(["--output", "deploy/snapshot-data"], {
+    const exitCode = await runBuildCli(["--output", "deploy/snapshot-data.tar.gz"], {
       build,
       repositoryRoot: "C:\\repository",
       writeOutput: (line) => output.push(line),
@@ -557,7 +557,7 @@ describe("snapshot build CLI", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(build).toHaveBeenCalledWith({ outputDir: "C:\\repository\\deploy\\snapshot-data" });
+    expect(build).toHaveBeenCalledWith({ outputDir: "C:\\repository\\deploy\\snapshot-data.tar.gz" });
     expect(output).toEqual(["Card snapshot bundle built"]);
     expect(errors).toEqual([]);
   });
@@ -567,7 +567,7 @@ describe("snapshot build CLI", () => {
     const cwd = vi.spyOn(process, "cwd").mockImplementation(() => { throw new Error(secret); });
     const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
-      expect(await runBuildCli(["--output", "deploy/snapshot-data"])).toBe(1);
+      expect(await runBuildCli(["--output", "deploy/snapshot-data.tar.gz"])).toBe(1);
       expect(stderr.mock.calls.flat().join("\n")).not.toContain(secret);
     } finally {
       cwd.mockRestore();
@@ -693,7 +693,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
         rollback,
         recoveryArtifact: () => finalized
           ? null
-          : ".snapshot-data.backup-00000000-0000-4000-8000-000000000000",
+          : ".snapshot-data.tar.gz.backup-00000000-0000-4000-8000-000000000000",
       };
     },
     validatePublishedSnapshot: async () => {
@@ -745,8 +745,8 @@ async function createRealGitRepository(): Promise<string> {
   await realGitCommand(root, ["init"]);
   await realGitCommand(root, ["config", "user.name", "Snapshot Test"]);
   await realGitCommand(root, ["config", "user.email", "snapshot@example.invalid"]);
-  await mkdir(join(root, "deploy", "snapshot-data"), { recursive: true });
-  await writeFile(join(root, "deploy", "snapshot-data", "active.json"), "old snapshot\n");
+  await mkdir(join(root, "deploy"), { recursive: true });
+  await writeFile(join(root, "deploy", "snapshot-data.tar.gz"), "old snapshot\n");
   await realGitCommand(root, ["add", "-A"]);
   await realGitCommand(root, ["commit", "-m", "initial"]);
   return root;

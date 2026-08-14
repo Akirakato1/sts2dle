@@ -4,7 +4,7 @@
 
 **Goal:** Generate and validate the production card snapshot locally, commit it to GitHub, and make Render serve that immutable snapshot without synchronizing cards or launching Chromium.
 
-**Architecture:** A synchronization-only module owns Spire Codex access, sprite packing, and the existing Mad Science fallback renderer. A release layer builds into an isolated temporary data directory, validates and publishes one active snapshot under `deploy/snapshot-data`, then uses guarded Git operations to commit and push only that directory. Render starts with synchronization disabled, validates the bundled snapshot, and serves it from the image while clients continue loading framed accepted-answer images directly from official Spire Codex URLs.
+**Architecture:** A synchronization-only module owns Spire Codex access, sprite packing, and the existing Mad Science fallback renderer. Per the approved archive adjustment, the release layer builds into an isolated temporary data directory, creates and validates one deterministic `deploy/snapshot-data.tar.gz`, then uses guarded Git operations to commit and push only that file. Docker extracts it to `/app/deploy/snapshot-data`; Render starts with synchronization disabled, validates the snapshot, and serves it from the image while clients continue loading framed accepted-answer images directly from official Spire Codex URLs.
 
 **Tech Stack:** Node.js 24, TypeScript, Fastify, Sharp, Playwright (local release only), Vitest, Docker, Render Blueprint, Git/SSH.
 
@@ -18,7 +18,7 @@
 - Browser clients continue fetching official remote full-card URLs directly; only generated missing-image fallbacks are bundled.
 - Only `https://spire-codex.com` and `https://cdn.spire-codex.com` are trusted image origins.
 - A failed generation, validation, or publication must preserve the previously committed snapshot.
-- Automatic Git commits may contain only `deploy/snapshot-data`; dirty or diverged repositories fail before mutation.
+- Automatic Git commits may contain only `deploy/snapshot-data.tar.gz`; dirty or diverged repositories fail before mutation.
 - Expected CLI errors and logs must not expose payloads, credentials, absolute local paths, card IDs, source URLs, or generated ownership tokens.
 - Render remains a single `starter` Docker web service bound to `0.0.0.0:10000` with `/health`; it has no persistent disk.
 

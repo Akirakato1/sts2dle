@@ -8,7 +8,9 @@ This design supersedes the runtime-synchronization and persistent-disk portions 
 
 ## Chosen approach
 
-Store one complete active production snapshot at a fixed repository path and copy it into the Docker image. Render starts with synchronization disabled, validates the bundled snapshot, and serves it.
+Store one complete active production snapshot as the fixed tracked archive `deploy/snapshot-data.tar.gz`. The Docker build extracts it into `/app/deploy/snapshot-data`; Render starts with synchronization disabled, validates the extracted snapshot, and serves it.
+
+This archive form is an approved adjustment to the original directory design. It avoids unreliable directory swaps on Windows/OneDrive while preserving a single atomic publication target. The archive has no sidecar metadata: `active.json` and exactly one `snapshots/<build-id>` tree are its only roots.
 
 This is preferred over two alternatives:
 
@@ -19,10 +21,10 @@ The committed snapshot is only a few megabytes per card patch, so the simpler re
 
 ## Snapshot contents and data flow
 
-The fixed deployment directory will contain the same validated structure already consumed by `SnapshotStore`:
+The fixed deployment archive expands to the same validated structure already consumed by `SnapshotStore`:
 
 ```text
-deploy/snapshot-data/
+deploy/snapshot-data.tar.gz
   active.json
   snapshots/<build-id>/
     manifest.json
@@ -35,7 +37,7 @@ deploy/snapshot-data/
     fallback/... (only when required)
 ```
 
-Only the active snapshot is kept in the working tree. Replacing it removes the prior build directory from the new tree, while Git history remains the rollback mechanism.
+Only the archive is kept in the working tree. It is generated with lexical entry order and normalized portable ownership, modes, timestamps, and gzip metadata. Before publication every entry is inspected under explicit count and uncompressed-size bounds, then extracted into a fresh temporary directory and passed through the existing strict activated-snapshot validator.
 
 During a local refresh, the Spire Codex card API supplies normalized card data, artwork URLs, and base/upgraded full-card URLs. Artwork is downloaded locally to create the two sprite atlases. Full-size accepted-answer cards are not bundled when an official full-card URL exists: the deployed client loads those URLs directly from the Spire Codex CDN. This consumes the player's browser memory and Spire Codex bandwidth, not Render server memory or bandwidth. If an eligible full-card URL is absent, the local renderer creates the existing validated fallback image and includes it in the committed snapshot.
 
@@ -55,8 +57,8 @@ It will perform this ordered workflow:
 4. Run the normal project verification against the clean source revision.
 5. Generate the new snapshot in a fresh temporary directory outside the committed deployment directory, using the existing production normalizer, grouping, sprite builder, URL policy, and fallback renderer.
 6. Fully validate schema strictness, hashes, feature groups, sprite bounds and decoding, fallback files, and allowed full-card/artwork origins before touching the committed snapshot.
-7. Publish the validated snapshot to a repository-local staging path, replace `deploy/snapshot-data` as one controlled operation, and validate the published copy again. If publication or the second validation fails, restore the former committed snapshot.
-8. Require every resulting tracked change to be under `deploy/snapshot-data`, stage that path only, and create a commit whose message identifies the snapshot refresh and short source revision.
+7. Build and validate a temporary deterministic archive, replace `deploy/snapshot-data.tar.gz` through a file backup transaction, and validate the published archive again by extraction. If publication or the second validation fails, restore the former archive byte-for-byte.
+8. Require the only resulting tracked change to be `deploy/snapshot-data.tar.gz`, stage that path only, and create a commit whose message identifies the snapshot refresh and short source revision.
 9. Push exactly `HEAD:main` to `origin` using the computer's configured SSH authentication.
 
 The Git operations will use argument-safe child processes rather than interpolated shell commands. Expected failures will use fixed, payload-free messages. A generation or validation failure leaves the previously committed snapshot unchanged. A push failure leaves the verified local commit intact and reports that only the push must be retried.

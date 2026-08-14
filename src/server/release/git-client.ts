@@ -16,7 +16,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-const SNAPSHOT_PATH = "deploy/snapshot-data";
+const SNAPSHOT_PATH = "deploy/snapshot-data.tar.gz";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const TERMINATION_TIMEOUT_MS = 5_000;
@@ -96,6 +96,7 @@ interface RecoveryOperations {
   beforeQuarantine(path: string): Promise<void>;
   renameDirectory(from: string, to: string): Promise<void>;
   removeDirectory(path: string): Promise<void>;
+  unlinkFile(path: string): Promise<void>;
   unlinkMarker(path: string): Promise<void>;
 }
 type SpawnedProcess = ChildProcessByStdio<null, Readable, Readable>;
@@ -427,14 +428,14 @@ export class GitClient {
     const publicationBackupName = options.publicationBackupName ?? null;
     let publicationBackup: RecoveryArtifact | null = null;
     if (publicationBackupName !== null) {
-      if (!/^\.snapshot-data\.backup-[0-9a-f-]{36}$/.test(publicationBackupName)) throw new GitSafetyError();
+      if (!/^\.snapshot-data\.tar\.gz\.backup-[0-9a-f-]{36}$/.test(publicationBackupName)) throw new GitSafetyError();
       const outputParent = await resolveRecoveryOutputParent(
         this.#repositoryRoot,
         options.outputDir ?? join(this.#repositoryRoot, SNAPSHOT_PATH),
       );
       publicationBackup = await describeRecoveryArtifact(
         publicationBackupName,
-        `.snapshot-data.recovery-quarantine-${randomUUID()}`,
+        `.snapshot-data.tar.gz.recovery-quarantine-${randomUUID()}`,
         join(outputParent.path, publicationBackupName),
         outputParent,
       );
@@ -499,7 +500,8 @@ export class GitClient {
     if (mayRemove && (source || quarantine)) {
       await revalidateRecoveryParent(parent);
       assertRecoveryIdentity(await lstatAsync(quarantinePath), artifact);
-      await this.#recoveryOperations.removeDirectory(quarantinePath);
+      if (key === "publicationBackup") await this.#recoveryOperations.unlinkFile(quarantinePath);
+      else await this.#recoveryOperations.removeDirectory(quarantinePath);
       if (await lstatIfPresent(quarantinePath)) throw new GitSafetyError();
     }
     const updated = { ...marker, [key]: null } as RecoveryMarker;
@@ -547,6 +549,7 @@ const defaultRecoveryOperations: RecoveryOperations = {
   beforeQuarantine: async () => undefined,
   renameDirectory: renameAsync,
   removeDirectory: async (path) => rmAsync(path, { recursive: true, force: false }),
+  unlinkFile: unlinkAsync,
   unlinkMarker: unlinkAsync,
 };
 
@@ -1003,8 +1006,8 @@ function parseRecoveryMarker(raw: string): RecoveryMarker {
     ) ||
     !isRecoveryArtifact(
       marker.publicationBackup,
-      /^\.snapshot-data\.backup-[0-9a-f-]{36}$/,
-      /^\.snapshot-data\.recovery-quarantine-[0-9a-f-]{36}$/,
+      /^\.snapshot-data\.tar\.gz\.backup-[0-9a-f-]{36}$/,
+      /^\.snapshot-data\.tar\.gz\.recovery-quarantine-[0-9a-f-]{36}$/,
     )
   ) throw new GitSafetyError();
   return marker as RecoveryMarker;
@@ -1035,7 +1038,8 @@ async function describeRecoveryArtifact(
   assertExactChild(join(parent.path, quarantineName), parent.path, quarantineName);
   await revalidateRecoveryParent(parent);
   const stat = await lstatAsync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new GitSafetyError();
+  const expectedFile = /^\.snapshot-data\.tar\.gz\.backup-/.test(name);
+  if ((expectedFile ? !stat.isFile() : !stat.isDirectory()) || stat.isSymbolicLink()) throw new GitSafetyError();
   return {
     name,
     quarantineName,
@@ -1210,8 +1214,9 @@ function assertRecoveryIdentity(
   stat: Awaited<ReturnType<typeof lstatAsync>>,
   artifact: RecoveryArtifact,
 ): void {
+  const expectedFile = /^\.snapshot-data\.tar\.gz\.backup-/.test(artifact.name);
   if (
-    !stat.isDirectory() || stat.isSymbolicLink() ||
+    (expectedFile ? !stat.isFile() : !stat.isDirectory()) || stat.isSymbolicLink() ||
     String(stat.dev) !== artifact.dev || String(stat.ino) !== artifact.ino ||
     String(stat.birthtimeMs) !== artifact.birthtimeMs
   ) throw new GitSafetyError();

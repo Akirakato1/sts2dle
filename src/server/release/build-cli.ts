@@ -18,7 +18,9 @@ export function resolveBuildOutput(repositoryRoot: string, args: readonly string
     throw new Error("Invalid snapshot build output");
   }
   const output = args[1];
-  if (output === "" || isAbsolute(output)) throw new Error("Invalid snapshot build output");
+  if (output !== "deploy/snapshot-data.tar.gz" || isAbsolute(output)) {
+    throw new Error("Invalid snapshot build output");
+  }
   const resolvedRoot = resolve(repositoryRoot);
   const resolvedOutput = resolve(resolvedRoot, output);
   const pathFromRoot = relative(resolvedRoot, resolvedOutput);
@@ -31,6 +33,7 @@ export function resolveBuildOutput(repositoryRoot: string, args: readonly string
   ) {
     throw new Error("Invalid snapshot build output");
   }
+  if (!resolvedOutput.endsWith(".tar.gz")) throw new Error("Invalid snapshot build output");
   return resolvedOutput;
 }
 

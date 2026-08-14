@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig, type ServerConfig } from "../config.js";
@@ -9,11 +9,11 @@ import { createProductionDependencies } from "../sync/production-sync.js";
 import { SnapshotStore, type ActiveSnapshot } from "../sync/snapshot-store.js";
 import { validateSnapshot } from "../sync/validate-snapshot.js";
 import {
-  beginDeploymentBundlePublish,
+  beginDeploymentArchivePublish,
+  createDeploymentArchive,
   readDeploymentRevision,
-  stageDeploymentBundle,
-  type PublishedBundle,
-} from "./deployment-bundle.js";
+  type PublishedArchive as PublishedBundle,
+} from "./deployment-archive.js";
 import {
   GitClient,
   GitPostCommitCleanupError,
@@ -115,7 +115,7 @@ export async function releaseSnapshot(
       await dependencies.runChecks();
       temporary = await dependencies.buildTemporarySnapshot(fetched);
       await dependencies.validateTemporarySnapshot(temporary.active);
-      const outputDir = dependencies.outputDir ?? "deploy/snapshot-data";
+      const outputDir = dependencies.outputDir ?? "deploy/snapshot-data.tar.gz";
       const published = await dependencies.publishTemporarySnapshot(
         temporary,
         outputDir,
@@ -239,15 +239,19 @@ export function createReleaseSnapshotDependencies(
   options: DefaultReleaseDependenciesOptions,
 ): ReleaseSnapshotDependencies {
   const config = options.config ?? loadConfig(process.env);
-  const outputDir = options.outputDir ?? join(options.repositoryRoot, "deploy", "snapshot-data");
+  const outputDir = options.outputDir ?? join(options.repositoryRoot, "deploy", "snapshot-data.tar.gz");
   const runner = options.runner ?? runBoundedProcess;
   const npmCliPath = options.npmCliPath ?? resolveNpmCliPath(process.env);
+  const validationOptions = {
+    allowedArtworkOrigins: config.artworkAllowedOrigins,
+    allowedFullCardOrigins: config.fullCardAllowedOrigins,
+  };
   const buildDependencies = createDefaultSnapshotBuildDependencies(config);
   return {
     ...buildDependencies,
     gitClient: new GitClient(options.repositoryRoot, runner),
     outputDir,
-    readCommittedRevision: () => readDeploymentRevision(outputDir),
+    readCommittedRevision: () => readDeploymentRevision(outputDir, validationOptions),
     runChecks: async () => {
       await runNpmCheck(options.repositoryRoot, npmCliPath, runner);
     },
@@ -287,17 +291,29 @@ function createDefaultSnapshotBuildDependencies(config: ServerConfig): SnapshotB
       await validateSnapshot(active.path, validationOptions);
     },
     publishTemporarySnapshot: async (temporary, outputDir) => {
-      const stagingDir = join(
+      const stagingArchive = join(
         dirname(outputDir),
         `.${basename(outputDir)}.staging-${randomUUID()}`,
       );
-      let staged = false;
       try {
-        await stageDeploymentBundle(temporary.dataDir, stagingDir, validationOptions);
-        staged = true;
-        return await beginDeploymentBundlePublish(stagingDir, outputDir, validationOptions);
+        const manifest = JSON.parse(await readFile(join(temporary.active.path, "manifest.json"), "utf8")) as {
+          sourceRevision?: unknown;
+        };
+        if (typeof manifest.sourceRevision !== "string") throw new SnapshotBuildError();
+        await createDeploymentArchive(
+          temporary.dataDir,
+          stagingArchive,
+          manifest.sourceRevision,
+          validationOptions,
+        );
+        return await beginDeploymentArchivePublish(
+          stagingArchive,
+          outputDir,
+          manifest.sourceRevision,
+          validationOptions,
+        );
       } catch {
-        if (staged) await rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+        await rm(stagingArchive, { force: true }).catch(() => undefined);
         throw new SnapshotBuildError();
       }
     },

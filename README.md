@@ -69,13 +69,13 @@ The E2E command builds the application, creates its local snapshot, starts an of
 
 ## Snapshot releases
 
-Render serves the repository snapshot in `deploy/snapshot-data` and performs no startup synchronization. Before releasing, start with a clean local checkout of `main` that matches `origin/main`, with the approved GitHub SSH remote and push authentication available. Run:
+Render serves the repository archive `deploy/snapshot-data.tar.gz` and performs no startup synchronization. The Docker build extracts it into `/app/deploy/snapshot-data` and removes the compressed copy before the server starts. Before releasing, start with a clean local checkout of `main` that matches `origin/main`, with the approved GitHub SSH remote and push authentication available. Run:
 
 ```powershell
 npm run release:snapshot
 ```
 
-The command fetches the current stable English card data, compares its source revision with the committed snapshot, runs the full checks when the revision changed, builds and validates the replacement bundle, commits only `deploy/snapshot-data`, and pushes that commit to `main`. An unchanged revision creates no commit. Use this command after generator-only changes to rebuild the same source revision:
+The command fetches the current stable English card data, compares its source revision with the committed archive, runs the full checks when the revision changed, builds and validates the replacement archive, commits only `deploy/snapshot-data.tar.gz`, and pushes that commit to `main`. An unchanged revision creates no commit. Use this command after generator-only changes to rebuild the same source revision:
 
 ```powershell
 npm run release:snapshot -- --force

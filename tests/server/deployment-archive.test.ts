@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
+import * as tar from "tar";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import fixture from "../fixtures/spire-cards.json";
 import {
@@ -114,6 +115,47 @@ describe("deployment snapshot archive", () => {
     expect(reachableErrorText(error)).not.toContain(destination);
     expect(await readFile(destination)).toEqual(before);
   });
+
+  it("rejects links, unexpected roots, multiple builds, and entry-count bombs before extraction", async () => {
+    const revision = "9a".repeat(32);
+    const root = await temporaryRoot();
+
+    const linkedSource = join(root, "linked-source");
+    await mkdir(linkedSource);
+    await writeFile(join(linkedSource, "target"), "outside");
+    await symlink(join(linkedSource, "target"), join(linkedSource, "link"), "file");
+    const linkedArchive = join(root, "linked.tar.gz");
+    await tar.create({ cwd: linkedSource, file: linkedArchive, gzip: true }, ["link"]);
+
+    const unexpectedSource = join(root, "unexpected-source");
+    await mkdir(unexpectedSource);
+    await writeFile(join(unexpectedSource, "payload"), "unexpected");
+    const unexpectedArchive = join(root, "unexpected.tar.gz");
+    await tar.create({ cwd: unexpectedSource, file: unexpectedArchive, gzip: true }, ["payload"]);
+
+    const multipleSource = join(root, "multiple-source");
+    await mkdir(join(multipleSource, "snapshots", "first"), { recursive: true });
+    await mkdir(join(multipleSource, "snapshots", "second"), { recursive: true });
+    await writeFile(join(multipleSource, "active.json"), '{"buildId":"first"}\n');
+    const multipleArchive = join(root, "multiple.tar.gz");
+    await tar.create({ cwd: multipleSource, file: multipleArchive, gzip: true }, ["active.json", "snapshots"]);
+
+    const bombSource = join(root, "bomb-source");
+    await mkdir(join(bombSource, "snapshots", "only"), { recursive: true });
+    await writeFile(join(bombSource, "active.json"), '{"buildId":"only"}\n');
+    for (let index = 0; index < 65; index += 1) {
+      await writeFile(join(bombSource, "snapshots", "only", `file-${index}.txt`), "x");
+    }
+    const bombArchive = join(root, "bomb.tar.gz");
+    await tar.create({ cwd: bombSource, file: bombArchive, gzip: true }, ["active.json", "snapshots"]);
+
+    for (const archive of [linkedArchive, unexpectedArchive, multipleArchive, bombArchive]) {
+      const error = await captureError(validateDeploymentArchive(archive, revision, validationOptions));
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("Unable to validate deployment archive");
+      expect(reachableErrorText(error)).not.toContain(root);
+    }
+  });
 });
 
 async function createValidSource(sourceRevision: string): Promise<{ dataDir: string; buildId: string }> {
@@ -133,18 +175,13 @@ async function createValidSource(sourceRevision: string): Promise<{ dataDir: str
     store: new SnapshotStore(dataDir),
     baseUrl: "https://spire-codex.test",
     fetchImpl: async () => new Response(new Uint8Array(artwork)),
-    fallbackRenderer: { async render(_raw, _upgraded, destination) { await BunWrite(destination, fallbackImage); } },
+    fallbackRenderer: { async render(_raw, _upgraded, destination) { await writeFile(destination, fallbackImage); } },
     artworkConcurrency: 2,
     allowedArtworkOrigins: ["https://spire-codex.test"],
     allowedFullCardOrigins: ["https://cdn.test"],
     now: () => new Date("2026-08-12T00:00:01.000Z"),
   });
   return { dataDir, buildId: active.buildId };
-}
-
-async function BunWrite(path: string, data: Buffer): Promise<void> {
-  const { writeFile } = await import("node:fs/promises");
-  await writeFile(path, data);
 }
 
 async function temporaryRoot(): Promise<string> {

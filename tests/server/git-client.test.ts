@@ -36,15 +36,15 @@ class RecordingRunner {
     this.respond(["fetch", "origin", "main"], "");
     this.respond(["rev-parse", "HEAD"], "a".repeat(40));
     this.respond(["rev-parse", "refs/remotes/origin/main"], "a".repeat(40));
-    this.respond(["add", "-A", "--", "deploy/snapshot-data"], "");
-    this.respond(["diff", "--cached", "--name-only"], "deploy/snapshot-data/active.json\n");
+    this.respond(["add", "-A", "--", "deploy/snapshot-data.tar.gz"], "");
+    this.respond(["diff", "--cached", "--name-only"], "deploy/snapshot-data.tar.gz\n");
     this.respond(["rev-parse", "--git-dir"], `${REPOSITORY_ROOT}\\.git\n`);
     this.respond(["read-tree", "HEAD"], "");
     this.respond(["write-tree"], `${"c".repeat(40)}\n`);
     this.respond(["commit-tree", "c".repeat(40), "-p", "a".repeat(40), "-m", `chore: refresh card snapshot ${"b".repeat(12)}`], `${"d".repeat(40)}\n`);
     this.respond(["update-ref", "HEAD", "d".repeat(40), "a".repeat(40)], "");
-    this.respond(["restore", "--staged", "--source=HEAD", "--", "deploy/snapshot-data"], "");
-    this.respond(["reset", "HEAD", "--", "deploy/snapshot-data"], "");
+    this.respond(["restore", "--staged", "--source=HEAD", "--", "deploy/snapshot-data.tar.gz"], "");
+    this.respond(["reset", "HEAD", "--", "deploy/snapshot-data.tar.gz"], "");
     this.respond(["push", "origin", "HEAD:main"], "");
   }
 
@@ -76,7 +76,7 @@ describe("GitClient", () => {
     await client.pushMain();
 
     expect(runner.calls).toContainEqual(["git", ["fetch", "origin", "main"]]);
-    expect(runner.calls).toContainEqual(["git", ["add", "-A", "--", "deploy/snapshot-data"]]);
+    expect(runner.calls).toContainEqual(["git", ["add", "-A", "--", "deploy/snapshot-data.tar.gz"]]);
     expect(runner.calls).toContainEqual(["git", ["push", "origin", "HEAD:main"]]);
     await client.rollbackSnapshotIndex();
   });
@@ -139,8 +139,8 @@ describe("GitClient", () => {
   });
 
   it.each([
-    ["working tree", ["status", "--porcelain=v1", "--untracked-files=all"], " M deploy/snapshot-data/active.json\n?? README-private.md\n"],
-    ["staging area", ["diff", "--cached", "--name-only"], "deploy/snapshot-data/active.json\nREADME.md\n"],
+    ["working tree", ["status", "--porcelain=v1", "--untracked-files=all"], " M deploy/snapshot-data.tar.gz\n?? README-private.md\n"],
+    ["staging area", ["diff", "--cached", "--name-only"], "deploy/snapshot-data.tar.gz\nREADME.md\n"],
   ] as const)("rejects extra paths in the %s", async (_label, command, response) => {
     const runner = new RecordingRunner();
     runner.replace(command, response);
@@ -153,11 +153,11 @@ describe("GitClient", () => {
     const runner = new RecordingRunner();
     runner.replace(
       ["status", "--porcelain=v1", "--untracked-files=all"],
-      " M deploy/snapshot-data/active.json\n?? another-path.txt\n",
+      " M deploy/snapshot-data.tar.gz\n?? another-path.txt\n",
     );
 
     await expect(new GitClient(REPOSITORY_ROOT, runner.run).assertOnlySnapshotChanges()).rejects.toThrow();
-    expect(runner.calls).not.toContainEqual(["git", ["add", "-A", "--", "deploy/snapshot-data"]]);
+    expect(runner.calls).not.toContainEqual(["git", ["add", "-A", "--", "deploy/snapshot-data.tar.gz"]]);
   });
 
   it("uses a source-revision commit message and hides commit failures", async () => {
@@ -185,7 +185,7 @@ describe("GitClient", () => {
       return runBoundedProcess(command, args, options);
     };
     const client = new GitClient(repository, observingRunner);
-    await writeFile(join(repository, "deploy", "snapshot-data", "active.json"), "new snapshot\n");
+    await writeFile(join(repository, "deploy", "snapshot-data.tar.gz"), "new snapshot\n");
     await client.assertOnlySnapshotChanges();
 
     await writeFile(join(repository, "unrelated.txt"), "concurrent staged content\n");
@@ -197,7 +197,7 @@ describe("GitClient", () => {
     await client.commitSnapshot("b".repeat(64));
 
     expect((await git(repository, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).trim())
-      .toBe("deploy/snapshot-data/active.json");
+      .toBe("deploy/snapshot-data.tar.gz");
     expect((await git(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("unrelated.txt");
     await expect(readFile(join(repository, "malicious.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(privateIndexes.length).toBeGreaterThan(0);
@@ -207,16 +207,16 @@ describe("GitClient", () => {
   it("restores the snapshot index and worktree to HEAD after a pre-commit failure", async () => {
     const repository = await createGitRepository();
     const client = new GitClient(repository, runBoundedProcess);
-    const snapshot = join(repository, "deploy", "snapshot-data", "active.json");
+    const snapshot = join(repository, "deploy", "snapshot-data.tar.gz");
     await writeFile(snapshot, "published snapshot\n");
-    await git(repository, ["add", "deploy/snapshot-data"]);
+    await git(repository, ["add", "deploy/snapshot-data.tar.gz"]);
     await client.assertOnlySnapshotChanges();
 
     await writeFile(snapshot, "old snapshot\n");
     await client.rollbackSnapshotIndex();
 
     expect((await git(repository, ["diff", "--cached", "--name-only"])).trim()).toBe("");
-    expect((await git(repository, ["diff", "--", "deploy/snapshot-data"])).trim()).toBe("");
+    expect((await git(repository, ["diff", "--", "deploy/snapshot-data.tar.gz"])).trim()).toBe("");
   }, 15_000);
 
   it("retries a transient private-index removal without losing its cleanup handle", async () => {
@@ -235,7 +235,7 @@ describe("GitClient", () => {
         monotonicNow: () => removalAttempts * 100,
       },
     });
-    await writeFile(join(repository, "deploy", "snapshot-data", "active.json"), "new snapshot\n");
+    await writeFile(join(repository, "deploy", "snapshot-data.tar.gz"), "new snapshot\n");
     await client.assertOnlySnapshotChanges();
 
     await client.commitSnapshot("b".repeat(64));
@@ -243,7 +243,7 @@ describe("GitClient", () => {
     expect(removalAttempts).toBe(2);
     expect(await privateIndexDirectories(repository)).toEqual([]);
     expect((await git(repository, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).trim())
-      .toBe("deploy/snapshot-data/active.json");
+      .toBe("deploy/snapshot-data.tar.gz");
   }, 15_000);
 
   it("retains a private-index cleanup handle after persistent failure and succeeds on retry", async () => {
@@ -263,7 +263,7 @@ describe("GitClient", () => {
       },
     });
     const oldHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
-    await writeFile(join(repository, "deploy", "snapshot-data", "active.json"), "new snapshot\n");
+    await writeFile(join(repository, "deploy", "snapshot-data.tar.gz"), "new snapshot\n");
     await client.assertOnlySnapshotChanges();
     await writeFile(join(repository, "unrelated.txt"), "staged unrelated\n");
     await git(repository, ["add", "unrelated.txt"]);
@@ -284,13 +284,13 @@ describe("GitClient", () => {
 
   it("durably publishes strict recovery metadata before installing the snapshot commit", async () => {
     const repository = await createGitRepository();
-    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.tar.gz.backup-*\n");
     await git(repository, ["add", ".gitignore"]);
     await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
     const oldHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
-    const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
-    const outputDir = join(repository, "deploy", "snapshot-data");
-    await mkdir(join(repository, "deploy", backupName));
+    const backupName = ".snapshot-data.tar.gz.backup-00000000-0000-4000-8000-000000000000";
+    const outputDir = join(repository, "deploy", "snapshot-data.tar.gz");
+    await writeFile(join(repository, "deploy", backupName), "backup snapshot\n");
     let markerAtRefUpdate: unknown;
     const observingRunner: ArgumentArrayRunner = async (command, args, options) => {
       if (args[0] === "update-ref") {
@@ -302,7 +302,7 @@ describe("GitClient", () => {
       return runBoundedProcess(command, args, options);
     };
     const client = new GitClient(repository, observingRunner);
-    await writeFile(join(outputDir, "active.json"), "new snapshot\n");
+    await writeFile(outputDir, "new snapshot\n");
     await client.assertOnlySnapshotChanges();
 
     await client.commitSnapshot("b".repeat(64), { publicationBackupName: backupName, outputDir });
@@ -318,7 +318,7 @@ describe("GitClient", () => {
       },
       publicationBackup: {
         name: backupName,
-        quarantineName: expect.stringMatching(/^\.snapshot-data\.recovery-quarantine-/),
+        quarantineName: expect.stringMatching(/^\.snapshot-data\.tar\.gz\.recovery-quarantine-/),
       },
     });
     expect(JSON.stringify(markerAtRefUpdate)).not.toContain(repository);
@@ -330,18 +330,18 @@ describe("GitClient", () => {
 
   it("does not move HEAD or overwrite recovery state when marker publication cannot begin", async () => {
     const repository = await createGitRepository();
-    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.tar.gz.backup-*\n");
     await git(repository, ["add", ".gitignore"]);
     await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
     const oldHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
-    const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
-    const outputDir = join(repository, "deploy", "snapshot-data");
-    await mkdir(join(repository, "deploy", backupName));
+    const backupName = ".snapshot-data.tar.gz.backup-00000000-0000-4000-8000-000000000000";
+    const outputDir = join(repository, "deploy", "snapshot-data.tar.gz");
+    await writeFile(join(repository, "deploy", backupName), "backup snapshot\n");
     const markerPath = join(repository, ".git", "stsdle-snapshot-recovery.json");
     const existingMarker = "unrelated recovery owner\n";
     await writeFile(markerPath, existingMarker, { flag: "wx" });
     const client = new GitClient(repository, runBoundedProcess);
-    await writeFile(join(outputDir, "active.json"), "new snapshot\n");
+    await writeFile(outputDir, "new snapshot\n");
     await client.assertOnlySnapshotChanges();
 
     const error = await captureError(client.commitSnapshot("b".repeat(64), {
@@ -356,13 +356,13 @@ describe("GitClient", () => {
 
   it("preserves a concurrent marker winner created after the absence check", async () => {
     const repository = await createGitRepository();
-    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.tar.gz.backup-*\n");
     await git(repository, ["add", ".gitignore"]);
     await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
     const oldHead = (await git(repository, ["rev-parse", "HEAD"])).trim();
-    const outputDir = join(repository, "deploy", "snapshot-data");
-    const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
-    await mkdir(join(repository, "deploy", backupName));
+    const outputDir = join(repository, "deploy", "snapshot-data.tar.gz");
+    const backupName = ".snapshot-data.tar.gz.backup-00000000-0000-4000-8000-000000000000";
+    await writeFile(join(repository, "deploy", backupName), "backup snapshot\n");
     const markerPath = join(repository, ".git", "stsdle-snapshot-recovery.json");
     const winnerBytes = "concurrent recovery owner\n";
     let winnerIdentity: { dev: bigint; ino: bigint; birthtimeMs: number } | undefined;
@@ -378,7 +378,7 @@ describe("GitClient", () => {
         },
       },
     });
-    await writeFile(join(outputDir, "active.json"), "new snapshot\n");
+    await writeFile(outputDir, "new snapshot\n");
     await client.assertOnlySnapshotChanges();
 
     const error = await captureError(client.commitSnapshot("b".repeat(64), {
@@ -398,7 +398,7 @@ describe("GitClient", () => {
 
   it("durably recovers an owned private index and publication backup before pushing", async () => {
     const repository = await createGitRepository();
-    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+    await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.tar.gz.backup-*\n");
     await git(repository, ["add", ".gitignore"]);
     await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
     const originMain = (await git(repository, ["rev-parse", "HEAD"])).trim();
@@ -431,11 +431,11 @@ describe("GitClient", () => {
         monotonicNow: () => clock,
       },
     });
-    const backupName = ".snapshot-data.backup-00000000-0000-4000-8000-000000000000";
+    const backupName = ".snapshot-data.tar.gz.backup-00000000-0000-4000-8000-000000000000";
     const backupPath = join(repository, "deploy", backupName);
-    await mkdir(backupPath);
-    const outputDir = join(repository, "deploy", "snapshot-data");
-    await writeFile(join(outputDir, "active.json"), "recovery snapshot\n");
+    await writeFile(backupPath, "backup snapshot\n");
+    const outputDir = join(repository, "deploy", "snapshot-data.tar.gz");
+    await writeFile(outputDir, "recovery snapshot\n");
     await client.assertOnlySnapshotChanges();
     await expect(client.commitSnapshot("b".repeat(64), { publicationBackupName: backupName, outputDir }))
       .rejects.toThrow("Card snapshot committed but private index cleanup failed");
@@ -446,7 +446,7 @@ describe("GitClient", () => {
     await expect(client.assertReady()).rejects.toThrow("Repository is not ready for snapshot release");
 
     removalBlocked = false;
-    await client.recoverSnapshot(join(repository, "deploy", "snapshot-data"));
+    await client.recoverSnapshot(join(repository, "deploy", "snapshot-data.tar.gz"));
 
     expect(await privateIndexDirectories(repository)).toEqual([]);
     await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
@@ -456,7 +456,7 @@ describe("GitClient", () => {
 
   it("retries idempotently when push succeeds but recovery-marker unlink fails", async () => {
     const repository = await createGitRepository();
-    const backupName = ".snapshot-data.backup-10000000-0000-4000-8000-000000000000";
+    const backupName = ".snapshot-data.tar.gz.backup-10000000-0000-4000-8000-000000000000";
     let originMain = await prepareRecoveryCommit(repository, backupName);
     let privateCleanupBlocked = true;
     let markerUnlinkBlocked = true;
@@ -504,7 +504,7 @@ describe("GitClient", () => {
 
   it("cleans all owned local artifacts before reporting unrelated remote advancement", async () => {
     const repository = await createGitRepository();
-    const backupName = ".snapshot-data.backup-20000000-0000-4000-8000-000000000000";
+    const backupName = ".snapshot-data.tar.gz.backup-20000000-0000-4000-8000-000000000000";
     await prepareRecoveryCommit(repository, backupName);
     let privateCleanupBlocked = true;
     let clock = 0;
@@ -538,7 +538,7 @@ describe("GitClient", () => {
 
   it("fails closed without moving a replacement that appears before quarantine", async () => {
     const repository = await createGitRepository();
-    const backupName = ".snapshot-data.backup-30000000-0000-4000-8000-000000000000";
+    const backupName = ".snapshot-data.tar.gz.backup-30000000-0000-4000-8000-000000000000";
     const originMain = await prepareRecoveryCommit(repository, backupName);
     const external = await makeTemporaryRoot();
     const externalSentinel = join(external, "external-sentinel.txt");
@@ -554,7 +554,7 @@ describe("GitClient", () => {
           if (replaced || path !== backupPath) return;
           replaced = true;
           await rename(backupPath, preservedPath);
-          await symlink(external, backupPath, "junction");
+          await symlink(externalSentinel, backupPath, "file");
         },
       },
     });
@@ -563,8 +563,8 @@ describe("GitClient", () => {
     await expect(client.recoverSnapshot()).rejects.toThrow("Unable to recover card snapshot");
 
     expect(await readFile(externalSentinel, "utf8")).toBe("external data\n");
-    expect(await readFile(join(preservedPath, "sentinel"), "utf8")).toBe("owned backup\n");
-    expect(await readFile(join(backupPath, "external-sentinel.txt"), "utf8")).toBe("external data\n");
+    expect(await readFile(preservedPath, "utf8")).toBe("backup snapshot\n");
+    expect(await readFile(backupPath, "utf8")).toBe("external data\n");
   }, 30_000);
 
   it("returns a fixed typed push error without preserving credential-bearing causes", async () => {
@@ -769,8 +769,8 @@ async function createGitRepository(): Promise<string> {
   await git(root, ["init"]);
   await git(root, ["config", "user.name", "Snapshot Test"]);
   await git(root, ["config", "user.email", "snapshot@example.invalid"]);
-  await mkdir(join(root, "deploy", "snapshot-data"), { recursive: true });
-  await writeFile(join(root, "deploy", "snapshot-data", "active.json"), "old snapshot\n");
+  await mkdir(join(root, "deploy"), { recursive: true });
+  await writeFile(join(root, "deploy", "snapshot-data.tar.gz"), "old snapshot\n");
   await writeFile(join(root, "unrelated.txt"), "old unrelated\n");
   await git(root, ["add", "-A"]);
   await git(root, ["commit", "-m", "initial"]);
@@ -779,7 +779,7 @@ async function createGitRepository(): Promise<string> {
 
 async function prepareRecoveryCommit(repository: string, backupName: string): Promise<string> {
   void backupName;
-  await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.backup-*\n");
+  await writeFile(join(repository, ".gitignore"), "deploy/.snapshot-data.tar.gz.backup-*\n");
   await git(repository, ["add", ".gitignore"]);
   await git(repository, ["commit", "-m", "ignore owned recovery artifacts"]);
   return (await git(repository, ["rev-parse", "HEAD"])).trim();
@@ -791,11 +791,10 @@ async function stageRecoveryCommit(
   backupName: string,
   expectPrivateCleanupFailure = true,
 ): Promise<void> {
-  const outputDir = join(repository, "deploy", "snapshot-data");
+  const outputDir = join(repository, "deploy", "snapshot-data.tar.gz");
   const backupPath = join(repository, "deploy", backupName);
-  await mkdir(backupPath);
-  await writeFile(join(backupPath, "sentinel"), "owned backup\n");
-  await writeFile(join(outputDir, "active.json"), "recovery snapshot\n");
+  await writeFile(backupPath, "backup snapshot\n");
+  await writeFile(outputDir, "recovery snapshot\n");
   await client.assertOnlySnapshotChanges();
   const commit = client.commitSnapshot("b".repeat(64), { publicationBackupName: backupName, outputDir });
   if (expectPrivateCleanupFailure) {
