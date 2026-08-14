@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { link as hardLink, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -63,6 +63,42 @@ describe("deployment snapshot archive", () => {
       await validated.cleanup();
     }
     await expect(readDeploymentRevision(first, validationOptions)).resolves.toBe(revision);
+  });
+
+  it("removes only its own final link when create post-link verification fails", async () => {
+    const revision = "ac".repeat(32);
+    const source = await createValidSource(revision);
+    const root = await temporaryRoot();
+    const archive = join(root, "snapshot-data.tar.gz");
+    let syncCalls = 0;
+
+    await expect(createDeploymentArchive(source.dataDir, archive, revision, validationOptions, {
+      syncDirectory: async () => {
+        syncCalls += 1;
+        if (syncCalls === 1) throw new Error(`private post-link sync ${root}`);
+      },
+    })).rejects.toThrow("Unable to create deployment archive");
+
+    await expect(readFile(archive)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(syncCalls).toBe(2);
+  });
+
+  it("preserves a concurrent create-path replacement after a partial hard-link failure", async () => {
+    const revision = "ad".repeat(32);
+    const source = await createValidSource(revision);
+    const root = await temporaryRoot();
+    const archive = join(root, "snapshot-data.tar.gz");
+
+    await expect(createDeploymentArchive(source.dataDir, archive, revision, validationOptions, {
+      linkFile: async (from, to) => {
+        await hardLink(from, to);
+        await unlink(to);
+        await writeFile(to, "concurrent replacement\n", { flag: "wx" });
+        throw new Error(`private post-link failure ${root}`);
+      },
+    })).rejects.toThrow("Unable to create deployment archive");
+
+    expect(await readFile(archive, "utf8")).toBe("concurrent replacement\n");
   });
 
   it("publishes a fixed archive transactionally and rolls back byte-identically", async () => {
@@ -201,6 +237,57 @@ describe("deployment snapshot archive", () => {
 
     expect(await readFile(destination)).toEqual(original);
     expect(await readDeploymentRevision(destination, validationOptions)).toBe(oldRevision);
+  });
+
+  it("restores the old archive when publish post-link verification fails", async () => {
+    const oldRevision = "7c".repeat(32);
+    const nextRevision = "7d".repeat(32);
+    const oldSource = await createValidSource(oldRevision);
+    const nextSource = await createValidSource(nextRevision);
+    const root = await temporaryRoot();
+    const destination = join(root, "snapshot-data.tar.gz");
+    const staging = join(root, ".snapshot-data.tar.gz.staging");
+    await createDeploymentArchive(oldSource.dataDir, destination, oldRevision, validationOptions);
+    const original = await readFile(destination);
+    await createDeploymentArchive(nextSource.dataDir, staging, nextRevision, validationOptions);
+    let syncCalls = 0;
+
+    await expect(beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
+      syncDirectory: async () => {
+        syncCalls += 1;
+        if (syncCalls === 1) throw new Error(`private publish post-link sync ${root}`);
+      },
+    })).rejects.toThrow("Unable to publish deployment archive");
+
+    expect(await readFile(destination)).toEqual(original);
+    expect(await readDeploymentRevision(destination, validationOptions)).toBe(oldRevision);
+  });
+
+  it("preserves a concurrent publish-path replacement after a partial hard-link failure", async () => {
+    const oldRevision = "7e".repeat(32);
+    const nextRevision = "7f".repeat(32);
+    const oldSource = await createValidSource(oldRevision);
+    const nextSource = await createValidSource(nextRevision);
+    const root = await temporaryRoot();
+    const destination = join(root, "snapshot-data.tar.gz");
+    const staging = join(root, ".snapshot-data.tar.gz.staging");
+    await createDeploymentArchive(oldSource.dataDir, destination, oldRevision, validationOptions);
+    await createDeploymentArchive(nextSource.dataDir, staging, nextRevision, validationOptions);
+    let firstLink = true;
+
+    await expect(beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
+      linkFile: async (from, to) => {
+        await hardLink(from, to);
+        if (!firstLink) return;
+        firstLink = false;
+        await unlink(to);
+        await writeFile(to, "concurrent publish replacement\n", { flag: "wx" });
+        throw new Error(`private publish link payload ${root}`);
+      },
+    })).rejects.toThrow("Unable to publish deployment archive");
+
+    expect(await readFile(destination, "utf8")).toBe("concurrent publish replacement\n");
+    expect((await readdir(root)).filter((name) => name.includes(".backup-"))).toHaveLength(1);
   });
 
   it("retries cleanup of every private validation root when the first post-publish cleanup fails", async () => {
@@ -374,6 +461,26 @@ describe("deployment snapshot archive", () => {
       expect((error as Error).message).toBe("Unable to validate deployment archive");
       expect(reachableErrorText(error)).not.toContain(root);
     }
+  });
+
+  it("awaits corrupt-gzip parser and stream teardown before removing validation temporaries", async () => {
+    const revision = "9b".repeat(32);
+    const source = await createValidSource(revision);
+    const root = await temporaryRoot();
+    const valid = join(root, "valid.tar.gz");
+    const corrupt = join(root, "corrupt.tar.gz");
+    const moved = join(root, "moved-corrupt.tar.gz");
+    await createDeploymentArchive(source.dataDir, valid, revision, validationOptions);
+    const bytes = await readFile(valid);
+    await writeFile(corrupt, bytes.subarray(0, bytes.length - 8));
+    const beforeTemporaryRoots = await validationTemporaryRoots();
+
+    await expect(validateDeploymentArchive(corrupt, revision, validationOptions))
+      .rejects.toThrow("Unable to validate deployment archive");
+
+    expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
+    await rename(corrupt, moved);
+    await unlink(moved);
   });
 });
 

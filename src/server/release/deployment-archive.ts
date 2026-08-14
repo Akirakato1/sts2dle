@@ -51,6 +51,12 @@ export interface ArchiveValidationOperations {
   removeValidationRoot?: (path: string) => Promise<void>;
 }
 
+export interface ArchiveCreateOperations extends ArchiveValidationOperations {
+  linkFile?: (from: string, to: string) => Promise<void>;
+  syncDirectory?: (path: string) => Promise<void>;
+  unlinkFile?: (path: string) => Promise<void>;
+}
+
 export interface PublishedArchive {
   active: ActiveSnapshot;
   finalize(): Promise<void>;
@@ -65,6 +71,7 @@ export interface ArchivePublishOperations {
   monotonicNow?: () => number;
   removeValidationRoot?: (path: string) => Promise<void>;
   renameFile?: (from: string, to: string) => Promise<void>;
+  syncDirectory?: (path: string) => Promise<void>;
   unlinkFile?: (path: string) => Promise<void>;
   wait?: (milliseconds: number) => Promise<void>;
 }
@@ -93,6 +100,7 @@ interface PublishOperations {
   monotonicNow(): number;
   removeValidationRoot(path: string): Promise<void>;
   renameFile(from: string, to: string): Promise<void>;
+  syncDirectory(path: string): Promise<void>;
   unlinkFile(path: string): Promise<void>;
   wait(milliseconds: number): Promise<void>;
 }
@@ -104,6 +112,7 @@ const defaultPublishOperations: PublishOperations = {
   monotonicNow: () => performance.now(),
   removeValidationRoot: async (path) => { await rm(path, { recursive: true, force: true }); },
   renameFile: rename,
+  syncDirectory: syncDirectoryIfSupported,
   unlinkFile: unlink,
   wait: delay,
 };
@@ -113,9 +122,10 @@ export async function createDeploymentArchive(
   archivePath: string,
   expectedRevision: string,
   options: SnapshotValidationOptions,
-  operations: ArchiveValidationOperations = {},
+  operations: ArchiveCreateOperations = {},
 ): Promise<void> {
   let temporaryPath: string | undefined;
+  let published: OwnedFile | undefined;
   try {
     assertRevision(expectedRevision);
     const active = await loadSafeActive(sourceDataDir, options);
@@ -144,11 +154,19 @@ export async function createDeploymentArchive(
     await validated.cleanup();
     const temporary = await resolveOwnedFile(temporaryPath);
     await revalidateParent(target.parent);
-    await linkOwnedFile(temporary, target.path, { ...defaultPublishOperations });
-    await unlinkOwnedFile(temporary, { ...defaultPublishOperations });
+    const publicationOperations = { ...defaultPublishOperations, ...withoutUndefined(operations) };
+    published = await linkOwnedFile(temporary, target.path, publicationOperations);
+    try {
+      await unlinkOwnedFile(temporary, publicationOperations);
+    } catch (error: unknown) {
+      await unlinkOwnedFile(published, publicationOperations);
+      published = undefined;
+      throw error;
+    }
     temporaryPath = undefined;
-    await syncDirectoryIfSupported(target.parent.path);
+    await publicationOperations.syncDirectory(target.parent.path);
   } catch {
+    if (published) await unlinkOwnedFile(published, { ...defaultPublishOperations }).catch(() => undefined);
     if (temporaryPath) await rm(temporaryPath, { force: true }).catch(() => undefined);
     throw new Error("Unable to create deployment archive");
   }
@@ -386,21 +404,31 @@ async function inspectArchive(
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let settled = false;
     let decompressorFinished = false;
+    let decompressorClosed = false;
     let parserFinished = false;
+    let sourceClosed = false;
+    let terminalError: unknown;
     let source: ReturnType<typeof createReadStream>;
     const decompressor = createGunzip();
     let parser: tar.Parser | tar.Unpack;
-    const settle = (error?: unknown): void => {
+    const settle = (): void => {
       if (settled) return;
+      if (!sourceClosed || !decompressorClosed || !parserFinished) return;
       settled = true;
-      if (error === undefined) {
+      if (terminalError === undefined && decompressorFinished) {
         resolvePromise();
         return;
       }
+      rejectPromise(terminalError ?? new Error("Archive stream terminated"));
+    };
+    const fail = (error: unknown): void => {
+      terminalError ??= error;
       source.destroy();
       decompressor.destroy();
-      if (source.closed) rejectPromise(error);
-      else source.once("close", () => rejectPromise(error));
+      settle();
+    };
+    const abortForInputError = (error: unknown): void => {
+      parser.abort(error instanceof Error ? error : new Error("Archive input failed"));
     };
     const filter = (_path: string, entry: Stats | ReadEntry): boolean => {
       try {
@@ -438,15 +466,23 @@ async function inspectArchive(
       }
       rawInspector(chunk);
     });
-    parser.on("error", settle);
-    source.on("error", settle);
-    decompressor.on("error", settle);
-    const settleWhenFinished = (): void => {
-      if (decompressorFinished && parserFinished) settle();
-    };
+    parser.on("error", (error) => {
+      parserFinished = true;
+      fail(error);
+    });
+    source.on("error", abortForInputError);
+    decompressor.on("error", abortForInputError);
+    source.on("close", () => {
+      sourceClosed = true;
+      settle();
+    });
+    decompressor.on("close", () => {
+      decompressorClosed = true;
+      settle();
+    });
     decompressor.on("end", () => {
       decompressorFinished = true;
-      settleWhenFinished();
+      settle();
     });
     parser.on("meta", () => parser.abort(new Error("Archive metadata entries are forbidden")));
     parser.on("ignoredEntry", (entry: ReadEntry) => {
@@ -454,7 +490,7 @@ async function inspectArchive(
     });
     parser.on(extractionDirectory === undefined ? "end" : "close", () => {
       parserFinished = true;
-      settleWhenFinished();
+      settle();
     });
     source.pipe(decompressor).pipe(parser);
   });
@@ -717,7 +753,7 @@ async function renameOwnedFile(
 async function linkOwnedFile(
   file: OwnedFile,
   targetPath: string,
-  operations: Pick<PublishOperations, "linkFile" | "monotonicNow" | "wait">,
+  operations: PublishOperations,
 ): Promise<OwnedFile> {
   assertDirectChild(targetPath, file.parent.path);
   const deadline = operations.monotonicNow() + RETRY_TIMEOUT_MS;
@@ -727,19 +763,36 @@ async function linkOwnedFile(
       await operations.linkFile(file.path, targetPath);
       const linked = await resolveOwnedFile(targetPath);
       if (!sameIdentity(linked.identity, file.identity)) throw new Error("Published archive identity changed");
-      await syncDirectoryIfSupported(file.parent.path);
+      await operations.syncDirectory(file.parent.path);
       return linked;
     } catch (error: unknown) {
+      await removeLinkedTargetIfOwned(file, targetPath, operations);
       if (!isTransient(error) || operations.monotonicNow() >= deadline) throw error;
       await operations.wait(RETRY_DELAY_MS);
     }
   }
 }
 
+async function removeLinkedTargetIfOwned(
+  source: OwnedFile,
+  targetPath: string,
+  operations: PublishOperations,
+): Promise<void> {
+  let target: OwnedFile;
+  try {
+    target = await resolveOwnedFile(targetPath);
+  } catch (error: unknown) {
+    if (isNodeError(error, "ENOENT")) return;
+    return;
+  }
+  if (!sameIdentity(target.identity, source.identity)) return;
+  await unlinkOwnedFile(target, operations);
+}
+
 async function unlinkOwnedFile(file: OwnedFile, operations: PublishOperations): Promise<void> {
   await revalidateOwnedFile(file);
   await operations.unlinkFile(file.path);
-  await syncDirectoryIfSupported(file.parent.path);
+  await operations.syncDirectory(file.parent.path);
 }
 
 async function revalidateOwnedFile(file: OwnedFile): Promise<void> {
