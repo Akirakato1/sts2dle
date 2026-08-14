@@ -3,8 +3,15 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig, type ServerConfig } from "../config.js";
+import {
+  CARD_KEYWORDS,
+  CARD_TARGETS,
+  type CardKeyword,
+  type CardTarget,
+} from "../../shared/domain.js";
 import type { FetchedCards } from "../spire-codex/client.js";
 import { buildSnapshot } from "../sync/build-snapshot.js";
+import { analyzeSourceFeatures, type SourceFeatureAnalysis } from "../sync/normalize-card.js";
 import { createProductionDependencies } from "../sync/production-sync.js";
 import { SnapshotStore, type ActiveSnapshot } from "../sync/snapshot-store.js";
 import { validateSnapshot } from "../sync/validate-snapshot.js";
@@ -67,6 +74,20 @@ export interface DefaultReleaseDependenciesOptions {
   npmCliPath?: string;
 }
 
+export interface SourceFeatureAudit {
+  readonly targets: readonly CardTarget[];
+  readonly singletonPowerKeyCount: number;
+  readonly recurringPowerKeyCount: number;
+  readonly cardsWithMultipleSingletonPowers: readonly string[];
+  readonly keywords: readonly CardKeyword[];
+}
+
+export interface ReleaseSnapshotResult {
+  readonly status: "unchanged" | "released";
+  readonly sourceRevision: string;
+  readonly sourceFeatureAudit: SourceFeatureAudit;
+}
+
 export class SnapshotPushError extends Error {
   constructor() {
     super("Card snapshot was committed but could not be pushed");
@@ -100,17 +121,18 @@ class SnapshotBuildError extends Error {
 export async function releaseSnapshot(
   options: ReleaseSnapshotOptions,
   dependencies: ReleaseSnapshotDependencies,
-): Promise<{ status: "unchanged" | "released"; sourceRevision: string }> {
+): Promise<ReleaseSnapshotResult> {
   let temporary: TemporarySnapshotBundle | undefined;
-  let result: { status: "unchanged" | "released"; sourceRevision: string } | undefined;
+  let result: ReleaseSnapshotResult | undefined;
   let failure: unknown;
 
   try {
     await dependencies.gitClient.assertReady();
     const committedRevision = await dependencies.readCommittedRevision();
     const fetched = await dependencies.fetchCards();
+    const sourceFeatureAudit = createSourceFeatureAudit(analyzeSourceFeatures(fetched.cards));
     if (!options.force && fetched.sourceRevision === committedRevision) {
-      result = { status: "unchanged", sourceRevision: fetched.sourceRevision };
+      result = { status: "unchanged", sourceRevision: fetched.sourceRevision, sourceFeatureAudit };
     } else {
       await dependencies.runChecks();
       temporary = await dependencies.buildTemporarySnapshot(fetched);
@@ -170,7 +192,7 @@ export async function releaseSnapshot(
       } catch {
         throw new SnapshotPushError();
       }
-      result = { status: "released", sourceRevision: fetched.sourceRevision };
+      result = { status: "released", sourceRevision: fetched.sourceRevision, sourceFeatureAudit };
     }
   } catch (error: unknown) {
     failure = error instanceof SnapshotPushError || error instanceof SnapshotPostCommitCleanupError
@@ -188,6 +210,19 @@ export async function releaseSnapshot(
 
   if (failure) throw failure;
   return result!;
+}
+
+function createSourceFeatureAudit(analysis: SourceFeatureAnalysis): SourceFeatureAudit {
+  return Object.freeze({
+    targets: Object.freeze(CARD_TARGETS.filter((target) => analysis.observedTargets.has(target))),
+    singletonPowerKeyCount: analysis.singletonPowerCount,
+    recurringPowerKeyCount: analysis.recurringPowerCount,
+    cardsWithMultipleSingletonPowers: Object.freeze(
+      [...analysis.publicCardNamesWithMultipleSingletonKeys]
+        .sort((left, right) => left.localeCompare(right, "en-US")),
+    ),
+    keywords: Object.freeze(CARD_KEYWORDS.filter((keyword) => analysis.observedKeywords.has(keyword))),
+  });
 }
 
 export async function buildSnapshotBundle(

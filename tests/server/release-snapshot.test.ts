@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FetchedCards } from "../../src/server/spire-codex/client.js";
+import type { RawSpireCard } from "../../src/server/spire-codex/schema.js";
 import type { ActiveSnapshot } from "../../src/server/sync/snapshot-store.js";
 import type { PublishedBundle } from "../../src/server/release/deployment-bundle.js";
 import {
@@ -40,6 +41,13 @@ const PUBLISHED_ACTIVE: ActiveSnapshot = {
   path: "C:\\repository\\deploy\\snapshot-data\\snapshots\\new-build",
 };
 const execFileAsync = promisify(execFile);
+const EXPECTED_SOURCE_FEATURE_AUDIT = {
+  targets: ["Self", "AnyEnemy", "AllEnemies"],
+  singletonPowerKeyCount: 2,
+  recurringPowerKeyCount: 1,
+  cardsWithMultipleSingletonPowers: [],
+  keywords: ["Eternal", "Ethereal", "Exhaust", "Innate", "Retain", "Sly", "Unplayable"],
+} as const;
 
 describe("releaseSnapshot", () => {
   it("runs the guarded release workflow in the required order", async () => {
@@ -47,7 +55,11 @@ describe("releaseSnapshot", () => {
 
     const result = await releaseSnapshot({}, harness.dependencies);
 
-    expect(result).toEqual({ status: "released", sourceRevision: NEXT_REVISION });
+    expect(result).toEqual({
+      status: "released",
+      sourceRevision: NEXT_REVISION,
+      sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+    });
     expect(harness.events).toEqual([
       "git-ready", "fetch", "checks", "build-temp", "validate-temp",
       "publish", "validate-published", "scope-check", "commit", "push",
@@ -89,7 +101,11 @@ describe("releaseSnapshot", () => {
 
     const result = await releaseSnapshot({}, harness.dependencies);
 
-    expect(result).toEqual({ status: "unchanged", sourceRevision: NEXT_REVISION });
+    expect(result).toEqual({
+      status: "unchanged",
+      sourceRevision: NEXT_REVISION,
+      sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+    });
     expect(harness.events).toEqual(["git-ready", "fetch"]);
     expect(harness.fetchCards).toHaveBeenCalledOnce();
   });
@@ -100,6 +116,7 @@ describe("releaseSnapshot", () => {
     await expect(releaseSnapshot({ force: true }, harness.dependencies)).resolves.toEqual({
       status: "released",
       sourceRevision: NEXT_REVISION,
+      sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
     });
     expect(harness.events).toContain("build-temp");
   });
@@ -171,6 +188,7 @@ describe("releaseSnapshot", () => {
     await expect(releaseSnapshot({}, harness.dependencies)).resolves.toEqual({
       status: "released",
       sourceRevision: NEXT_REVISION,
+      sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
     });
 
     expect(harness.events).toContain("private-index-cleanup");
@@ -426,15 +444,82 @@ describe("snapshot release CLI", () => {
 
     const exitCode = await runReleaseCli([], {
       createDependencies: () => createReleaseHarness().dependencies,
-      release: async () => ({ status, sourceRevision: NEXT_REVISION }),
+      release: async () => ({
+        status,
+        sourceRevision: NEXT_REVISION,
+        sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+      }),
       writeOutput: (line) => output.push(line),
       writeError: (line) => errors.push(line),
       repositoryRoot: "C:\\repository",
     });
 
     expect(exitCode).toBe(0);
-    expect(output).toEqual([message]);
+    expect(output).toEqual([
+      "Targets: Self, AnyEnemy, AllEnemies",
+      "Power keys: 2 singleton; 1 recurring",
+      "Multiple unique powers: none",
+      "Keywords: Eternal, Ethereal, Exhaust, Innate, Retain, Sly, Unplayable",
+      message,
+    ]);
     expect(errors).toEqual([]);
+  });
+
+  it("prints sorted public names for cards with multiple singleton powers without leaking private source fields", async () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const rawSecret = "raw-payload-secret";
+    const privatePath = "C:\\private\\snapshot-source.json";
+    const privateUrl = "https://user:password@example.invalid/cards.json";
+    const selectedAnswerId = "SELECTED_ANSWER_ID_DO_NOT_PRINT";
+    const cards = [
+      auditCard({
+        id: selectedAnswerId,
+        name: "Zulu Public Card",
+        target: "AnyEnemy",
+        powers_applied: [
+          { power: "Zulu One", power_key: "zulu_one", amount: 1 },
+          { power: "Zulu Two", power_key: "zulu_two", amount: 1 },
+        ],
+        keywords_key: ["Unplayable", "Sly", "Retain", "Innate"],
+        description: privatePath,
+        image_url: privateUrl,
+      }),
+      auditCard({
+        id: "ALPHA_PUBLIC_CARD",
+        name: "Alpha Public Card",
+        target: "Self",
+        powers_applied: [
+          { power: "Alpha One", power_key: "alpha_one", amount: 1 },
+          { power: "Alpha Two", power_key: "alpha_two", amount: 1 },
+        ],
+        keywords_key: ["Exhaust", "Ethereal", "Eternal"],
+      }),
+    ];
+    const harness = createReleaseHarness({ committedRevision: NEXT_REVISION, cards });
+    harness.fetched.rawBody = rawSecret;
+
+    const exitCode = await runReleaseCli([], {
+      createDependencies: () => harness.dependencies,
+      release: releaseSnapshot,
+      writeOutput: (line) => output.push(line),
+      writeError: (line) => errors.push(line),
+      repositoryRoot: "C:\\repository",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(output).toEqual([
+      "Targets: Self, AnyEnemy",
+      "Power keys: 4 singleton; 0 recurring",
+      "Multiple unique powers: Alpha Public Card, Zulu Public Card",
+      "Keywords: Eternal, Ethereal, Exhaust, Innate, Retain, Sly, Unplayable",
+      "Card snapshot is already current",
+    ]);
+    expect(errors).toEqual([]);
+    expect(output.join("\n")).not.toContain(rawSecret);
+    expect(output.join("\n")).not.toContain(privatePath);
+    expect(output.join("\n")).not.toContain(privateUrl);
+    expect(output.join("\n")).not.toContain(selectedAnswerId);
   });
 
   it("prints only fixed failure and retry instructions after a committed push failure", async () => {
@@ -584,11 +669,12 @@ interface HarnessOptions {
   failPrivateCleanup?: boolean;
   failFinalize?: boolean;
   failRecoveryCompletion?: boolean;
+  cards?: readonly RawSpireCard[];
 }
 
 function createReleaseHarness(options: HarnessOptions = {}) {
   const events: string[] = [];
-  const fetched = fetchedCards();
+  const fetched = fetchedCards(options.cards);
   let destination = "head-snapshot";
   let publicationRestored = false;
   let rollbackSettled = false;
@@ -757,13 +843,68 @@ async function realGitCommand(cwd: string, args: readonly string[]): Promise<str
   return result.stdout;
 }
 
-function fetchedCards(): FetchedCards {
+function fetchedCards(cards: readonly RawSpireCard[] = auditCards()): FetchedCards {
   return {
-    cards: [],
-    rawBody: "[]",
+    cards: [...cards],
+    rawBody: JSON.stringify(cards),
     sourceRevision: NEXT_REVISION,
     lastModified: null,
     fetchedAt: "2026-08-14T00:00:00.000Z",
+  };
+}
+
+function auditCards(): RawSpireCard[] {
+  return [
+    auditCard({
+      id: "AUDIT_SELF",
+      name: "Audit Self",
+      target: "Self",
+      powers_applied: [
+        { power: "Shared", power_key: "shared", amount: 1 },
+        { power: "Self Unique", power_key: "self_unique", amount: 1 },
+      ],
+      keywords_key: ["Eternal", "Ethereal", "Exhaust"],
+    }),
+    auditCard({
+      id: "AUDIT_ENEMY",
+      name: "Audit Enemy",
+      target: "AnyEnemy",
+      powers_applied: [
+        { power: "Shared", power_key: "shared", amount: 1 },
+        { power: "Enemy Unique", power_key: "enemy_unique", amount: 1 },
+      ],
+      keywords_key: ["Innate", "Retain"],
+    }),
+    auditCard({
+      id: "AUDIT_ALL",
+      name: "Audit All",
+      target: "AllEnemies",
+      powers_applied: [{ power: "Shared", power_key: "shared", amount: 1 }],
+      keywords_key: ["Sly", "Unplayable"],
+    }),
+  ];
+}
+
+function auditCard(overrides: Partial<RawSpireCard>): RawSpireCard {
+  return {
+    id: "AUDIT_CARD",
+    name: "Audit Card",
+    color: "colorless",
+    type: "Skill",
+    type_key: "Skill",
+    rarity: "Common",
+    rarity_key: "Common",
+    cost: 1,
+    is_x_cost: null,
+    target: "None",
+    powers_applied: null,
+    description: "",
+    keywords_key: null,
+    upgrade: null,
+    image_url: "/static/images/cards/audit.webp",
+    image_url_card: null,
+    image_url_card_upg: null,
+    ...overrides,
   };
 }
 

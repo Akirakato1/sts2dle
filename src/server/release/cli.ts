@@ -48,6 +48,14 @@ export async function runReleaseCli(
       return 0;
     }
     const result = await resolvedDependencies.release(options, releaseDependencies);
+    resolvedDependencies.writeOutput(`Targets: ${result.sourceFeatureAudit.targets.join(", ")}`);
+    resolvedDependencies.writeOutput(
+      `Power keys: ${result.sourceFeatureAudit.singletonPowerKeyCount} singleton; ${result.sourceFeatureAudit.recurringPowerKeyCount} recurring`,
+    );
+    resolvedDependencies.writeOutput(
+      `Multiple unique powers: ${result.sourceFeatureAudit.cardsWithMultipleSingletonPowers.join(", ") || "none"}`,
+    );
+    resolvedDependencies.writeOutput(`Keywords: ${result.sourceFeatureAudit.keywords.join(", ")}`);
     resolvedDependencies.writeOutput(
       result.status === "unchanged"
         ? "Card snapshot is already current"
