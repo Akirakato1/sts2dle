@@ -279,7 +279,7 @@ export function App() {
   }, [attempt]);
   return <div className="app-shell">
     <div className="ember-glow" aria-hidden="true" />
-    <header className="hero"><GameGuide /><p className="eyebrow">Slay the Spire 2</p><h1>STSDLE</h1><p className="subtitle">A daily card deduction.</p></header>
+    <header className="hero"><GameGuide /><p className="eyebrow">Slay the Spire 2</p><h1>STSDLE</h1><p className="subtitle">Prototype</p></header>
     {error ? <section className="load-error" role="alert"><p>We couldn&apos;t load the current card set.</p><small>{error}</small><button type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></section> : snapshot ? <GameShell snapshot={snapshot} /> : <p role="status">Loading card data…</p>}
     <footer className="site-footer">
       <p>Card data and artwork references provided by <a href="https://spire-codex.com/">Spire Codex</a>.</p>

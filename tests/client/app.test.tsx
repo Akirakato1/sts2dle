@@ -279,6 +279,8 @@ describe("App snapshot cleanup", () => {
 
     const view = render(<App />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading card data");
+    expect(screen.getByText("Prototype", { selector: ".subtitle" })).toBeVisible();
+    expect(screen.queryByText("A daily card deduction.")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "How to play" }).closest(".hero")).toBeTruthy();
     expect(view.container.querySelector(".game-panel .game-guide")).toBeNull();
