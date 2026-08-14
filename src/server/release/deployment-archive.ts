@@ -357,7 +357,11 @@ async function validateArchiveInternal(
       cleanup,
     };
   } catch (error: unknown) {
-    await cleanup();
+    try {
+      await cleanup();
+    } catch {
+      await cleanup();
+    }
     throw error;
   }
 }

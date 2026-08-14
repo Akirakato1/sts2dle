@@ -192,6 +192,34 @@ describe("deployment snapshot archive", () => {
     expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
   });
 
+  it("cleans both validation roots when the second validation and its first cleanup attempt fail", async () => {
+    const oldRevision = "91".repeat(32);
+    const nextRevision = "92".repeat(32);
+    const oldSource = await createValidSource(oldRevision);
+    const nextSource = await createValidSource(nextRevision);
+    const root = await temporaryRoot();
+    const destination = join(root, "snapshot-data.tar.gz");
+    const staging = join(root, ".snapshot-data.tar.gz.staging");
+    await createDeploymentArchive(oldSource.dataDir, destination, oldRevision, validationOptions);
+    const original = await readFile(destination);
+    await createDeploymentArchive(nextSource.dataDir, staging, nextRevision, validationOptions);
+    const beforeTemporaryRoots = await validationTemporaryRoots();
+    let cleanupCalls = 0;
+
+    await expect(beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
+      afterPublish: async () => { await writeFile(destination, "invalid second validation\n"); },
+      removeValidationRoot: async (path) => {
+        cleanupCalls += 1;
+        if (cleanupCalls === 2) throw new Error(`injected second-validation cleanup payload ${root}`);
+        await rm(path, { recursive: true, force: true });
+      },
+    })).rejects.toThrow("Published deployment archive failed validation");
+
+    expect(await readFile(destination)).toEqual(original);
+    expect(cleanupCalls).toBe(4);
+    expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
+  });
+
   it("rejects traversal, links, duplicates, oversize entries, unexpected roots, multiple builds, and entry-count bombs", async () => {
     const revision = "9a".repeat(32);
     const root = await temporaryRoot();
