@@ -4,7 +4,7 @@ import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { CardSearch } from "./components/CardSearch.js";
 import { GameGuide } from "./components/GameGuide.js";
 import { GuessGrid } from "./components/GuessGrid.js";
-import { FEATURE_LABELS, keywordAccessibleValue } from "./components/FeatureTile.js";
+import { FEATURE_LABELS } from "./components/FeatureTile.js";
 import { AnswerReveal } from "./components/AnswerReveal.js";
 import { SharePanel } from "./components/SharePanel.js";
 import { NameHint } from "./components/NameHint.js";
@@ -87,13 +87,7 @@ function resolveOrbUse(
           answerCard.base[target.feature],
           answerCard.upgraded[target.feature],
         );
-        const accessibleValue = target.feature === "cardClass"
-          || target.feature === "cardType"
-          || target.feature === "mana"
-          || target.feature === "rarity"
-          ? answerValue
-          : keywordAccessibleValue(answerValue);
-        return accepted(`Reveal Orb showed ${FEATURE_LABELS[target.feature]}: ${accessibleValue}.`);
+        return accepted(`Reveal Orb showed ${FEATURE_LABELS[target.feature]}: ${answerValue}.`);
       }
     case "filter":
       if (target.kind !== "tile" || !validConstraintTarget(round, target, "green")) {

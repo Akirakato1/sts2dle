@@ -32,8 +32,7 @@ import { FEATURE_ORDER, type CardIdentity, type FeatureVector, type SpriteMap } 
 
 const vector: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
-  eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false,
+  target: "Self", powers: [], keywords: [],
 };
 const cards: CardIdentity[] = ["first", "second"].map((id) => ({
   id, name: id, hasUpgrade: true, artUrl: "", baseCardUrl: null, upgradedCardUrl: null,

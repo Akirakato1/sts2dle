@@ -31,7 +31,9 @@ describe("GameGuide", () => {
         "Exactly one version matches",
         "Neither version matches",
       ],
-      "Keyword icons": ["Absent", "Present", "Gained on upgrade", "Lost on upgrade"],
+      "Set features": [
+        "Powers and Keywords are sets. Exact sets match green. Any corresponding overlap is yellow. No overlap is red.",
+      ],
       "Orbs and filtering": [
         "Reveal Orb: one use on a feature header to reveal the answer's base and upgraded pair.",
         "Filter Orb: one use on a green result to mark matching candidates green.",
@@ -40,8 +42,8 @@ describe("GameGuide", () => {
         "Drag an orb, or operate it with click, tap, or keyboard.",
         "Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.",
         "Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.",
-        "Ordinary values use OR; keywords and enabled groups use AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.",
-        "Keyword None matches a form with no keywords and clears other keyword choices.",
+        "Scalar groups use OR; Powers and Keywords use AND; enabled groups combine with AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.",
+        "Power None matches a form with no powers and clears other power choices; Keyword None does the same for keywords.",
       ],
       "Name hints": [
         "After 5 wrong guesses, word-length lines appear.",
@@ -68,22 +70,7 @@ describe("GameGuide", () => {
     }
     expect(dialog.querySelectorAll(".result-legend__swatch[aria-hidden='true']")).toHaveLength(3);
     expect(dialog.querySelectorAll("svg[data-orb-kind]")).toHaveLength(3);
-    expect(dialog.querySelectorAll(".keyword-state-icons")).toHaveLength(4);
-    const keywordSection = within(dialog).getByRole("heading", { name: "Keyword icons" }).closest("section")!;
-    expect(keywordSection.querySelector("ul")).toHaveClass("game-guide__keyword-list");
-    const expectedKeywords = [
-      { label: "Absent", icons: ["x"] },
-      { label: "Present", icons: ["check"] },
-      { label: "Gained on upgrade", icons: ["x", "check"] },
-      { label: "Lost on upgrade", icons: ["check", "x"] },
-    ] as const;
-    for (const [index, expected] of expectedKeywords.entries()) {
-      const row = keywordSection.querySelectorAll("li")[index]!;
-      expect([...row.querySelectorAll("svg[data-icon]")].map((icon) => icon.getAttribute("data-icon")))
-        .toEqual(expected.icons);
-      expect(row.querySelector(":scope > span:last-child")).toHaveTextContent(expected.label);
-    }
-    expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(16);
+    expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(17);
     expect(dialog).not.toHaveTextContent("Hardcore Practice");
     expect(view.container.querySelector("details")).toBeNull();
   });

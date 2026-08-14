@@ -1,6 +1,5 @@
 import React, { useEffect, useState, type CSSProperties } from "react";
 
-import { KeywordStateIcons, type KeywordStateDisplayValue } from "./KeywordStateIcons.js";
 import { useOrbInteraction } from "./OrbInteractionContext.js";
 import { OrbVisual } from "./OrbVisual.js";
 import type { FeatureResult, TileColor } from "../../shared/comparison.js";
@@ -14,12 +13,9 @@ export const FEATURE_LABELS: Record<FeatureName, string> = {
   cardType: "Type",
   mana: "Mana",
   rarity: "Rarity",
-  eternal: "Eternal",
-  ethereal: "Ethereal",
-  exhaust: "Exhaust",
-  innate: "Innate",
-  retain: "Retain",
-  sly: "Sly",
+  target: "Target",
+  powers: "Powers",
+  keywords: "Keywords",
 };
 
 const TILE_COLORS: Record<TileColor, string> = {
@@ -27,16 +23,6 @@ const TILE_COLORS: Record<TileColor, string> = {
   yellow: "#a7791d",
   red: "#963d36",
 };
-
-export function keywordAccessibleValue(value: string): string {
-  return value.split(" \u2192 ")
-    .map((part) => part === "true" ? "present" : "absent")
-    .join(" to ");
-}
-
-function isCoreFeature(feature: FeatureName): boolean {
-  return feature === "cardClass" || feature === "cardType" || feature === "mana" || feature === "rarity";
-}
 
 export interface FeatureTileProps {
   result: FeatureResult;
@@ -74,10 +60,12 @@ export function FeatureTile({
     return () => cancelAnimationFrame(frame);
   }, [animate]);
 
-  const coreFeature = isCoreFeature(result.feature);
-  const visualValue = coreFeature ? result.displayValue : <KeywordStateIcons displayValue={result.displayValue as KeywordStateDisplayValue} />;
-  const accessibleValue = coreFeature ? result.displayValue : keywordAccessibleValue(result.displayValue);
-  const label = `${FEATURE_LABELS[result.feature]}: ${accessibleValue}. Result: ${result.color}.`;
+  const label = `${FEATURE_LABELS[result.feature]}: ${result.displayValue}. Result: ${result.color}.`;
+  const valueClassName = `feature-tile__value feature-tile__value--${result.feature}${
+    result.feature === "cardClass" && result.displayValue === "Necrobinder"
+      ? " feature-tile__value--necrobinder"
+      : ""
+  }`;
   const target = {
     kind: "tile" as const,
     guessIndex: chronologicalGuessIndex,
@@ -115,7 +103,7 @@ export function FeatureTile({
     <div className="feature-tile__surface" onTransitionEnd={handleTransitionEnd}>
       <span className="feature-tile__face feature-tile__front" aria-hidden="true" />
       <span className="feature-tile__face feature-tile__back" aria-hidden="true">
-        <span className="feature-tile__value">{visualValue}</span>
+        <span className={valueClassName}>{result.displayValue}</span>
       </span>
     </div>
     {orbBadge && <span className={`feature-tile__orb-badge feature-tile__orb-badge--${orbBadge}`} role="img" aria-label={`${orbBadge === "filter" ? "Filter" : "Negation"} Orb used here`}>

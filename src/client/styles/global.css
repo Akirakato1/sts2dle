@@ -328,17 +328,6 @@ h1 {
   margin-top: .08rem;
 }
 
-.game-guide__keyword-list li {
-  grid-template-columns: 4rem minmax(0, 1fr);
-  align-items: center;
-}
-
-.game-guide__keyword-list .keyword-state-icons {
-  width: 4rem;
-  justify-self: center;
-  margin-top: 0;
-}
-
 .game-guide__row-icon {
   width: 1.25rem;
   height: 1.25rem;
@@ -348,21 +337,6 @@ h1 {
 .game-guide__orb-list li { grid-template-columns: 1.9rem minmax(0, 1fr); }
 
 .game-guide__orb-list .orb-visual { flex: 0 0 auto; }
-
-.keyword-state-icons {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: .18em;
-  color: currentColor;
-}
-
-.keyword-state-icons svg {
-  width: 1.2em;
-  height: 1.2em;
-}
-
-.keyword-state-icons__arrow { margin-inline: .08em; }
 
 .card-search__input {
   border-color: #977348;

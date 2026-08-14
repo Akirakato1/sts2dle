@@ -66,18 +66,24 @@ describe("FeatureTile", () => {
   });
 
   test.each([
-    ["false", "absent"],
-    ["true", "present"],
-    ["false → true", "absent to present"],
-    ["true → false", "present to absent"],
-  ] as const)("renders keyword state %s without text labels", (displayValue, accessibleValue) => {
-    const { view } = renderTile({ result: result({ feature: "exhaust", color: "red", displayValue }), revealIndex: 1 });
-    const tile = screen.getByRole("cell", { name: `Exhaust: ${accessibleValue}. Result: red.` });
+    ["powers", "Strength, Dexterity", "Powers: Strength, Dexterity. Result: yellow."],
+    ["keywords", "None", "Keywords: None. Result: yellow."],
+    ["keywords", "None \u2192 Exhaust", "Keywords: None \u2192 Exhaust. Result: yellow."],
+  ] as const)("renders textual %s value %s with its complete accessible label", (feature, displayValue, accessibleName) => {
+    renderTile({ result: result({ feature, color: "yellow", displayValue }), revealIndex: 1 });
+    const tile = screen.getByRole("cell", { name: accessibleName });
 
-    expect(tile).toHaveAccessibleName(`Exhaust: ${accessibleValue}. Result: red.`);
-    expect(view.container.textContent).not.toMatch(/Yes|true|false/);
-    expect(view.container.querySelector(".feature-tile__result-mark")).toBeNull();
-    expect(view.container.querySelector(".feature-tile__hint")).toBeNull();
+    expect(tile).toHaveTextContent(displayValue);
+    expect(tile.querySelector(".feature-tile__value")).toHaveClass(`feature-tile__value--${feature}`);
+  });
+
+  test("adds the compact class-value modifier only for Necrobinder", () => {
+    renderTile({ result: result({ displayValue: "Necrobinder" }) });
+    renderTile({ result: result({ displayValue: "Ironclad" }) });
+
+    expect(screen.getByText("Necrobinder")).toHaveClass("feature-tile__value--cardClass", "feature-tile__value--necrobinder");
+    expect(screen.getByText("Ironclad")).toHaveClass("feature-tile__value--cardClass");
+    expect(screen.getByText("Ironclad")).not.toHaveClass("feature-tile__value--necrobinder");
   });
 
   test("sets the reveal index and uses an immediate final surface when animation is disabled", () => {

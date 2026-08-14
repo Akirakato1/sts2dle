@@ -4,8 +4,7 @@ import type { SubmittedGuess } from "../game/game-reducer.js";
 import type { AssistanceState, ConstraintOrbTarget } from "../game/assistance.js";
 import { formatFeatureValue } from "../../shared/comparison.js";
 import { FEATURE_ORDER, type CardIdentity, type FeatureName, type SpriteMap } from "../../shared/domain.js";
-import { FEATURE_LABELS, FeatureTile, keywordAccessibleValue, REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "./FeatureTile.js";
-import { KeywordStateIcons, type KeywordStateDisplayValue } from "./KeywordStateIcons.js";
+import { FEATURE_LABELS, FeatureTile, REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "./FeatureTile.js";
 import { useOrbInteraction } from "./OrbInteractionContext.js";
 import { SpriteArt } from "./SpriteArt.js";
 
@@ -20,10 +19,6 @@ export interface GuessGridProps {
   onRevealComplete?: () => void;
 }
 
-function isKeywordFeature(feature: FeatureName): boolean {
-  return feature !== "cardClass" && feature !== "cardType" && feature !== "mana" && feature !== "rarity";
-}
-
 function FeatureHeader({ feature, selectedAnswer, revealed }: {
   feature: FeatureName;
   selectedAnswer: CardIdentity;
@@ -35,14 +30,11 @@ function FeatureHeader({ feature, selectedAnswer, revealed }: {
     `${FEATURE_LABELS[feature]} feature heading`,
   );
   const displayValue = formatFeatureValue(selectedAnswer.base[feature], selectedAnswer.upgraded[feature]);
-  const accessibleValue = isKeywordFeature(feature) ? keywordAccessibleValue(displayValue) : displayValue;
 
   return <div className="guess-grid__header" role="columnheader" data-feature={feature}>
     <span className="guess-grid__header-label">{FEATURE_LABELS[feature]}</span>
-    {revealed && <span className="guess-grid__reveal-bubble" role="note" aria-label={`Answer: ${accessibleValue}`}>
-      {isKeywordFeature(feature)
-        ? <KeywordStateIcons displayValue={displayValue as KeywordStateDisplayValue} />
-        : displayValue}
+    {revealed && <span className="guess-grid__reveal-bubble" role="note" aria-label={`Answer: ${displayValue}`}>
+      {displayValue}
     </span>}
     {binding.active && <button
       {...binding.targetProps}

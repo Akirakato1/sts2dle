@@ -282,7 +282,11 @@
   white-space: nowrap;
 }
 
-[data-orb-target][role="button"] { border-radius: .2rem; }
+[data-orb-target][role="button"] {
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: .2rem;
+}
 .orb-target--active.orb-target--valid,
 [data-orb-target][aria-label*="Use "] {
   cursor: pointer;

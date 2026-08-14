@@ -36,7 +36,7 @@
 }
 
 .practice-filter {
-  width: min(68rem, 100%);
+  width: min(76rem, 100%);
   margin: .7rem auto;
   padding: .75rem;
   border: 1px solid #c7a34f;
@@ -105,7 +105,7 @@
 
 .practice-filter__groups {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
   gap: .65rem;
 }
 
@@ -125,7 +125,7 @@
 
 .practice-filter__choice {
   display: flex;
-  min-height: 34px;
+  min-height: 44px;
   align-items: center;
   gap: .45rem;
   padding: .15rem .2rem;

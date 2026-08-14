@@ -8,9 +8,9 @@
 
 .guess-grid {
   display: grid;
-  grid-template-columns: 76px repeat(10, minmax(72px, 1fr));
+  grid-template-columns: 76px repeat(7, minmax(86px, 1fr));
   gap: .15rem;
-  min-width: 830px;
+  min-width: 695px;
   text-align: center;
 }
 
@@ -160,6 +160,33 @@
 
 .feature-tile__value {
   overflow-wrap: anywhere;
+}
+
+.feature-tile__value--target {
+  font-size: .82rem;
+  line-height: 1.15;
+}
+
+.feature-tile__value--powers,
+.feature-tile__value--keywords {
+  font-size: .72rem;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.feature-tile__value--necrobinder {
+  font-size: .82rem;
+  letter-spacing: -.02em;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.guess-grid__header[data-feature="powers"] .guess-grid__reveal-bubble,
+.guess-grid__header[data-feature="keywords"] .guess-grid__reveal-bubble {
+  max-width: 9rem;
+  font-size: .68rem;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .feature-tile__orb-badge {

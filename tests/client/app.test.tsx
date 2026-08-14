@@ -17,8 +17,8 @@ import { createDefaultPracticeFilter } from "../../src/client/game/practice-filt
 
 const card = (id: string, name: string) => ({
   id, name, hasUpgrade: true, artUrl: `${id}.png`, baseCardUrl: `https://cards.example/${id}.png`, upgradedCardUrl: `https://cards.example/${id}-upgraded.png`,
-  base: { cardClass: "Neutral", cardType: "Skill", mana: 1, rarity: "Common", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false },
-  upgraded: { cardClass: "Neutral", cardType: "Skill", mana: 1, rarity: "Common", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false },
+  base: { cardClass: "Neutral", cardType: "Skill", mana: 1, rarity: "Common", target: "Self", powers: [], keywords: [] },
+  upgraded: { cardClass: "Neutral", cardType: "Skill", mana: 1, rarity: "Common", target: "Self", powers: [], keywords: [] },
 });
 const appCards = [card("apotheosis", "Apotheosis"), card("apparition", "Apparition")];
 const appSprite = { candidate: { x: 0, y: 0, width: 64, height: 64 }, guess: { x: 0, y: 0, width: 160, height: 160 } };
@@ -31,7 +31,7 @@ const searchSnapshot = {
     cards: { apotheosis: appSprite, apparition: appSprite },
   },
 };
-const appFeatureNames = ["cardClass", "cardType", "mana", "rarity", "eternal", "ethereal", "exhaust", "innate", "retain", "sly"] as const;
+const appFeatureNames = FEATURE_ORDER;
 const makeResult = (feature: (typeof appFeatureNames)[number]) => ({
   feature,
   color: "red" as const,
@@ -271,16 +271,16 @@ describe("App snapshot cleanup", () => {
     expect(consumeNegation).toHaveBeenCalledWith({ guessIndex: 0, cardId: "apparition", feature: "cardClass" });
   });
 
-  test("announces a revealed keyword pair with accessible absent and present wording", async () => {
+  test("announces a revealed empty set using its textual value", async () => {
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue(readyGame(assistedRound()));
 
     render(<App />);
     await screen.findByRole("combobox");
     fireEvent.click(screen.getByRole("button", { name: "Reveal Orb, available" }));
-    fireEvent.click(screen.getByRole("button", { name: /Eternal feature heading.*Use Reveal Orb/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Keywords feature heading.*Use Reveal Orb/ }));
 
-    expect(screen.getByRole("status")).toHaveTextContent("Reveal Orb showed Eternal: absent.");
+    expect(screen.getByRole("status")).toHaveTextContent("Reveal Orb showed Keywords: None.");
   });
 
   test("keeps a stale Filter orb selected and announces the fixed semantic rejection", async () => {
@@ -343,7 +343,7 @@ describe("App snapshot cleanup", () => {
   test("renders durable bubble and exact badges while red classification overrides green", async () => {
     const assistance = {
       ...createDefaultAssistance(),
-      reveal: { feature: "eternal" as const },
+      reveal: { feature: "keywords" as const },
       filter: { guessIndex: 0, cardId: "apparition", feature: "cardType" as const },
       negation: { guessIndex: 0, cardId: "apparition", feature: "cardClass" as const },
     };
@@ -352,7 +352,7 @@ describe("App snapshot cleanup", () => {
 
     render(<App />);
     const input = await screen.findByRole("combobox");
-    expect(screen.getByLabelText("Answer: absent")).toBeInTheDocument();
+    expect(screen.getByLabelText("Answer: None")).toBeInTheDocument();
     expect(screen.getByLabelText("Filter Orb used here")).toBeInTheDocument();
     expect(screen.getByLabelText("Negation Orb used here")).toBeInTheDocument();
 

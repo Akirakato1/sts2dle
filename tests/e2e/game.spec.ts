@@ -31,12 +31,9 @@ const FEATURE_LABELS: Readonly<Record<FeatureName, string>> = {
   cardType: "Type",
   mana: "Mana",
   rarity: "Rarity",
-  eternal: "Eternal",
-  ethereal: "Ethereal",
-  exhaust: "Exhaust",
-  innate: "Innate",
-  retain: "Retain",
-  sly: "Sly",
+  target: "Target",
+  powers: "Powers",
+  keywords: "Keywords",
 };
 
 interface FixtureModel {
@@ -970,9 +967,9 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   await openEmptySearch(page);
   const afterimage = model.cards.find((card) => card.id === "AFTERIMAGE")!;
   await expect(cardOption(page, afterimage).getByText("Base only", { exact: true })).toBeVisible();
-  const keywordFeatures = ["eternal", "ethereal", "exhaust", "innate", "retain", "sly"] as const;
   const keywordFree = model.cards.find((card) => card.id !== orbGuess.id
-    && keywordFeatures.every((feature) => !card.base[feature] && !card.upgraded[feature]));
+    && card.base.keywords.length === 0
+    && card.upgraded.keywords.length === 0);
   expect(keywordFree).toBeDefined();
   const keywordFreeOption = cardOption(page, keywordFree!);
   await expect(keywordFreeOption).toBeVisible();

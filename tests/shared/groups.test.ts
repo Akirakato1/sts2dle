@@ -17,9 +17,9 @@ function card(id: string, overrides: Partial<CardIdentity> = {}): CardIdentity {
 
 describe("feature keys and groups", () => {
   it("serializes feature vectors in canonical order rather than object property order", () => {
-    const reordered = {
-      keywords: ["Ethereal", "Exhaust"] as const, powers: ["Strength", "Weak"], target: "Self" as const,
-      rarity: "Common" as const, mana: 1, cardType: "Attack" as const, cardClass: "Ironclad" as const,
+    const reordered: FeatureVector = {
+      keywords: ["Ethereal", "Exhaust"], powers: ["Strength", "Weak"], target: "Self",
+      rarity: "Common", mana: 1, cardType: "Attack", cardClass: "Ironclad",
     };
 
     expect(baseKey(base)).toBe(baseKey(reordered));

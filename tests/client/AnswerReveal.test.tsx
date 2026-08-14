@@ -13,12 +13,9 @@ const features = {
   cardType: "Skill" as const,
   mana: 1,
   rarity: "Common" as const,
-  eternal: false,
-  ethereal: false,
-  exhaust: false,
-  innate: false,
-  retain: false,
-  sly: false,
+  target: "Self" as const,
+  powers: [],
+  keywords: [],
 };
 
 function card(id: string, name: string, hasUpgrade = true): CardIdentity {

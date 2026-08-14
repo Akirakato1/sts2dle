@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
   KEYWORD_FILTER_NONE,
+  POWER_FILTER_NONE,
   type PracticeFilterGroupName,
   type PracticeFilterOptions,
   type PracticeFilterState,
   type PracticeFilterValue,
 } from "../game/practice-filter.js";
-import { FEATURE_LABELS } from "./FeatureTile.js";
+import type { CardTarget } from "../../shared/domain.js";
 
 export const FILTER_HELP_DISMISSED_KEY = "stsdle:filter-help-dismissed:v1";
 
@@ -29,12 +30,24 @@ const GROUPS: readonly GroupDefinition[] = [
   { key: "cardType", label: "Type" },
   { key: "mana", label: "Mana" },
   { key: "rarity", label: "Rarity" },
+  { key: "target", label: "Target" },
+  { key: "powers", label: "Powers" },
   { key: "keywords", label: "Keywords" },
 ];
 
+const TARGET_LABELS: Readonly<Record<CardTarget, string>> = {
+  Self: "Self",
+  AnyEnemy: "Single Enemy",
+  AllEnemies: "All Enemies",
+  RandomEnemy: "Random Enemy",
+  AnyAlly: "Single Ally",
+  AllAllies: "All Allies",
+  None: "None",
+};
+
 function formatValue(group: PracticeFilterGroupName, value: PracticeFilterValue): string {
-  if (value === KEYWORD_FILTER_NONE) return "None";
-  if (group === "keywords") return FEATURE_LABELS[value as keyof typeof FEATURE_LABELS];
+  if (value === POWER_FILTER_NONE || value === KEYWORD_FILTER_NONE) return "None";
+  if (group === "target") return TARGET_LABELS[value as CardTarget];
   return String(value);
 }
 
@@ -185,9 +198,10 @@ export function PracticeFilterPanel({
         <ul>
           <li><strong>Disable</strong> accepts any value for that group and preserves your checks.</li>
           <li>An enabled group with nothing checked matches no cards.</li>
-          <li>Class, Type, Mana, and Rarity use <strong>OR</strong> within each group.</li>
-          <li>Keywords use <strong>AND</strong>: a card form must have every checked keyword.</li>
-          <li><strong>None</strong> means that form has no keywords and clears keyword choices.</li>
+          <li>Class, Type, Mana, Rarity, and Target use <strong>OR</strong> within each group.</li>
+          <li>Powers and Keywords use <strong>AND</strong>: a card form must have every checked value.</li>
+          <li><strong>Power None</strong> means that form has no powers and clears other power choices.</li>
+          <li><strong>Keyword None</strong> means that form has no keywords and clears other keyword choices.</li>
           <li>Enabled groups combine with <strong>AND</strong>.</li>
           <li>Base and upgraded forms are evaluated separately; one complete form must satisfy every enabled group.</li>
         </ul>

@@ -1,10 +1,10 @@
 # STS-dle
 
-STS-dle is an unofficial Slay the Spire 2 card-deduction game. Daily and Practice rounds compare the base and upgraded forms of every card across ten traits.
+STS-dle is an unofficial Slay the Spire 2 card-deduction game. Daily and Practice rounds compare the base and upgraded forms of every card across seven features: Class, Type, Mana, Rarity, Target, Powers, and Keywords. For Powers and Keywords, exact sets are green, any corresponding overlap is yellow, and no overlap is red.
 
 ## Gameplay
 
-Daily offers the shared UTC-date puzzle with three one-use assistance orbs and progressive card-name hints. Hardcore Daily is a separate UTC-date puzzle without orbs or name hints. Practice provides unlimited normal assisted rounds; use **End game** to forfeit the current round and reveal its accepted answers. Its optional Manual Filter Mode persists for the current round: selected Class, Type, Mana, and Rarity choices use OR, selected Keywords use AND, enabled groups combine with AND, and base and upgraded forms are evaluated separately. Keyword **None** matches a form with no keywords and is mutually exclusive with the keyword choices. Starting a **New Practice Round** resets the filters.
+Daily offers the shared UTC-date puzzle with three one-use assistance orbs and progressive card-name hints. Hardcore Daily is a separate UTC-date puzzle without orbs or name hints. Practice provides unlimited normal assisted rounds; use **End game** to forfeit the current round and reveal its accepted answers. Its optional Manual Filter Mode persists for the current round: selected Class, Type, Mana, Rarity, and Target choices use OR; selected Powers and Keywords each use AND; enabled groups combine with AND; and base and upgraded forms are evaluated separately. Power **None** matches a form with no powers and clears other Power choices, while Keyword **None** does the same for keywords. Starting a **New Practice Round** resets the filters.
 
 Round progress and Daily statistics are persisted only in the local browser. STS-dle has no account or database for player progress, and Practice results are not shareable.
 

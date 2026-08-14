@@ -9,6 +9,8 @@ import {
 } from "../../src/client/components/PracticeFilterPanel.js";
 import {
   createDefaultPracticeFilter,
+  KEYWORD_FILTER_NONE,
+  POWER_FILTER_NONE,
   type PracticeFilterOptions,
   type PracticeFilterState,
 } from "../../src/client/game/practice-filter.js";
@@ -32,7 +34,9 @@ const OPTIONS: PracticeFilterOptions = {
   cardType: ["Attack", "Skill"],
   mana: [0, 1, "X", "None"],
   rarity: ["Common", "Rare"],
-  keywords: ["ethereal", "innate", "none"],
+  target: ["Self", "AnyEnemy", "AllEnemies", "RandomEnemy", "AnyAlly", "AllAllies", "None"],
+  powers: ["Dexterity", "Strength", POWER_FILTER_NONE],
+  keywords: ["Ethereal", "Innate", KEYWORD_FILTER_NONE],
 };
 
 function enabledState(): PracticeFilterState {
@@ -44,7 +48,9 @@ function enabledState(): PracticeFilterState {
     cardType: { disabled: true, selected: ["Attack"] },
     mana: { disabled: false, selected: [0, "None"] },
     rarity: { disabled: false, selected: [] },
-    keywords: { disabled: false, selected: ["ethereal", "innate"] },
+    target: { disabled: false, selected: ["AnyEnemy"] },
+    powers: { disabled: false, selected: ["Dexterity", "Strength"] },
+    keywords: { disabled: false, selected: ["Ethereal", "Innate"] },
   };
 }
 
@@ -75,13 +81,13 @@ afterEach(() => {
 });
 
 describe("PracticeFilterPanel checklists", () => {
-  test("renders five accessible groups in order with Disable first", () => {
+  test("renders seven accessible groups in canonical order with friendly labels and Disable first", () => {
     window.localStorage.setItem(FILTER_HELP_DISMISSED_KEY, "1");
     renderPanel();
 
     const groups = screen.getAllByRole("group");
     expect(groups.map((group) => group.getAttribute("aria-label"))).toEqual([
-      "Class", "Type", "Mana", "Rarity", "Keywords",
+      "Class", "Type", "Mana", "Rarity", "Target", "Powers", "Keywords",
     ]);
     for (const group of groups) {
       expect(within(group).getAllByRole("checkbox")[0]).toHaveAccessibleName("Disable");
@@ -89,6 +95,10 @@ describe("PracticeFilterPanel checklists", () => {
     expect(within(groups[2]!).getAllByRole("checkbox").map((input) => input.getAttribute("aria-label")))
       .toEqual(["Disable", "0", "1", "X", "None"]);
     expect(within(groups[4]!).getAllByRole("checkbox").map((input) => input.getAttribute("aria-label")))
+      .toEqual(["Disable", "Self", "Single Enemy", "All Enemies", "Random Enemy", "Single Ally", "All Allies", "None"]);
+    expect(within(groups[5]!).getAllByRole("checkbox").map((input) => input.getAttribute("aria-label")))
+      .toEqual(["Disable", "Dexterity", "Strength", "None"]);
+    expect(within(groups[6]!).getAllByRole("checkbox").map((input) => input.getAttribute("aria-label")))
       .toEqual(["Disable", "Ethereal", "Innate", "None"]);
   });
 
@@ -112,12 +122,16 @@ describe("PracticeFilterPanel checklists", () => {
     fireEvent.click(within(screen.getByRole("group", { name: "Class" })).getByRole("checkbox", { name: "Disable" }));
     fireEvent.click(within(screen.getByRole("group", { name: "Class" })).getByRole("checkbox", { name: "Ironclad" }));
     fireEvent.click(within(screen.getByRole("group", { name: "Keywords" })).getByRole("checkbox", { name: "Innate" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Target" })).getByRole("checkbox", { name: "Single Enemy" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Powers" })).getByRole("checkbox", { name: "None" }));
     fireEvent.click(within(screen.getByRole("group", { name: "Keywords" })).getByRole("checkbox", { name: "None" }));
 
     expect(onGroupDisabledChange).toHaveBeenCalledWith("cardClass", true);
     expect(onValueChange).toHaveBeenNthCalledWith(1, "cardClass", "Ironclad", false);
-    expect(onValueChange).toHaveBeenNthCalledWith(2, "keywords", "innate", false);
-    expect(onValueChange).toHaveBeenNthCalledWith(3, "keywords", "none", true);
+    expect(onValueChange).toHaveBeenNthCalledWith(2, "keywords", "Innate", false);
+    expect(onValueChange).toHaveBeenNthCalledWith(3, "target", "AnyEnemy", false);
+    expect(onValueChange).toHaveBeenNthCalledWith(4, "powers", POWER_FILTER_NONE, true);
+    expect(onValueChange).toHaveBeenNthCalledWith(5, "keywords", KEYWORD_FILTER_NONE, true);
   });
 
   test("warns when an enabled group has no selected values", () => {
@@ -149,9 +163,10 @@ describe("PracticeFilterPanel help", () => {
 
     expect(dialog).toHaveTextContent("Disable accepts any value for that group");
     expect(dialog).toHaveTextContent("An enabled group with nothing checked matches no cards");
-    expect(dialog).toHaveTextContent("Class, Type, Mana, and Rarity use OR within each group");
-    expect(dialog).toHaveTextContent("Keywords use AND");
-    expect(dialog).toHaveTextContent("None means that form has no keywords and clears keyword choices");
+    expect(dialog).toHaveTextContent("Class, Type, Mana, Rarity, and Target use OR within each group");
+    expect(dialog).toHaveTextContent("Powers and Keywords use AND");
+    expect(dialog).toHaveTextContent("Power None means that form has no powers and clears other power choices");
+    expect(dialog).toHaveTextContent("Keyword None means that form has no keywords and clears other keyword choices");
     expect(dialog).toHaveTextContent("Enabled groups combine with AND");
     expect(dialog).toHaveTextContent("Base and upgraded forms are evaluated separately");
 

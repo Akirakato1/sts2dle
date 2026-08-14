@@ -10,7 +10,7 @@ import { OrbTray } from "../../src/client/components/OrbTray.js";
 import { createDefaultAssistance, type AssistanceState } from "../../src/client/game/assistance.js";
 import type { SubmittedGuess } from "../../src/client/game/game-reducer.js";
 import type { FeatureResult } from "../../src/shared/comparison.js";
-import { FEATURE_ORDER, type CardIdentity, type SpriteMap } from "../../src/shared/domain.js";
+import { FEATURE_ORDER, type CardIdentity, type FeatureVector, type SpriteMap } from "../../src/shared/domain.js";
 
 afterEach(() => {
   cleanup();
@@ -18,11 +18,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const features = {
+const features: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 2, rarity: "Common",
-  eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false,
-} as const;
+  target: "AnyEnemy", powers: ["Strength"], keywords: [],
+};
 
 const cards: CardIdentity[] = [
   { id: "first", name: "First Guess", hasUpgrade: true, artUrl: "", baseCardUrl: null, upgradedCardUrl: null, base: features, upgraded: features },
@@ -34,8 +33,8 @@ const selectedAnswer: CardIdentity = {
   ...cards[0]!,
   id: "answer",
   name: "Selected Answer",
-  base: { ...features, mana: 2, eternal: false },
-  upgraded: { ...features, mana: 1, eternal: true },
+  base: { ...features, mana: 2, powers: ["Strength"], keywords: [] },
+  upgraded: { ...features, mana: 1, powers: ["Dexterity", "Strength"], keywords: ["Exhaust"] },
 };
 
 const results: FeatureResult[] = [
@@ -43,12 +42,9 @@ const results: FeatureResult[] = [
   { feature: "cardType", color: "green", displayValue: "Attack" },
   { feature: "mana", color: "yellow", displayValue: "2 \u2192 1" },
   { feature: "rarity", color: "red", displayValue: "Common" },
-  { feature: "eternal", color: "green", displayValue: "false" },
-  { feature: "ethereal", color: "green", displayValue: "false" },
-  { feature: "exhaust", color: "red", displayValue: "false" },
-  { feature: "innate", color: "green", displayValue: "false" },
-  { feature: "retain", color: "green", displayValue: "false" },
-  { feature: "sly", color: "green", displayValue: "false" },
+  { feature: "target", color: "green", displayValue: "AnyEnemy" },
+  { feature: "powers", color: "yellow", displayValue: "Strength \u2192 Dexterity, Strength" },
+  { feature: "keywords", color: "red", displayValue: "None \u2192 Exhaust" },
 ];
 
 const guesses: SubmittedGuess[] = [
@@ -124,8 +120,8 @@ describe("GuessGrid", () => {
     expect(onUse).toHaveBeenCalledWith("reveal", { kind: "header", feature });
   });
 
-  test("persists one formatted Reveal bubble and uses directional keyword state icons", () => {
-    const assistance = { ...createDefaultAssistance(), reveal: { feature: "eternal" as const } };
+  test("persists one textual formatted Reveal bubble for a changed set", () => {
+    const assistance = { ...createDefaultAssistance(), reveal: { feature: "powers" as const } };
     const view = render(<GridHarness
       guesses={[]}
       cardsById={cardsById}
@@ -136,11 +132,11 @@ describe("GuessGrid", () => {
       assistance={assistance}
     />);
 
-    const eternalHeader = document.querySelector<HTMLElement>('[role="columnheader"][data-feature="eternal"]')!;
-    const bubble = within(eternalHeader).getByRole("note", { name: "Answer: absent to present" });
-    expect(eternalHeader).toContainElement(bubble);
+    const powersHeader = document.querySelector<HTMLElement>('[role="columnheader"][data-feature="powers"]')!;
+    const bubble = within(powersHeader).getByRole("note", { name: "Answer: Strength \u2192 Dexterity, Strength" });
+    expect(powersHeader).toContainElement(bubble);
+    expect(bubble).toHaveTextContent("Strength \u2192 Dexterity, Strength");
     expect(view.container.querySelectorAll(".guess-grid__reveal-bubble")).toHaveLength(1);
-    expect([...bubble.querySelectorAll("svg")].map((icon) => icon.dataset.icon)).toEqual(["x", "check"]);
 
     view.rerender(<GridHarness
       guesses={[]}
@@ -178,15 +174,14 @@ describe("GuessGrid", () => {
     expect(within(rows[2]!).queryByLabelText("Negation Orb used here")).not.toBeInTheDocument();
   });
 
-  test("renders a sticky artwork column followed by exactly the ten canonical feature columns", () => {
+  test("renders a sticky artwork column followed by exactly the seven canonical feature columns", () => {
     render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} />);
 
-    expect(screen.getByRole("table")).toHaveAttribute("aria-colcount", "11");
+    expect(screen.getByRole("table")).toHaveAttribute("aria-colcount", "8");
     const headers = screen.getAllByRole("columnheader");
-    expect(headers).toHaveLength(11);
+    expect(headers).toHaveLength(8);
     expect(headers.slice(1).map((header) => header.getAttribute("data-feature"))).toEqual([
-      "cardClass", "cardType", "mana", "rarity", "eternal", "ethereal",
-      "exhaust", "innate", "retain", "sly",
+      "cardClass", "cardType", "mana", "rarity", "target", "powers", "keywords",
     ]);
     expect(headers.slice(1).map((header) => header.getAttribute("data-feature"))).toEqual([...FEATURE_ORDER]);
     expect(screen.queryByText(/version/i)).not.toBeInTheDocument();
@@ -194,7 +189,7 @@ describe("GuessGrid", () => {
 
     const guessRow = screen.getAllByRole("row")[1]!;
     expect(within(guessRow).getAllByRole("rowheader")).toHaveLength(1);
-    expect(within(guessRow).getAllByRole("cell")).toHaveLength(10);
+    expect(within(guessRow).getAllByRole("cell")).toHaveLength(7);
   });
 
   test("renders newest guesses immediately below the header while preserving source art sizing", () => {
@@ -224,10 +219,10 @@ describe("GuessGrid", () => {
     expect(within(rows[3]!).getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
 
     const surfaces = container.querySelectorAll(".feature-tile__surface");
-    dispatchTransitionEnd(surfaces[19]!, "transform");
+    dispatchTransitionEnd(surfaces[13]!, "transform");
     expect(onRevealComplete).not.toHaveBeenCalled();
-    dispatchTransitionEnd(surfaces[9]!, "transform");
-    dispatchTransitionEnd(surfaces[9]!, "transform");
+    dispatchTransitionEnd(surfaces[6]!, "transform");
+    dispatchTransitionEnd(surfaces[6]!, "transform");
     expect(onRevealComplete).toHaveBeenCalledOnce();
   });
 
@@ -237,10 +232,10 @@ describe("GuessGrid", () => {
     const { container } = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
 
     const tiles = screen.getAllByRole("cell");
-    expect(tiles.map((tile) => tile.style.getPropertyValue("--reveal-index"))).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
-    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[8]!, "transform");
+    expect(tiles.map((tile) => tile.style.getPropertyValue("--reveal-index"))).toEqual(["0", "1", "2", "3", "4", "5", "6"]);
+    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[5]!, "transform");
     expect(onRevealComplete).not.toHaveBeenCalled();
-    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[9]!, "transform");
+    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[6]!, "transform");
     expect(onRevealComplete).toHaveBeenCalledOnce();
     act(() => vi.advanceTimersByTime(10_000));
     expect(onRevealComplete).toHaveBeenCalledOnce();
@@ -253,7 +248,7 @@ describe("GuessGrid", () => {
       "Second Guess artwork and name",
       "First Guess artwork and name",
     ]);
-    expect(screen.getAllByRole("cell")).toHaveLength(30);
+    expect(screen.getAllByRole("cell")).toHaveLength(21);
     expect(screen.getAllByRole("cell").every((tile) => tile.classList.contains("feature-tile--immediate"))).toBe(true);
   });
 
@@ -282,7 +277,7 @@ describe("GuessGrid", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
     const view = render(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
-    const firstSurface = view.container.querySelectorAll(".feature-tile__surface")[9]!;
+    const firstSurface = view.container.querySelectorAll(".feature-tile__surface")[6]!;
     dispatchTransitionEnd(firstSurface, "transform");
     dispatchTransitionEnd(firstSurface, "transform");
     expect(onRevealComplete).toHaveBeenCalledOnce();
@@ -290,7 +285,7 @@ describe("GuessGrid", () => {
     view.rerender(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} onRevealComplete={onRevealComplete} /></StrictMode>);
     expect(onRevealComplete).toHaveBeenCalledOnce();
     view.rerender(<StrictMode><GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} /></StrictMode>);
-    const secondSurface = view.container.querySelectorAll(".feature-tile__surface")[9]!;
+    const secondSurface = view.container.querySelectorAll(".feature-tile__surface")[6]!;
     dispatchTransitionEnd(secondSurface, "transform");
     dispatchTransitionEnd(secondSurface, "transform");
     expect(onRevealComplete).toHaveBeenCalledTimes(2);
@@ -315,7 +310,7 @@ describe("GuessGrid", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
     const { container } = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
-    const finalSurface = container.querySelectorAll(".feature-tile__surface")[9]!;
+    const finalSurface = container.querySelectorAll(".feature-tile__surface")[6]!;
 
     dispatchTransitionEnd(finalSurface.querySelector(".feature-tile__back")!, "transform");
     expect(onRevealComplete).not.toHaveBeenCalled();
@@ -328,7 +323,7 @@ describe("GuessGrid", () => {
     const onRevealComplete = vi.fn();
     const { container } = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
 
-    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[9]!, "opacity");
+    dispatchTransitionEnd(container.querySelectorAll(".feature-tile__surface")[6]!, "opacity");
     expect(onRevealComplete).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(revealFallbackMs));
     expect(onRevealComplete).toHaveBeenCalledOnce();
@@ -338,7 +333,7 @@ describe("GuessGrid", () => {
     vi.useFakeTimers();
     const onRevealComplete = vi.fn();
     const { container } = render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={0} onRevealComplete={onRevealComplete} />);
-    const finalSurface = container.querySelectorAll(".feature-tile__surface")[9]!;
+    const finalSurface = container.querySelectorAll(".feature-tile__surface")[6]!;
 
     act(() => vi.advanceTimersByTime(20));
     dispatchTransitionEnd(finalSurface, "transform");

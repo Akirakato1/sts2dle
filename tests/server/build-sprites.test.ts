@@ -4,7 +4,7 @@ import { join } from "node:path";
 import sharp from "sharp";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildSprites, type BuildSpritesOptions } from "../../src/server/images/build-sprites.js";
-import type { CardIdentity } from "../../src/shared/domain.js";
+import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
 
 const temporaryDirectories: string[] = [];
 const artworkByUrl = new Map<string, Buffer>();
@@ -21,7 +21,7 @@ function buildTestSprites(options: Omit<BuildSpritesOptions, "allowedArtworkOrig
 }
 
 function card(id: string): CardIdentity {
-  const features = {
+  const features: FeatureVector = {
     cardClass: "Ironclad",
     cardType: "Attack",
     mana: 1,
@@ -29,7 +29,7 @@ function card(id: string): CardIdentity {
     target: "AnyEnemy",
     powers: [],
     keywords: [],
-  } as const;
+  };
   return {
     id,
     name: id,

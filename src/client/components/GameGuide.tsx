@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
-import { KeywordStateIcons } from "./KeywordStateIcons.js";
 import { OrbVisual } from "./OrbVisual.js";
 
 const RESULT_LEGEND = [
@@ -130,12 +129,9 @@ export function GameGuide(): React.JSX.Element {
             </ul>
           </section>
           <section>
-            <h3>Keyword icons</h3>
-            <ul className="game-guide__icon-list game-guide__keyword-list game-guide__row-list">
-              <li><KeywordStateIcons displayValue="false" /><span>Absent</span></li>
-              <li><KeywordStateIcons displayValue="true" /><span>Present</span></li>
-              <li><KeywordStateIcons displayValue="false → true" /><span>Gained on upgrade</span></li>
-              <li><KeywordStateIcons displayValue="true → false" /><span>Lost on upgrade</span></li>
+            <h3>Set features</h3>
+            <ul className="game-guide__row-list">
+              <li><GuideRowIcon kind="card" /><span>Powers and Keywords are sets. Exact sets match green. Any corresponding overlap is yellow. No overlap is red.</span></li>
             </ul>
           </section>
           <section>
@@ -148,8 +144,8 @@ export function GameGuide(): React.JSX.Element {
               <li><GuideRowIcon kind="controls" /><span>Drag an orb, or operate it with click, tap, or keyboard.</span></li>
               <li><GuideRowIcon kind="candidates" /><span>Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.</span></li>
               <li><GuideRowIcon kind="controls" /><span>Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.</span></li>
-              <li><GuideRowIcon kind="controls" /><span>Ordinary values use OR; keywords and enabled groups use AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.</span></li>
-              <li><GuideRowIcon kind="controls" /><span>Keyword None matches a form with no keywords and clears other keyword choices.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Scalar groups use OR; Powers and Keywords use AND; enabled groups combine with AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Power None matches a form with no powers and clears other power choices; Keyword None does the same for keywords.</span></li>
             </ul>
           </section>
           <section>
