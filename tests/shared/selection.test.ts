@@ -6,8 +6,7 @@ import { selectAnswer, selectDistinctAnswer } from "../../src/shared/selection.j
 
 const base: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
-  eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false,
+  target: "Self", powers: [], keywords: [],
 };
 function card(id: string, changes: Partial<FeatureVector>): CardIdentity {
   const identity = { ...base, ...changes };

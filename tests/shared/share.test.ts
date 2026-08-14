@@ -13,9 +13,9 @@ function result(feature: (typeof FEATURE_ORDER)[number], color: TileColor): Feat
 }
 
 describe("formatDailyShare", () => {
-  test("emits ten color symbols in FEATURE_ORDER", () => {
+  test("emits seven color symbols in FEATURE_ORDER", () => {
     const firstColors: TileColor[] = [
-      "red", "green", "yellow", "red", "green", "green", "red", "green", "red", "green",
+      "red", "green", "yellow", "red", "green", "green", "red",
     ];
     const guesses = [
       {
@@ -37,13 +37,13 @@ describe("formatDailyShare", () => {
 
     expect(formatDailyShare(options)).toBe([
       "STS-dle 2026-08-12 2/∞",
-      "\u{1F7E5}\u{1F7E9}\u{1F7E8}\u{1F7E5}\u{1F7E9}\u{1F7E9}\u{1F7E5}\u{1F7E9}\u{1F7E5}\u{1F7E9}",
-      "\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}",
+      "\u{1F7E5}\u{1F7E9}\u{1F7E8}\u{1F7E5}\u{1F7E9}\u{1F7E9}\u{1F7E5}",
+      "\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}",
       "Orbs: \u{1F7E3} \u26AB \u{1F534}",
       "https://example.test/",
     ].join("\n"));
     const row = formatDailyShare(options).split("\n")[1]!;
-    expect(Array.from(row)).toHaveLength(10);
+    expect(Array.from(row)).toHaveLength(7);
     expect(row).not.toMatch(/[\u2191\u2193\u2013]/u);
   });
 
@@ -82,8 +82,8 @@ describe("formatDailyShare", () => {
     });
 
     expect(text.split("\n").slice(1, 3)).toEqual([
-      "\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}",
-      "\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}",
+      "\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}\u{1F7E5}",
+      "\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}\u{1F7E9}",
     ]);
   });
 
@@ -102,8 +102,8 @@ describe("formatDailyShare", () => {
       { cardId: "SECRET_FIRST", results: FEATURE_ORDER.map((feature) => result(feature, "red")) },
       { cardId: "SECRET_SECOND", results: FEATURE_ORDER.map((feature) => result(feature, "green")) },
     ];
-    const firstGuessRow = "\u{1F7E5}".repeat(10);
-    const secondGuessRow = "\u{1F7E9}".repeat(10);
+    const firstGuessRow = "\u{1F7E5}".repeat(7);
+    const secondGuessRow = "\u{1F7E9}".repeat(7);
 
     expect(formatDailyShare({
       utcDate: "2026-08-12",
@@ -141,7 +141,7 @@ describe("formatDailyShare", () => {
       orbUsage: { reveal: false, filter: true, negation: false },
     })]) {
       expect(text).not.toMatch(/SECRET|Alchemize|target|hint|revealed/i);
-      expect(text.split("\n").slice(1, 3).every((row) => Array.from(row).length === 10)).toBe(true);
+      expect(text.split("\n").slice(1, 3).every((row) => Array.from(row).length === 7)).toBe(true);
     }
   });
 

@@ -1,4 +1,5 @@
 import type { CardIdentity, FeatureName } from "../../shared/domain.js";
+import { sameFeatureValue } from "../../shared/comparison.js";
 
 export const ORB_KINDS = ["reveal", "filter", "negation"] as const;
 export type OrbKind = (typeof ORB_KINDS)[number];
@@ -44,8 +45,8 @@ export function createDefaultAssistance(): AssistanceState {
 }
 
 export function featurePairMatches(left: CardIdentity, right: CardIdentity, feature: FeatureName): boolean {
-  return left.base[feature] === right.base[feature]
-    && left.upgraded[feature] === right.upgraded[feature];
+  return sameFeatureValue(feature, left.base[feature], right.base[feature])
+    && sameFeatureValue(feature, left.upgraded[feature], right.upgraded[feature]);
 }
 
 export function classifyCandidate(

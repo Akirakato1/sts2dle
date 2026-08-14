@@ -12,8 +12,7 @@ import {
 
 const vector: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
-  eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false,
+  target: "Self", powers: [], keywords: [],
 };
 
 function card(id: string, baseChanges: Partial<FeatureVector> = {}, upgradedChanges: Partial<FeatureVector> = {}): CardIdentity {
@@ -45,6 +44,28 @@ describe("assistance candidate classification", () => {
 
   it("does not treat a base-only match as a paired match", () => {
     expect(featurePairMatches(card("base-only", { mana: 2 }, { mana: 9 }), filterSource, "mana")).toBe(false);
+  });
+
+  it("matches paired power sets by contents rather than array identity", () => {
+    const source = card("set-source", { powers: ["Strength"] }, { powers: ["Weak"] });
+
+    expect(featurePairMatches(card("same-sets", { powers: ["Strength"] }, { powers: ["Weak"] }), source, "powers")).toBe(true);
+  });
+
+  it("requires complete paired sets for Filter and Negation matches", () => {
+    const filterSource = card("FILTER_SETS", { powers: ["Strength", "Weak"] }, { powers: ["Weak"] });
+    const negationSource = card("NEGATION_SETS", { powers: ["Poison"] }, { powers: [] });
+    const setAssistance: AssistanceState = {
+      reveal: null,
+      filter: { guessIndex: 0, cardId: filterSource.id, feature: "powers" },
+      negation: { guessIndex: 1, cardId: negationSource.id, feature: "powers" },
+      visibility: { neutral: true, green: true, red: true },
+    };
+    const setCards = new Map([[filterSource.id, filterSource], [negationSource.id, negationSource]]);
+
+    expect(classifyCandidate(card("filter-match", { powers: ["Strength", "Weak"] }, { powers: ["Weak"] }), setAssistance, setCards)).toBe("green");
+    expect(classifyCandidate(card("negation-match", { powers: ["Poison"] }, { powers: [] }), setAssistance, setCards)).toBe("red");
+    expect(classifyCandidate(card("partial-only", { powers: ["Strength"] }, { powers: ["Weak"] }), setAssistance, setCards)).toBe("neutral");
   });
 });
 

@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
-import { compareFeature, compareGuess, formatFeatureValue } from "../../src/shared/comparison.js";
+import {
+  compareFeature,
+  compareGuess,
+  formatFeatureValue,
+  sameFeatureValue,
+  setsOverlap,
+} from "../../src/shared/comparison.js";
 
 const vector: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
-  eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false,
+  target: "Self", powers: [], keywords: [],
 };
 function card(id: string, baseChanges: Partial<FeatureVector> = {}, upgradeChanges: Partial<FeatureVector> = {}): CardIdentity {
   return {
@@ -35,11 +40,35 @@ describe("paired feature comparison", () => {
   });
 
   it("returns one ordered result for every feature", () => {
-    expect(compareGuess(card("guess"), answer)).toHaveLength(10);
+    expect(compareGuess(card("guess"), answer)).toHaveLength(7);
   });
 
   it("formats equal paired values once and changed values with an arrow", () => {
     expect(formatFeatureValue("Basic", "Basic")).toBe("Basic");
-    expect(formatFeatureValue(false, true)).toBe("false → true");
+    expect(formatFeatureValue("Self", "None")).toBe("Self → None");
+  });
+
+  it("compares corresponding set-valued forms by exactness or overlap", () => {
+    const answer = card("answer", { powers: ["Strength"] }, { powers: ["Weak"] });
+
+    expect(compareFeature("powers", card("exact", { powers: ["Strength"] }, { powers: ["Weak"] }), answer).color).toBe("green");
+    expect(compareFeature("powers", card("partial", { powers: ["Strength"] }, { powers: ["Strength"] }), answer).color).toBe("yellow");
+    expect(compareFeature("powers", card("disjoint", { powers: ["Poison"] }, { powers: [] }), answer).color).toBe("red");
+  });
+
+  it("treats an empty matching form as exact and formats feature arrays canonically", () => {
+    const emptyBaseAnswer = card("empty-answer", { keywords: [] }, { keywords: [] });
+
+    expect(compareFeature("keywords", card("partial", { keywords: [] }, { keywords: ["Innate"] }), emptyBaseAnswer).color).toBe("yellow");
+    expect(formatFeatureValue([], [])).toBe("None");
+    expect(formatFeatureValue(["Strength", "Weak"], ["Strength", "Weak"])).toBe("Strength, Weak");
+    expect(formatFeatureValue(["Ethereal", "Exhaust"], ["Exhaust"])).toBe("Ethereal, Exhaust → Exhaust");
+  });
+
+  it("compares set feature values by contents rather than array identity", () => {
+    expect(sameFeatureValue("powers", ["Strength"], ["Strength"])).toBe(true);
+    expect(sameFeatureValue("powers", ["Strength"], ["Weak"])).toBe(false);
+    expect(setsOverlap(["Strength"], ["Strength", "Weak"])).toBe(true);
+    expect(setsOverlap([], [])).toBe(false);
   });
 });

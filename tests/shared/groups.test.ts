@@ -5,8 +5,7 @@ import { buildGroups } from "../../src/shared/groups.js";
 
 const base: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
-  eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false,
+  target: "Self", powers: ["Strength", "Weak"], keywords: ["Ethereal", "Exhaust"],
 };
 
 function card(id: string, overrides: Partial<CardIdentity> = {}): CardIdentity {
@@ -19,12 +18,24 @@ function card(id: string, overrides: Partial<CardIdentity> = {}): CardIdentity {
 describe("feature keys and groups", () => {
   it("serializes feature vectors in canonical order rather than object property order", () => {
     const reordered = {
-      sly: false, retain: false, innate: false, exhaust: false,
-      ethereal: false, eternal: false, rarity: "Common" as const, mana: 1,
-      cardType: "Attack" as const, cardClass: "Ironclad" as const,
+      keywords: ["Ethereal", "Exhaust"] as const, powers: ["Strength", "Weak"], target: "Self" as const,
+      rarity: "Common" as const, mana: 1, cardType: "Attack" as const, cardClass: "Ironclad" as const,
     };
 
     expect(baseKey(base)).toBe(baseKey(reordered));
+  });
+
+  it("uses equal canonical array contents in grouping keys and rejects noncanonical arrays", () => {
+    const separatelyAllocated: FeatureVector = {
+      ...base,
+      powers: ["Strength", "Weak"],
+      keywords: ["Ethereal", "Exhaust"],
+    };
+    const noncanonical: FeatureVector = { ...base, powers: ["Weak", "Strength"] };
+
+    expect(baseKey(base)).toBe(baseKey(separatelyAllocated));
+    expect(pairKey(card("first"))).toBe(pairKey(card("second", { upgraded: { ...separatelyAllocated } })));
+    expect(() => buildGroups([card("invalid", { base: noncanonical })])).toThrow();
   });
 
   it("groups equal bases together but keeps different upgrades in separate pairs", () => {
