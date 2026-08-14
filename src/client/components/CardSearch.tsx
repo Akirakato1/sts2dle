@@ -95,6 +95,7 @@ export function CardSearch({
   const [isOpen, setIsOpen] = useState(false);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
+  const visibilityControlsDisabled = disabled || assistanceControlsDisabled;
   const results = useMemo(
     () => searchCards(cards, query, guessedCardIds, assistance, cardsById, practiceFilter),
     [assistance, cards, cardsById, guessedCardIds, practiceFilter, query],
@@ -165,15 +166,15 @@ export function CardSearch({
 
   return <section className="card-search" aria-label="Card search">
     {assistance !== null && <fieldset
-      className={`candidate-visibility${assistanceControlsDisabled ? " candidate-visibility--disabled" : ""}`}
+      className={`candidate-visibility${visibilityControlsDisabled ? " candidate-visibility--disabled" : ""}`}
       aria-label="Candidate visibility"
-      disabled={assistanceControlsDisabled}
+      disabled={visibilityControlsDisabled}
     >
       {(["neutral", "green", "red"] as const).map((category) => <label
         key={category}
         className="candidate-visibility__label"
-        onPointerDown={() => { if (!assistanceControlsDisabled) visibilityPointerDown.current = true; }}
-        onMouseDown={() => { if (!assistanceControlsDisabled) visibilityPointerDown.current = true; }}
+        onPointerDown={() => { if (!visibilityControlsDisabled) visibilityPointerDown.current = true; }}
+        onMouseDown={() => { if (!visibilityControlsDisabled) visibilityPointerDown.current = true; }}
         onPointerUp={() => { visibilityPointerDown.current = false; }}
         onPointerCancel={() => { visibilityPointerDown.current = false; }}
         onMouseUp={() => { visibilityPointerDown.current = false; }}
@@ -181,10 +182,10 @@ export function CardSearch({
         <input
           type="checkbox"
           checked={assistance.visibility[category]}
-          disabled={assistanceControlsDisabled}
+          disabled={visibilityControlsDisabled}
           onMouseDown={(event) => event.preventDefault()}
           onChange={(event) => {
-            if (!assistanceControlsDisabled) onVisibilityChange(category, event.currentTarget.checked);
+            if (!visibilityControlsDisabled) onVisibilityChange(category, event.currentTarget.checked);
           }}
         />
         <span>{category[0]!.toUpperCase() + category.slice(1)}</span>

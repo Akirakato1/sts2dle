@@ -23,21 +23,21 @@ h1 { margin: .2rem 0 0; color: #e5bf60; font-size: clamp(3rem, 12vw, 5.2rem); le
   margin: .8rem auto;
 }
 
-.practice-controls__hardcore,
+.practice-controls__filter,
 .practice-controls button {
   display: inline-flex;
   min-height: 44px;
   align-items: center;
 }
 
-.practice-controls__hardcore {
+.practice-controls__filter {
   gap: .45rem;
   padding: 0 .75rem;
   border: 1px solid #77805b;
   border-radius: .2rem;
 }
 
-.practice-controls__hardcore:has(input:focus-visible),
+.practice-controls__filter:has(input:focus-visible),
 .practice-controls button:focus-visible {
   outline: 3px solid #f5d77e;
   outline-offset: 2px;
@@ -53,14 +53,7 @@ h1 { margin: .2rem 0 0; color: #e5bf60; font-size: clamp(3rem, 12vw, 5.2rem); le
 }
 
 .practice-controls button:disabled,
-.practice-controls__hardcore:has(input:disabled) {
+.practice-controls__filter:has(input:disabled) {
   cursor: not-allowed;
   opacity: .62;
-}
-
-.practice-controls__lock-help {
-  flex-basis: 100%;
-  margin: 0;
-  color: #b9b18f;
-  font-size: .82rem;
 }

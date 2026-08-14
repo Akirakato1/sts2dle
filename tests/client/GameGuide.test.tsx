@@ -39,6 +39,8 @@ describe("GameGuide", () => {
         "Red candidate marking overrides green marking.",
         "Drag an orb, or operate it with click, tap, or keyboard.",
         "Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.",
+        "Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.",
+        "Ordinary values use OR; keywords and enabled groups use AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.",
       ],
       "Name hints": [
         "After 5 wrong guesses, word-length lines appear.",
@@ -48,8 +50,7 @@ describe("GameGuide", () => {
       "Modes": [
         "Daily: one UTC-date round that restores locally and creates a share result after a win.",
         "Hardcore Daily: a separate daily answer with no orbs or name hints.",
-        "Practice: repeatable rounds that restore the current round.",
-        "Choose Hardcore before a Practice round; the setting locks when the round starts.",
+        "Practice: repeatable rounds that restore the current round and reset filters on a new round.",
         "End game forfeits the current Practice round.",
       ],
     } as const;
@@ -81,7 +82,8 @@ describe("GameGuide", () => {
         .toEqual(expected.icons);
       expect(row.querySelector(":scope > span:last-child")).toHaveTextContent(expected.label);
     }
-    expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(14);
+    expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(15);
+    expect(dialog).not.toHaveTextContent("Hardcore Practice");
     expect(view.container.querySelector("details")).toBeNull();
   });
 

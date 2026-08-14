@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { CardSearch } from "./components/CardSearch.js";
@@ -12,8 +12,14 @@ import { OrbInteractionProvider, useOrbInteraction, type OrbTargetDescriptor, ty
 import { OrbTray } from "./components/OrbTray.js";
 import { ORB_LABELS } from "./components/OrbVisual.js";
 import { PracticeControls } from "./components/PracticeControls.js";
+import { PracticeFilterPanel } from "./components/PracticeFilterPanel.js";
 import { useGame } from "./game/use-game.js";
 import type { PlayMode, RoundState } from "./game/game-reducer.js";
+import {
+  collectPracticeFilterOptions,
+  type PracticeFilterGroupName,
+  type PracticeFilterValue,
+} from "./game/practice-filter.js";
 import { deriveNameHint } from "./game/name-hints.js";
 import type { CandidateCategory, ConstraintOrbTarget, OrbKind, RevealOrbTarget } from "./game/assistance.js";
 import { FEATURE_ORDER, type CardIdentity } from "../shared/domain.js";
@@ -31,6 +37,9 @@ interface RoundGameProps {
   onConsumeFilter(target: ConstraintOrbTarget): void;
   onConsumeNegation(target: ConstraintOrbTarget): void;
   onCandidateVisibility(category: CandidateCategory, visible: boolean): void;
+  onPracticeFilterEnabled(enabled: boolean): void;
+  onPracticeFilterGroupDisabled(group: PracticeFilterGroupName, disabled: boolean): void;
+  onPracticeFilterValue(group: PracticeFilterGroupName, value: PracticeFilterValue, selected: boolean): void;
   onForfeitPractice(): void;
   onNextRound(): void;
 }
@@ -114,6 +123,9 @@ function RoundGameBoard({
   utcDate,
   onSubmit,
   onCandidateVisibility,
+  onPracticeFilterEnabled,
+  onPracticeFilterGroupDisabled,
+  onPracticeFilterValue,
   onForfeitPractice,
   onNextRound,
   animateFromIndex,
@@ -122,6 +134,11 @@ function RoundGameBoard({
 }: RoundGameBoardProps) {
   const { draggingOrb } = useOrbInteraction();
   const interactionDisabled = isRevealing || round.status !== "playing";
+  const filterEnabled = round.mode === "practice" && round.practiceFilter?.enabled === true;
+  const practiceFilterOptions = useMemo(
+    () => collectPracticeFilterOptions(snapshot.cards),
+    [snapshot.cards],
+  );
   const showResult = round.status !== "playing" && !isRevealing;
   const answerCard = snapshot.cardsById.get(round.answer.selectedCardId);
   if (!answerCard) return <p role="alert">The selected answer is missing from the card snapshot.</p>;
@@ -133,9 +150,18 @@ function RoundGameBoard({
   return <main className="game-board" aria-label="Card guessing game">
     {round.mode === "practice" && <PracticeControls
       round={round}
+      filterEnabled={filterEnabled}
       disabled={isRevealing || draggingOrb !== null}
+      onFilterEnabledChange={onPracticeFilterEnabled}
       onForfeit={onForfeitPractice}
       onNextRound={onNextRound}
+    />}
+    {filterEnabled && round.practiceFilter && <PracticeFilterPanel
+      state={round.practiceFilter}
+      options={practiceFilterOptions}
+      disabled={interactionDisabled}
+      onGroupDisabledChange={onPracticeFilterGroupDisabled}
+      onValueChange={onPracticeFilterValue}
     />}
     <CardSearch
       cards={snapshot.cards}
@@ -143,9 +169,11 @@ function RoundGameBoard({
       spriteMap={snapshot.spriteMap}
       guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}
       assistance={round.assistance ?? null}
+      practiceFilter={round.mode === "practice" ? round.practiceFilter : null}
       roundKey={roundKey}
       disabled={interactionDisabled}
-      assistanceSlot={round.assistance && <OrbTray assistance={round.assistance} disabled={interactionDisabled} />}
+      assistanceControlsDisabled={filterEnabled}
+      assistanceSlot={round.assistance && <OrbTray assistance={round.assistance} disabled={interactionDisabled || filterEnabled} />}
       nameHintSlot={<NameHint hint={nameHint} cardName={answerCard.name} />}
       onVisibilityChange={onCandidateVisibility}
       onSelect={onSubmit}
@@ -181,6 +209,9 @@ function RoundGame({
   onConsumeFilter,
   onConsumeNegation,
   onCandidateVisibility,
+  onPracticeFilterEnabled,
+  onPracticeFilterGroupDisabled,
+  onPracticeFilterValue,
   onForfeitPractice,
   onNextRound,
 }: RoundGameProps) {
@@ -211,6 +242,9 @@ function RoundGame({
       utcDate={utcDate}
       onSubmit={onSubmit}
       onCandidateVisibility={onCandidateVisibility}
+      onPracticeFilterEnabled={onPracticeFilterEnabled}
+      onPracticeFilterGroupDisabled={onPracticeFilterGroupDisabled}
+      onPracticeFilterValue={onPracticeFilterValue}
       onForfeitPractice={onForfeitPractice}
       onNextRound={onNextRound}
       animateFromIndex={animateFromIndex}
@@ -246,6 +280,9 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
       onConsumeFilter={game.consumeFilter}
       onConsumeNegation={game.consumeNegation}
       onCandidateVisibility={game.setCandidateVisibility ?? ignoreCandidateVisibility}
+      onPracticeFilterEnabled={game.setPracticeFilterEnabled ?? ignoreCandidateVisibility}
+      onPracticeFilterGroupDisabled={game.setPracticeFilterGroupDisabled ?? ignoreCandidateVisibility}
+      onPracticeFilterValue={game.setPracticeFilterValue ?? ignoreCandidateVisibility}
       onForfeitPractice={game.forfeitPractice ?? ignoreCandidateVisibility}
       onNextRound={game.nextPracticeRound ?? game.nextRound}
     />}

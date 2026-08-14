@@ -15,7 +15,7 @@ const ORB_GUIDE = [
   ["negation", "Negation Orb: one use on a red result to mark impossible candidates red."],
 ] as const;
 
-type GuideIconKind = "card" | "controls" | "candidates" | "hint" | "daily" | "hardcore" | "practice" | "lock" | "forfeit";
+type GuideIconKind = "card" | "controls" | "candidates" | "hint" | "daily" | "hardcore" | "practice" | "forfeit";
 
 function GuideRowIcon({ kind }: { kind: GuideIconKind }): React.JSX.Element {
   let artwork: React.ReactNode;
@@ -40,9 +40,6 @@ function GuideRowIcon({ kind }: { kind: GuideIconKind }): React.JSX.Element {
       break;
     case "practice":
       artwork = <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M18.2 9A7 7 0 0 0 6.4 6.4L4 9M5.8 15A7 7 0 0 0 17.6 17.6L20 15" /></>;
-      break;
-    case "lock":
-      artwork = <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>;
       break;
     case "forfeit":
       artwork = <><path d="M5 3v19" /><path d="M5 5h12l-2 4 2 4H5" /></>;
@@ -150,6 +147,8 @@ export function GameGuide(): React.JSX.Element {
               <li><GuideRowIcon kind="candidates" /><span>Red candidate marking overrides green marking.</span></li>
               <li><GuideRowIcon kind="controls" /><span>Drag an orb, or operate it with click, tap, or keyboard.</span></li>
               <li><GuideRowIcon kind="candidates" /><span>Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Ordinary values use OR; keywords and enabled groups use AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.</span></li>
             </ul>
           </section>
           <section>
@@ -165,8 +164,7 @@ export function GameGuide(): React.JSX.Element {
             <ul className="game-guide__row-list">
               <li><GuideRowIcon kind="daily" /><span>Daily: one UTC-date round that restores locally and creates a share result after a win.</span></li>
               <li><GuideRowIcon kind="hardcore" /><span>Hardcore Daily: a separate daily answer with no orbs or name hints.</span></li>
-              <li><GuideRowIcon kind="practice" /><span>Practice: repeatable rounds that restore the current round.</span></li>
-              <li><GuideRowIcon kind="lock" /><span>Choose Hardcore before a Practice round; the setting locks when the round starts.</span></li>
+              <li><GuideRowIcon kind="practice" /><span>Practice: repeatable rounds that restore the current round and reset filters on a new round.</span></li>
               <li><GuideRowIcon kind="forfeit" /><span>End game forfeits the current Practice round.</span></li>
             </ul>
           </section>

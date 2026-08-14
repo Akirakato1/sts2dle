@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React, { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -92,14 +92,15 @@ function readyGame(round: RoundState, overrides: Record<string, unknown> = {}) {
     roundToken: 1,
     dailyUtcDate: "2026-08-12",
     error: null,
-    practiceHardcoreChoice: false,
     submit: vi.fn(),
     setMode: vi.fn(),
     consumeReveal: vi.fn(),
     consumeFilter: vi.fn(),
     consumeNegation: vi.fn(),
     setCandidateVisibility: vi.fn(),
-    setPracticeHardcoreChoice: vi.fn(),
+    setPracticeFilterEnabled: vi.fn(),
+    setPracticeFilterGroupDisabled: vi.fn(),
+    setPracticeFilterValue: vi.fn(),
     forfeitPractice: vi.fn(),
     nextPracticeRound: vi.fn(),
     nextRound: vi.fn(),
@@ -124,6 +125,81 @@ describe("App snapshot cleanup", () => {
     const labelIndex = [...search.children].findIndex((child) => child.matches("label.card-search__label"));
 
     expect([visibilityIndex, trayIndex, hintIndex, labelIndex, inputIndex]).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  test("wires Practice Filter Mode between controls and search without mutating assistance presentation", async () => {
+    window.localStorage.setItem("stsdle:filter-help-dismissed:v1", "1");
+    const filteredCard = {
+      ...appCards[0]!,
+      upgraded: { ...appCards[0]!.upgraded, mana: 2 as const },
+    };
+    const filterCards = [filteredCard, appCards[1]!];
+    const filterSnapshot = {
+      ...searchSnapshot,
+      cards: filterCards,
+      cardsById: new Map(filterCards.map((item) => [item.id, item])),
+    };
+    const practiceFilter = {
+      ...createDefaultPracticeFilter(),
+      enabled: true,
+      mana: { disabled: false, selected: [2] },
+    };
+    const assistance = {
+      ...createDefaultAssistance(),
+      negation: { guessIndex: 0, cardId: "apparition", feature: "cardClass" as const },
+      visibility: { neutral: true, green: false, red: true },
+    };
+    const setPracticeFilterEnabled = vi.fn();
+    const setPracticeFilterGroupDisabled = vi.fn();
+    const setPracticeFilterValue = vi.fn();
+    let gameState = readyGame(assistedRound({
+      mode: "practice",
+      roundId: "practice:filter",
+      assistance,
+      practiceFilter,
+    }), { setPracticeFilterEnabled, setPracticeFilterGroupDisabled, setPracticeFilterValue });
+    games.mockImplementation(() => gameState);
+    loads.mockResolvedValue(filterSnapshot);
+
+    const view = render(<App />);
+    const input = await screen.findByRole("combobox", { name: "Guess a card" });
+    expect(screen.getByRole("checkbox", { name: "Filter Mode" })).toBeChecked();
+    const panel = screen.getByRole("region", { name: "Practice filters" });
+    const boardChildren = [...view.container.querySelector(".game-board")!.children];
+    expect(boardChildren.indexOf(screen.getByRole("region", { name: "Practice controls" }))).toBeLessThan(boardChildren.indexOf(panel));
+    expect(boardChildren.indexOf(panel)).toBeLessThan(boardChildren.indexOf(screen.getByRole("region", { name: "Card search" })));
+
+    const manaGroup = within(panel).getByRole("group", { name: "Mana" });
+    expect(within(manaGroup).getByRole("checkbox", { name: "1" })).toBeInTheDocument();
+    expect(within(manaGroup).getByRole("checkbox", { name: "2" })).toBeChecked();
+    const classGroup = within(panel).getByRole("group", { name: "Class" });
+    fireEvent.click(within(classGroup).getByRole("checkbox", { name: "Disable" }));
+    expect(setPracticeFilterGroupDisabled).toHaveBeenCalledWith("cardClass", false);
+    fireEvent.click(within(manaGroup).getByRole("checkbox", { name: "1" }));
+    expect(setPracticeFilterValue).toHaveBeenCalledWith("mana", 1, true);
+
+    const visibilityControls = screen.getByRole("group", { name: "Candidate visibility" });
+    for (const category of ["Neutral", "Green", "Red"]) {
+      expect(within(visibilityControls).getByRole("checkbox", { name: category })).toBeDisabled();
+    }
+    expect(view.container.querySelector(".card-search__assistance-slot--disabled")).not.toBeNull();
+    expect(input).toBeEnabled();
+    fireEvent.focus(input);
+    expect(screen.getByRole("option", { name: /Apotheosis.*Upgrade only/ })).toHaveClass("card-search__option--neutral");
+
+    gameState = {
+      ...gameState,
+      round: { ...gameState.round, practiceFilter: { ...practiceFilter, enabled: false } },
+    };
+    view.rerender(<App />);
+    expect(screen.queryByRole("region", { name: "Practice filters" })).not.toBeInTheDocument();
+    expect(within(visibilityControls).getByRole("checkbox", { name: "Green" })).not.toBeChecked();
+    expect(within(visibilityControls).getByRole("checkbox", { name: "Green" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reveal Orb, available" })).toBeEnabled();
+    expect(screen.getByRole("option", { name: /Apotheosis.*excluded by Negation Orb/ })).toHaveClass("card-search__option--red");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Filter Mode" }));
+    expect(setPracticeFilterEnabled).toHaveBeenCalledWith(true);
   });
 
   test("routes Reveal, Filter, and Negation target activations to their durable game actions", async () => {
@@ -356,11 +432,9 @@ describe("App snapshot cleanup", () => {
       roundToken: 1,
       dailyUtcDate: "2026-08-12",
       error: null,
-      practiceHardcoreChoice: false,
       submit: vi.fn(),
       setMode,
       setCandidateVisibility: vi.fn(),
-      setPracticeHardcoreChoice: vi.fn(),
       forfeitPractice: vi.fn(),
       nextPracticeRound: vi.fn(),
       nextRound: vi.fn(),
@@ -371,7 +445,8 @@ describe("App snapshot cleanup", () => {
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Daily", "Hardcore Daily", "Practice"]);
     fireEvent.click(screen.getByRole("button", { name: "Hardcore Daily" }));
     expect(setMode).toHaveBeenCalledWith("hardcore-daily");
-    expect(screen.queryByRole("checkbox", { name: "Hardcore Practice" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Filter Mode" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Practice filters" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "End game" })).not.toBeInTheDocument();
   });
 
@@ -386,7 +461,6 @@ describe("App snapshot cleanup", () => {
       roundToken: 3,
       dailyUtcDate: "2026-08-12",
       error: "Unable to prepare this game mode.",
-      practiceHardcoreChoice: false,
       setMode,
       retryActiveMode,
     });
@@ -412,7 +486,6 @@ describe("App snapshot cleanup", () => {
       roundToken: 4,
       dailyUtcDate: "2026-08-13",
       error: null,
-      practiceHardcoreChoice: false,
       setMode: vi.fn(),
       retryActiveMode: vi.fn(),
     });
@@ -456,11 +529,9 @@ describe("App snapshot cleanup", () => {
       roundToken: 1,
       dailyUtcDate: "2026-08-12",
       error: null,
-      practiceHardcoreChoice: false,
       submit: vi.fn(),
       setMode: vi.fn(),
       setCandidateVisibility: vi.fn(),
-      setPracticeHardcoreChoice: vi.fn(),
       forfeitPractice: vi.fn(),
       nextPracticeRound: vi.fn(),
       nextRound: vi.fn(),
@@ -518,7 +589,7 @@ describe("App snapshot cleanup", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Accepted answer" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "Hardcore Practice" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Filter Mode" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "New Practice Round" }));
     expect(nextPracticeRound).toHaveBeenCalledOnce();
   });
@@ -614,6 +685,7 @@ describe("App snapshot cleanup", () => {
     };
     view.rerender(<App />);
     expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(within(screen.getByRole("group", { name: "Candidate visibility" })).getByRole("checkbox", { name: "Neutral" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reveal Orb, available" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Filter Orb, available" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Negation Orb, available" })).toBeDisabled();
@@ -621,6 +693,7 @@ describe("App snapshot cleanup", () => {
     const surfaces = view.container.querySelectorAll(".feature-tile__surface");
     dispatchTransformEnd(surfaces[surfaces.length - 1]!);
     expect(screen.getByRole("combobox")).toBeEnabled();
+    expect(within(screen.getByRole("group", { name: "Candidate visibility" })).getByRole("checkbox", { name: "Neutral" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Reveal Orb, available" })).toBeEnabled();
   });
 
