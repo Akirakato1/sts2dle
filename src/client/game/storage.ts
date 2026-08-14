@@ -1,28 +1,28 @@
 import { z } from "zod";
 
 import { compareGuess, type FeatureResult } from "../../shared/comparison.js";
-import { CARD_RARITIES, CARD_TYPES, FEATURE_ORDER, type CardIdentity, type PairGroup } from "../../shared/domain.js";
+import { CARD_KEYWORDS, CARD_RARITIES, CARD_TARGETS, CARD_TYPES, FEATURE_ORDER, type CardIdentity, type PairGroup } from "../../shared/domain.js";
 import { baseKey, pairKey } from "../../shared/feature-keys.js";
 import type { SelectedAnswer } from "../../shared/selection.js";
 import type { AssistanceState, ConstraintOrbTarget } from "./assistance.js";
 import type { PlayMode, RoundState, SubmittedGuess } from "./game-reducer.js";
 import {
   KEYWORD_FILTER_NONE,
-  KEYWORD_FILTER_VALUES,
+  POWER_FILTER_NONE,
   collectPracticeFilterOptions,
   type PracticeFilterOptions,
   type PracticeFilterState,
 } from "./practice-filter.js";
 
-export const CURRENT_ROUND_VERSION = 4;
+export const CURRENT_ROUND_VERSION = 5;
 export const CURRENT_ROUND_KEYS: Readonly<Record<PlayMode, string>> = Object.freeze({
   daily: "stsdle:round:daily:v1",
   "hardcore-daily": "stsdle:round:hardcore-daily:v1",
   practice: "stsdle:round:practice:v1",
 });
-export const DAILY_RULESET_VERSION = "v4";
-export const HARDCORE_DAILY_RULESET_VERSION = "hardcore-v1";
-export const PRACTICE_RULESET_VERSION = "practice-v2";
+export const DAILY_RULESET_VERSION = "v5";
+export const HARDCORE_DAILY_RULESET_VERSION = "hardcore-v2";
+export const PRACTICE_RULESET_VERSION = "practice-v3";
 export const DAILY_STATS_KEY = "stsdle:stats:v1";
 export const HARDCORE_DAILY_STATS_KEY = "stsdle:stats:hardcore:v1";
 
@@ -77,7 +77,9 @@ const practiceFilterSchema = z.object({
   cardType: filterGroupSchema(z.enum(CARD_TYPES)),
   mana: filterGroupSchema(manaSchema),
   rarity: filterGroupSchema(z.enum(CARD_RARITIES)),
-  keywords: filterGroupSchema(z.enum(KEYWORD_FILTER_VALUES)),
+  target: filterGroupSchema(z.enum(CARD_TARGETS)),
+  powers: filterGroupSchema(z.string().min(1)),
+  keywords: filterGroupSchema(z.enum(CARD_KEYWORDS).or(z.literal(KEYWORD_FILTER_NONE))),
 }).strict();
 const roundSchema = z.object({
   mode: z.enum(["daily", "hardcore-daily", "practice"]),
@@ -171,7 +173,10 @@ function validPracticeFilter(filter: PracticeFilterState, options: PracticeFilte
     && selectedValuesAreCanonical(filter.cardType.selected, options.cardType)
     && selectedValuesAreCanonical(filter.mana.selected, options.mana)
     && selectedValuesAreCanonical(filter.rarity.selected, options.rarity)
+    && selectedValuesAreCanonical(filter.target.selected, options.target)
+    && selectedValuesAreCanonical(filter.powers.selected, options.powers)
     && selectedValuesAreCanonical(filter.keywords.selected, options.keywords)
+    && (!filter.powers.selected.includes(POWER_FILTER_NONE) || filter.powers.selected.length === 1)
     && (!filter.keywords.selected.includes(KEYWORD_FILTER_NONE) || filter.keywords.selected.length === 1);
 }
 

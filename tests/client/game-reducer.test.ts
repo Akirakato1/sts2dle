@@ -13,8 +13,8 @@ import { pairKey } from "../../src/shared/feature-keys.js";
 function card(id: string, mana: number): CardIdentity {
   return {
     id, name: id, hasUpgrade: true, artUrl: "https://art.example/card.png", baseCardUrl: null, upgradedCardUrl: null,
-    base: { cardClass: "Silent", cardType: "Skill", mana, rarity: "Rare", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false },
-    upgraded: { cardClass: "Silent", cardType: "Skill", mana: mana - 1, rarity: "Rare", eternal: false, ethereal: false, exhaust: false, innate: false, retain: false, sly: false },
+    base: { cardClass: "Silent", cardType: "Skill", mana, rarity: "Rare", target: "Self", powers: [], keywords: [] },
+    upgraded: { cardClass: "Silent", cardType: "Skill", mana: mana - 1, rarity: "Rare", target: "Self", powers: [], keywords: [] },
   };
 }
 
@@ -69,7 +69,7 @@ describe("gameReducer", () => {
   test("submits canonical results and wins only for an accepted card ID", () => {
     const round = practice();
     const played = gameReducer(round, { type: "submit", cardId: guessCard.id, cardsById });
-    expect(played.guesses[0]?.results).toHaveLength(10);
+    expect(played.guesses[0]?.results).toHaveLength(7);
     expect(played.status).toBe("playing");
     expect(played.terminalGuessCount).toBeNull();
 
@@ -167,6 +167,11 @@ describe("gameReducer", () => {
     expect(gameReducer(activeGroup, {
       type: "set-practice-filter-group-disabled", group: "cardClass", disabled: false,
     })).toBe(activeGroup);
+
+    const power = gameReducer(activeGroup, {
+      type: "set-practice-filter-value", group: "powers", value: "Strength", selected: true,
+    });
+    expect(power.practiceFilter?.powers.selected).toEqual(["Strength"]);
   });
 
   test("Practice filter actions are ignored outside active Practice", () => {

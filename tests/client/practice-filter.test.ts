@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+
 import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
 import {
+  KEYWORD_FILTER_NONE,
+  POWER_FILTER_NONE,
   classifyPracticeCandidate,
   collectPracticeFilterOptions,
   createDefaultPracticeFilter,
@@ -10,8 +13,7 @@ import {
 
 const vector: FeatureVector = {
   cardClass: "Ironclad", cardType: "Attack", mana: 0, rarity: "Basic",
-  eternal: false, ethereal: false, exhaust: false, innate: false,
-  retain: false, sly: false,
+  target: "Self", powers: [], keywords: [],
 };
 
 function card(id: string, baseChanges: Partial<FeatureVector> = {}, upgradedChanges: Partial<FeatureVector> = {}): CardIdentity {
@@ -30,18 +32,30 @@ describe("practice filter defaults and snapshot options", () => {
       cardType: { disabled: true, selected: [] },
       mana: { disabled: true, selected: [] },
       rarity: { disabled: true, selected: [] },
+      target: { disabled: true, selected: [] },
+      powers: { disabled: true, selected: [] },
       keywords: { disabled: true, selected: [] },
     });
 
     const first = createDefaultPracticeFilter();
-    first.mana.selected.push(2);
-    expect(createDefaultPracticeFilter().mana.selected).toEqual([]);
+    first.powers.selected.push("Strength");
+    expect(createDefaultPracticeFilter().powers.selected).toEqual([]);
   });
 
-  it("collects only present base and upgraded values in stable snapshot order", () => {
+  it("collects only present base and upgraded values in canonical snapshot order", () => {
     const cards = [
-      card("first", { mana: 2, rarity: "Rare", retain: true }, { mana: "X", cardClass: "Silent", cardType: "Skill", eternal: true }),
-      card("second", { mana: 0, cardType: "Skill", retain: true }, { mana: "None", rarity: "Basic", eternal: true }),
+      card("first", {
+        mana: 2, rarity: "Rare", target: "AllEnemies",
+        powers: ["Dexterity", "Strength", "Unique Buff"], keywords: ["Exhaust", "Retain"],
+      }, {
+        mana: "X", cardClass: "Silent", cardType: "Skill", target: "AnyEnemy",
+        powers: ["Strength"], keywords: ["Eternal"],
+      }),
+      card("second", {
+        mana: 0, cardType: "Skill", target: "Self", powers: ["Artifact"], keywords: ["Retain"],
+      }, {
+        mana: "None", rarity: "Basic", target: "None", powers: [], keywords: [],
+      }),
     ];
 
     expect(collectPracticeFilterOptions(cards)).toEqual({
@@ -49,25 +63,28 @@ describe("practice filter defaults and snapshot options", () => {
       cardType: ["Attack", "Skill"],
       mana: [0, 2, "X", "None"],
       rarity: ["Basic", "Rare"],
-      keywords: ["eternal", "retain", "none"],
+      target: ["Self", "AnyEnemy", "AllEnemies", "None"],
+      powers: ["Artifact", "Dexterity", "Strength", "Unique Buff", POWER_FILTER_NONE],
+      keywords: ["Eternal", "Exhaust", "Retain", KEYWORD_FILTER_NONE],
     });
   });
 });
 
 describe("practice filter form classification", () => {
-  const bothCard = card("both", { mana: 2, retain: true }, { mana: 2, retain: true });
-  const baseCard = card("base", { mana: 2, retain: true }, { mana: 3, retain: false });
-  const upgradeCard = card("upgrade", { mana: 3, retain: false }, { mana: 2, retain: true });
-  const hiddenCard = card("hidden", { mana: 3, retain: false }, { mana: 4, retain: false });
+  const bothCard = card("both", { mana: 2, target: "AnyEnemy", powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] }, { mana: 2, target: "AnyEnemy", powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] });
+  const baseCard = card("base", { mana: 2, target: "AnyEnemy", powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] }, { mana: 3, target: "Self", powers: [], keywords: [] });
+  const upgradeCard = card("upgrade", { mana: 3, target: "Self", powers: [], keywords: [] }, { mana: 2, target: "AnyEnemy", powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] });
+  const hiddenCard = card("hidden", { mana: 3, target: "Self", powers: [], keywords: [] }, { mana: 4, target: "Self", powers: [], keywords: [] });
 
   function activeFilter() {
     const filter = createDefaultPracticeFilter();
-    filter.mana = { disabled: false, selected: [2] };
-    filter.keywords = { disabled: false, selected: ["retain"] };
+    filter.target = { disabled: false, selected: ["Self", "AnyEnemy"] };
+    filter.powers = { disabled: false, selected: ["Strength", "Dexterity"] };
+    filter.keywords = { disabled: false, selected: ["Exhaust", "Unplayable"] };
     return filter;
   }
 
-  it("reports which complete card form matches", () => {
+  it("reports which complete card form matches scalar and set groups", () => {
     const filter = activeFilter();
     expect(classifyPracticeCandidate(bothCard, filter)).toBe("both");
     expect(classifyPracticeCandidate(baseCard, filter)).toBe("base-only");
@@ -75,7 +92,7 @@ describe("practice filter form classification", () => {
     expect(classifyPracticeCandidate(hiddenCard, filter)).toBeNull();
   });
 
-  it("uses OR within a core group and AND across enabled groups", () => {
+  it("uses OR within scalar groups and AND across enabled groups", () => {
     const filter = createDefaultPracticeFilter();
     filter.mana = { disabled: false, selected: [2, 3] };
     filter.rarity = { disabled: false, selected: ["Rare"] };
@@ -84,21 +101,30 @@ describe("practice filter form classification", () => {
     expect(classifyPracticeCandidate(card("wrong-rarity", { mana: 2, rarity: "Basic" }, { mana: 3, rarity: "Basic" }), filter)).toBeNull();
   });
 
-  it("requires every selected keyword on the same form", () => {
+  it("requires every selected power and keyword on the same form", () => {
     const filter = createDefaultPracticeFilter();
-    filter.keywords = { disabled: false, selected: ["retain", "eternal"] };
+    filter.powers = { disabled: false, selected: ["Strength", "Dexterity"] };
+    filter.keywords = { disabled: false, selected: ["Exhaust", "Unplayable"] };
 
-    expect(classifyPracticeCandidate(card("all-keywords", { retain: true, eternal: true }, { retain: true, eternal: true }), filter)).toBe("both");
-    expect(classifyPracticeCandidate(card("one-keyword", { retain: true, eternal: false }), filter)).toBeNull();
+    expect(classifyPracticeCandidate(
+      card("all-sets", { powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] }, { powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] }),
+      filter,
+    )).toBe("both");
+    expect(classifyPracticeCandidate(card("split-sets", { powers: ["Strength", "Dexterity"], keywords: ["Exhaust"] }), filter)).toBeNull();
   });
 
-  it("matches None only when a complete form has no keywords", () => {
-    const filter = createDefaultPracticeFilter();
-    filter.keywords = { disabled: false, selected: ["none"] };
+  it("matches each None sentinel only when a complete form has an empty corresponding set", () => {
+    const powersNone = createDefaultPracticeFilter();
+    powersNone.powers = { disabled: false, selected: [POWER_FILTER_NONE] };
+    expect(classifyPracticeCandidate(card("power-free"), powersNone)).toBe("both");
+    expect(classifyPracticeCandidate(card("gains-power", {}, { powers: ["Strength"] }), powersNone)).toBe("base-only");
+    expect(classifyPracticeCandidate(card("has-power", { powers: ["Strength"] }, { powers: ["Strength"] }), powersNone)).toBeNull();
 
-    expect(classifyPracticeCandidate(card("keyword-free"), filter)).toBe("both");
-    expect(classifyPracticeCandidate(card("gains-innate", {}, { innate: true }), filter)).toBe("base-only");
-    expect(classifyPracticeCandidate(card("already-innate", { innate: true }, { innate: true }), filter)).toBeNull();
+    const keywordsNone = createDefaultPracticeFilter();
+    keywordsNone.keywords = { disabled: false, selected: [KEYWORD_FILTER_NONE] };
+    expect(classifyPracticeCandidate(card("keyword-free"), keywordsNone)).toBe("both");
+    expect(classifyPracticeCandidate(card("gains-keyword", {}, { keywords: ["Innate"] }), keywordsNone)).toBe("base-only");
+    expect(classifyPracticeCandidate(card("has-keyword", { keywords: ["Innate"] }, { keywords: ["Innate"] }), keywordsNone)).toBeNull();
   });
 
   it("treats disabled groups as passing and enabled empty groups as failing", () => {
@@ -106,33 +132,33 @@ describe("practice filter form classification", () => {
     expect(classifyPracticeCandidate(hiddenCard, disabled)).toBe("both");
 
     const empty = createDefaultPracticeFilter();
-    empty.mana = { disabled: false, selected: [] };
+    empty.target = { disabled: false, selected: [] };
     expect(classifyPracticeCandidate(hiddenCard, empty)).toBeNull();
 
-    const emptyKeywords = createDefaultPracticeFilter();
-    emptyKeywords.keywords = { disabled: false, selected: [] };
-    expect(classifyPracticeCandidate(hiddenCard, emptyKeywords)).toBeNull();
+    const emptyPowers = createDefaultPracticeFilter();
+    emptyPowers.powers = { disabled: false, selected: [] };
+    expect(classifyPracticeCandidate(hiddenCard, emptyPowers)).toBeNull();
   });
 
   it("does not combine matching values from different forms", () => {
     const filter = createDefaultPracticeFilter();
-    filter.mana = { disabled: false, selected: [2] };
-    filter.keywords = { disabled: false, selected: ["retain"] };
+    filter.target = { disabled: false, selected: ["AnyEnemy"] };
+    filter.keywords = { disabled: false, selected: ["Retain"] };
 
-    expect(classifyPracticeCandidate(card("split", { mana: 2, retain: false }, { mana: 3, retain: true }), filter)).toBeNull();
+    expect(classifyPracticeCandidate(card("split", { target: "AnyEnemy", keywords: [] }, { target: "Self", keywords: ["Retain"] }), filter)).toBeNull();
   });
 });
 
 describe("practice filter immutable updates", () => {
   it("updates group disabled state without mutating selections", () => {
     const filter = createDefaultPracticeFilter();
-    filter.mana.selected = [2];
+    filter.powers.selected = ["Strength"];
 
-    const updated = updatePracticeFilterGroupDisabled(filter, "mana", false);
-    expect(updated).toEqual({ ...filter, mana: { disabled: false, selected: [2] } });
+    const updated = updatePracticeFilterGroupDisabled(filter, "powers", false);
+    expect(updated).toEqual({ ...filter, powers: { disabled: false, selected: ["Strength"] } });
     expect(updated).not.toBe(filter);
-    expect(updated.mana).not.toBe(filter.mana);
-    expect(filter.mana).toEqual({ disabled: true, selected: [2] });
+    expect(updated.powers).not.toBe(filter.powers);
+    expect(filter.powers).toEqual({ disabled: true, selected: ["Strength"] });
   });
 
   it("deduplicates selected values while immutably adding and removing them", () => {
@@ -148,20 +174,25 @@ describe("practice filter immutable updates", () => {
     expect(filter.mana.selected).toEqual([]);
   });
 
-  it("keeps None mutually exclusive with real keyword selections", () => {
+  it("keeps group-specific None values mutually exclusive without clearing the other group", () => {
     const filter = createDefaultPracticeFilter();
-    filter.keywords = { disabled: false, selected: ["retain"] };
+    filter.powers = { disabled: false, selected: ["Strength"] };
+    filter.keywords = { disabled: false, selected: ["Retain"] };
 
-    const none = updatePracticeFilterGroupValue(filter, "keywords", "none", true);
-    const retain = updatePracticeFilterGroupValue(none, "keywords", "retain", true);
+    const noPowers = updatePracticeFilterGroupValue(filter, "powers", POWER_FILTER_NONE, true);
+    const noKeywords = updatePracticeFilterGroupValue(noPowers, "keywords", KEYWORD_FILTER_NONE, true);
+    const strength = updatePracticeFilterGroupValue(noKeywords, "powers", "Strength", true);
 
-    expect(none.keywords.selected).toEqual(["none"]);
-    expect(retain.keywords.selected).toEqual(["retain"]);
-    expect(filter.keywords.selected).toEqual(["retain"]);
+    expect(noPowers.powers.selected).toEqual([POWER_FILTER_NONE]);
+    expect(noPowers.keywords.selected).toEqual(["Retain"]);
+    expect(noKeywords.keywords.selected).toEqual([KEYWORD_FILTER_NONE]);
+    expect(strength.powers.selected).toEqual(["Strength"]);
+    expect(strength.keywords.selected).toEqual([KEYWORD_FILTER_NONE]);
+    expect(filter.powers.selected).toEqual(["Strength"]);
   });
 
   it("ignores values that do not belong to the target group", () => {
     const filter = createDefaultPracticeFilter();
-    expect(updatePracticeFilterGroupValue(filter, "mana", "Rare", true)).toBe(filter);
+    expect(updatePracticeFilterGroupValue(filter, "powers", "Rare", true)).toBe(filter);
   });
 });
