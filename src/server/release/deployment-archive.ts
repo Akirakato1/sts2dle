@@ -17,6 +17,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
+import { createGunzip } from "node:zlib";
 import * as tar from "tar";
 import type { Stats } from "node:fs";
 import type { ReadEntry } from "tar";
@@ -32,6 +33,7 @@ export const MAX_DEPLOYMENT_ARCHIVE_ENTRIES = 64;
 export const MAX_DEPLOYMENT_UNCOMPRESSED_BYTES = 16 * 1024 * 1024;
 export const MAX_DEPLOYMENT_ENTRY_BYTES = 8 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 64 * 1024;
+const MAX_VALIDATION_CLEANUP_ATTEMPTS = 3;
 const FIXED_MTIME = new Date(0);
 const RETRY_TIMEOUT_MS = 5_000;
 const RETRY_DELAY_MS = 50;
@@ -111,6 +113,7 @@ export async function createDeploymentArchive(
   archivePath: string,
   expectedRevision: string,
   options: SnapshotValidationOptions,
+  operations: ArchiveValidationOperations = {},
 ): Promise<void> {
   let temporaryPath: string | undefined;
   try {
@@ -137,7 +140,7 @@ export async function createDeploymentArchive(
       },
     }, entries);
     await syncFile(temporaryPath);
-    const validated = await validateArchiveInternal(temporaryPath, expectedRevision, options);
+    const validated = await validateArchiveInternal(temporaryPath, expectedRevision, options, operations);
     await validated.cleanup();
     const temporary = await resolveOwnedFile(temporaryPath);
     await revalidateParent(target.parent);
@@ -168,12 +171,13 @@ export async function validateDeploymentArchive(
 export async function readDeploymentRevision(
   archivePath: string,
   options: SnapshotValidationOptions,
+  operations: ArchiveValidationOperations = {},
 ): Promise<string | null> {
   try {
     const metadata = await lstatIfPresent(archivePath);
     if (!metadata) return null;
     if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("Unsafe archive");
-    const validated = await validateArchiveInternal(archivePath, undefined, options);
+    const validated = await validateArchiveInternal(archivePath, undefined, options, operations);
     await validated.cleanup();
     return validated.sourceRevision;
   } catch {
@@ -210,13 +214,16 @@ export async function beginDeploymentArchivePublish(
     let backup: OwnedFile | null = null;
     if (destination) backup = await renameOwnedFile(destination, backupPath, operations, deadline);
 
-    let published: OwnedFile;
+    let published: OwnedFile | undefined;
     try {
       await operations.beforePublish();
       published = await linkOwnedFile(staging, destinationTarget.path, operations);
       await unlinkOwnedFile(staging, operations);
     } catch (error: unknown) {
-      if (backup) {
+      if (published) {
+        await restorePublishedFile(published, backup, quarantinePath, destinationTarget.path, operations);
+        backup = null;
+      } else if (backup) {
         try {
           await linkOwnedFile(backup, destinationTarget.path, operations);
           await unlinkOwnedFile(backup, operations);
@@ -327,9 +334,18 @@ async function validateArchiveInternal(
   let cleaned = false;
   const cleanup = async (): Promise<void> => {
     if (cleaned) return;
-    if (operations.removeValidationRoot) await operations.removeValidationRoot(extractionRoot);
-    else await rm(extractionRoot, { recursive: true, force: true });
-    cleaned = true;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < MAX_VALIDATION_CLEANUP_ATTEMPTS; attempt += 1) {
+      try {
+        if (operations.removeValidationRoot) await operations.removeValidationRoot(extractionRoot);
+        else await rm(extractionRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: RETRY_DELAY_MS });
+        cleaned = true;
+        return;
+      } catch (error: unknown) {
+        lastError = error;
+      }
+    }
+    throw lastError;
   };
   try {
     await copyArchiveBounded(archivePath, immutableArchive);
@@ -357,11 +373,7 @@ async function validateArchiveInternal(
       cleanup,
     };
   } catch (error: unknown) {
-    try {
-      await cleanup();
-    } catch {
-      await cleanup();
-    }
+    await cleanup();
     throw error;
   }
 }
@@ -374,6 +386,7 @@ async function inspectArchive(
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let settled = false;
     let source: ReturnType<typeof createReadStream>;
+    const decompressor = createGunzip();
     let parser: tar.Parser | tar.Unpack;
     const settle = (error?: unknown): void => {
       if (settled) return;
@@ -383,6 +396,7 @@ async function inspectArchive(
         return;
       }
       source.destroy();
+      decompressor.destroy();
       if (source.closed) rejectPromise(error);
       else source.once("close", () => rejectPromise(error));
     };
@@ -400,7 +414,6 @@ async function inspectArchive(
     const common = {
       file: archivePath,
       filter,
-      maxDecompressionRatio: 200,
       maxMetaEntrySize: MAX_MANIFEST_BYTES,
       strict: true,
     };
@@ -413,11 +426,73 @@ async function inspectArchive(
         unlink: true,
       });
     source = createReadStream(archivePath);
+    let decompressedBytes = 0;
+    const rawInspector = createRawTarInspector((error) => parser.abort(error));
+    decompressor.on("data", (chunk: Buffer) => {
+      decompressedBytes += chunk.length;
+      if (decompressedBytes > MAX_DEPLOYMENT_UNCOMPRESSED_BYTES) {
+        parser.abort(new Error("Archive decompressed size exceeded"));
+        return;
+      }
+      rawInspector(chunk);
+    });
     parser.on("error", settle);
     source.on("error", settle);
+    decompressor.on("error", settle);
+    parser.on("meta", () => parser.abort(new Error("Archive metadata entries are forbidden")));
+    parser.on("ignoredEntry", (entry: ReadEntry) => {
+      if (entry.meta) parser.abort(new Error("Archive metadata entries are forbidden"));
+    });
     parser.on(extractionDirectory === undefined ? "end" : "close", () => settle());
-    source.pipe(parser);
+    source.pipe(decompressor).pipe(parser);
   });
+}
+
+function createRawTarInspector(abort: (error: Error) => void): (chunk: Buffer) => void {
+  let buffered: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let bodyBytes = 0;
+  let aborted = false;
+  return (chunk): void => {
+    if (aborted) return;
+    buffered = buffered.length === 0 ? chunk : Buffer.concat([buffered, chunk]);
+    while (buffered.length > 0) {
+      if (bodyBytes > 0) {
+        const consumed = Math.min(bodyBytes, buffered.length);
+        bodyBytes -= consumed;
+        buffered = buffered.subarray(consumed);
+        continue;
+      }
+      if (buffered.length < 512) return;
+      const header = buffered.subarray(0, 512);
+      buffered = buffered.subarray(512);
+      if (header.every((byte) => byte === 0)) continue;
+      try {
+        const path = header.subarray(0, 100).toString("utf8").replace(/\0.*$/, "");
+        const type = String.fromCharCode(header[156] ?? 0).replace("\0", "");
+        const size = parseRawTarSize(header.subarray(124, 136));
+        if ((type === "5" || (type === "" || type === "0") && path.endsWith("/")) && size !== 0) {
+          throw new Error("Archive directory has a body");
+        }
+        if (!["", "0", "1", "2", "3", "4", "5", "6", "7", "D"].includes(type)) {
+          throw new Error("Archive metadata entries are forbidden");
+        }
+        bodyBytes = Math.ceil(size / 512) * 512;
+      } catch (error: unknown) {
+        aborted = true;
+        abort(error instanceof Error ? error : new Error("Unsafe tar header"));
+        return;
+      }
+    }
+  };
+}
+
+function parseRawTarSize(field: Buffer): number {
+  if ((field[0]! & 0x80) !== 0) throw new Error("Binary tar sizes are forbidden");
+  const value = field.toString("ascii").replace(/\0.*$/, "").trim();
+  if (value !== "" && !/^[0-7]+$/.test(value)) throw new Error("Invalid tar size");
+  const size = value === "" ? 0 : Number.parseInt(value, 8);
+  if (!Number.isSafeInteger(size) || size < 0) throw new Error("Invalid tar size");
+  return size;
 }
 
 function createEntryInspector(): {
@@ -499,6 +574,7 @@ function validateEntry(entry: ReadEntry): string {
   if (entry.type !== "File" && entry.type !== "Directory") throw new Error("Unsafe archive entry type");
   if (entry.linkpath) throw new Error("Archive links are forbidden");
   const isDirectory = entry.type === "Directory";
+  if (isDirectory && entry.size !== 0) throw new Error("Archive directory has a body");
   if ((entry.mode! & 0o777) !== (isDirectory ? 0o755 : 0o644)) throw new Error("Archive mode is not normalized");
   if (entry.uid !== undefined || entry.gid !== undefined || (entry.mtime !== undefined && entry.mtime.getTime() !== 0)) {
     throw new Error("Archive metadata is not normalized");

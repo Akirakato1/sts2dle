@@ -141,6 +141,8 @@ describe("GitClient", () => {
   it.each([
     ["working tree", ["status", "--porcelain=v1", "--untracked-files=all"], " M deploy/snapshot-data.tar.gz\n?? README-private.md\n"],
     ["staging area", ["diff", "--cached", "--name-only"], "deploy/snapshot-data.tar.gz\nREADME.md\n"],
+    ["working tree descendant", ["status", "--porcelain=v1", "--untracked-files=all"], " M deploy/snapshot-data.tar.gz/payload\n"],
+    ["staging area descendant", ["diff", "--cached", "--name-only"], "deploy/snapshot-data.tar.gz/payload\n"],
   ] as const)("rejects extra paths in the %s", async (_label, command, response) => {
     const runner = new RecordingRunner();
     runner.replace(command, response);

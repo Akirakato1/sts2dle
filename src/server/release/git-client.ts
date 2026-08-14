@@ -1273,7 +1273,7 @@ function assertSnapshotPaths(paths: readonly string[]): void {
     const segments = normalized.split("/");
     if (
       segments.some((segment) => segment === "" || segment === "." || segment === "..") ||
-      (normalized !== SNAPSHOT_PATH && !normalized.startsWith(`${SNAPSHOT_PATH}/`))
+      normalized !== SNAPSHOT_PATH
     ) throw new GitSafetyError();
   }
 }

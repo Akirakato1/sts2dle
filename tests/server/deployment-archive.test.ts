@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -11,6 +11,7 @@ import {
   beginDeploymentArchivePublish,
   createDeploymentArchive,
   MAX_DEPLOYMENT_ENTRY_BYTES,
+  MAX_DEPLOYMENT_UNCOMPRESSED_BYTES,
   readDeploymentRevision,
   validateDeploymentArchive,
 } from "../../src/server/release/deployment-archive.js";
@@ -105,18 +106,27 @@ describe("deployment snapshot archive", () => {
     await createDeploymentArchive(newSource.dataDir, staging, newRevision, validationOptions);
 
     const validationRootsBefore = await validationTemporaryRoots();
+    let cleanupCalls = 0;
     const error = await captureError(beginDeploymentArchivePublish(
       staging,
       destination,
       newRevision,
       validationOptions,
-      { afterPublish: async () => { throw new Error(`secret ${destination}`); } },
+      {
+        afterPublish: async () => { throw new Error(`secret ${destination}`); },
+        removeValidationRoot: async (path) => {
+          cleanupCalls += 1;
+          if (cleanupCalls === 2) throw new Error(`private after-publish cleanup ${root}`);
+          await rm(path, { recursive: true, force: true });
+        },
+      },
     ));
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Published deployment archive failed validation");
     expect(reachableErrorText(error)).not.toContain(destination);
     expect(await readFile(destination)).toEqual(before);
+    expect(cleanupCalls).toBe(3);
     expect(await validationTemporaryRoots()).toEqual(validationRootsBefore);
   });
 
@@ -166,6 +176,33 @@ describe("deployment snapshot archive", () => {
     expect((await readdir(root)).filter((name) => name.includes(".backup-"))).toHaveLength(1);
   });
 
+  it("restores the old archive when staging unlink fails after the final hard link is installed", async () => {
+    const oldRevision = "7a".repeat(32);
+    const nextRevision = "7b".repeat(32);
+    const oldSource = await createValidSource(oldRevision);
+    const nextSource = await createValidSource(nextRevision);
+    const root = await temporaryRoot();
+    const destination = join(root, "snapshot-data.tar.gz");
+    const staging = join(root, ".snapshot-data.tar.gz.staging");
+    await createDeploymentArchive(oldSource.dataDir, destination, oldRevision, validationOptions);
+    const original = await readFile(destination);
+    await createDeploymentArchive(nextSource.dataDir, staging, nextRevision, validationOptions);
+    let injected = false;
+
+    await expect(beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
+      unlinkFile: async (path) => {
+        if (path === staging && !injected) {
+          injected = true;
+          throw new Error(`private unlink payload ${root}`);
+        }
+        await unlink(path);
+      },
+    })).rejects.toThrow("Unable to publish deployment archive");
+
+    expect(await readFile(destination)).toEqual(original);
+    expect(await readDeploymentRevision(destination, validationOptions)).toBe(oldRevision);
+  });
+
   it("retries cleanup of every private validation root when the first post-publish cleanup fails", async () => {
     const oldRevision = "8e".repeat(32);
     const nextRevision = "8f".repeat(32);
@@ -179,16 +216,45 @@ describe("deployment snapshot archive", () => {
     const beforeTemporaryRoots = await validationTemporaryRoots();
     let cleanupCalls = 0;
 
-    await expect(beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
+    const published = await beginDeploymentArchivePublish(staging, destination, nextRevision, validationOptions, {
       removeValidationRoot: async (path) => {
         cleanupCalls += 1;
         if (cleanupCalls === 2) throw new Error(`injected cleanup payload ${root}`);
         await rm(path, { recursive: true, force: true });
       },
-    })).rejects.toThrow("Published deployment archive failed validation");
+    });
+    await published.finalize();
 
-    expect(await readDeploymentRevision(destination, validationOptions)).toBe(oldRevision);
+    expect(await readDeploymentRevision(destination, validationOptions)).toBe(nextRevision);
     expect(cleanupCalls).toBe(4);
+    expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
+  });
+
+  it("retries successful create and read validation cleanup without leaking private roots", async () => {
+    const revision = "93".repeat(32);
+    const source = await createValidSource(revision);
+    const root = await temporaryRoot();
+    const archive = join(root, "snapshot-data.tar.gz");
+    const beforeTemporaryRoots = await validationTemporaryRoots();
+    let createCleanupCalls = 0;
+    await createDeploymentArchive(source.dataDir, archive, revision, validationOptions, {
+      removeValidationRoot: async (path) => {
+        createCleanupCalls += 1;
+        if (createCleanupCalls === 1) throw new Error(`private create cleanup ${root}`);
+        await rm(path, { recursive: true, force: true });
+      },
+    });
+    let readCleanupCalls = 0;
+    await expect(readDeploymentRevision(archive, validationOptions, {
+      removeValidationRoot: async (path) => {
+        readCleanupCalls += 1;
+        if (readCleanupCalls === 1) throw new Error(`private read cleanup ${root}`);
+        await rm(path, { recursive: true, force: true });
+      },
+    })).resolves.toBe(revision);
+
+    expect(createCleanupCalls).toBe(2);
+    expect(readCleanupCalls).toBe(2);
     expect(await validationTemporaryRoots()).toEqual(beforeTemporaryRoots);
   });
 
@@ -223,6 +289,15 @@ describe("deployment snapshot archive", () => {
   it("rejects traversal, links, duplicates, oversize entries, unexpected roots, multiple builds, and entry-count bombs", async () => {
     const revision = "9a".repeat(32);
     const root = await temporaryRoot();
+    const validSource = await createValidSource(revision);
+    const validArchive = join(root, "valid.tar.gz");
+    await createDeploymentArchive(validSource.dataDir, validArchive, revision, validationOptions);
+    const directoryBodyArchive = join(root, "directory-body.tar.gz");
+    await rewriteTarEntrySize(validArchive, directoryBodyArchive, "snapshots", 1);
+    const paxArchive = join(root, "pax.tar.gz");
+    await createMetadataArchive(paxArchive, "ExtendedHeader", Buffer.alloc(MAX_DEPLOYMENT_UNCOMPRESSED_BYTES + 1));
+    const gnuArchive = join(root, "gnu.tar.gz");
+    await createMetadataArchive(gnuArchive, "NextFileHasLongPath", Buffer.from("malicious-long-path\0"));
 
     const linkedSource = join(root, "linked-source");
     await mkdir(linkedSource);
@@ -272,16 +347,22 @@ describe("deployment snapshot archive", () => {
     const bombArchive = join(root, "bomb.tar.gz");
     await createNormalizedTestArchive(bombSource, bombArchive, ["active.json", "snapshots"]);
 
-    for (const archive of [
-      traversalArchive,
-      linkedArchive,
-      duplicateArchive,
-      oversizeArchive,
-      unexpectedArchive,
-      multipleArchive,
-      bombArchive,
-    ]) {
-      const error = await captureError(validateDeploymentArchive(archive, revision, validationOptions));
+    for (const [label, archive] of [
+      ["traversal", traversalArchive],
+      ["directory body", directoryBodyArchive],
+      ["PAX metadata bomb", paxArchive],
+      ["GNU metadata", gnuArchive],
+      ["link", linkedArchive],
+      ["duplicate", duplicateArchive],
+      ["oversize", oversizeArchive],
+      ["unexpected", unexpectedArchive],
+      ["multiple builds", multipleArchive],
+      ["entry count", bombArchive],
+    ] as const) {
+      const error = await captureErrorWithLabel(
+        validateDeploymentArchive(archive, revision, validationOptions),
+        label,
+      );
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe("Unable to validate deployment archive");
       expect(reachableErrorText(error)).not.toContain(root);
@@ -328,6 +409,11 @@ function sha256(data: Buffer): string {
 async function captureError(promise: Promise<unknown>): Promise<unknown> {
   try { await promise; } catch (error: unknown) { return error; }
   throw new Error("Expected rejection");
+}
+
+async function captureErrorWithLabel(promise: Promise<unknown>, label: string): Promise<unknown> {
+  try { await promise; } catch (error: unknown) { return error; }
+  throw new Error(`Expected rejection for ${label}`);
 }
 
 function reachableErrorText(error: unknown, seen = new Set<unknown>()): string {
@@ -377,4 +463,46 @@ async function rewriteFirstTarPath(source: string, destination: string, replacem
   for (let index = 0; index < 512; index += 1) checksum += raw[index]!;
   raw.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8, "ascii");
   await writeFile(destination, gzipSync(raw, { level: 9 }));
+}
+
+async function rewriteTarEntrySize(
+  source: string,
+  destination: string,
+  targetPath: string,
+  replacementSize: number,
+): Promise<void> {
+  const raw = gunzipSync(await readFile(source));
+  for (let offset = 0; offset + 512 <= raw.length; ) {
+    const name = raw.subarray(offset, offset + 100).toString("utf8").replace(/\0.*$/, "").replace(/\/$/, "");
+    const sizeText = raw.subarray(offset + 124, offset + 136).toString("ascii").replace(/\0.*$/, "").trim();
+    const size = Number.parseInt(sizeText || "0", 8);
+    if (name === targetPath) {
+      raw.fill(0, offset + 124, offset + 136);
+      raw.write(replacementSize.toString(8).padStart(11, "0"), offset + 124, 11, "ascii");
+      rewriteTarChecksum(raw, offset);
+      await writeFile(destination, gzipSync(raw, { level: 9 }));
+      return;
+    }
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  throw new Error("Test tar entry was not found");
+}
+
+async function createMetadataArchive(
+  destination: string,
+  type: "ExtendedHeader" | "NextFileHasLongPath",
+  body: Buffer,
+): Promise<void> {
+  const header = new tar.Header({ path: "metadata", type, size: body.length, mode: 0o644 });
+  header.encode();
+  if (!header.block) throw new Error("Unable to encode test tar header");
+  const padding = Buffer.alloc(Math.ceil(body.length / 512) * 512 - body.length);
+  await writeFile(destination, gzipSync(Buffer.concat([header.block, body, padding, Buffer.alloc(1024)]), { level: 9 }));
+}
+
+function rewriteTarChecksum(raw: Buffer, offset: number): void {
+  raw.fill(0x20, offset + 148, offset + 156);
+  let checksum = 0;
+  for (let index = offset; index < offset + 512; index += 1) checksum += raw[index]!;
+  raw.write(`${checksum.toString(8).padStart(6, "0")}\0 `, offset + 148, 8, "ascii");
 }
