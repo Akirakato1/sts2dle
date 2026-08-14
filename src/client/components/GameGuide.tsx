@@ -3,9 +3,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { OrbVisual } from "./OrbVisual.js";
 
 const RESULT_LEGEND = [
-  ["green", "Both base and upgraded features match"],
-  ["yellow", "Exactly one version matches"],
-  ["red", "Neither version matches"],
+  ["green", "Both corresponding forms match exactly"],
+  ["yellow", "One corresponding form is exact, or a set has corresponding overlap"],
+  ["red", "Neither scalar form matches; sets have no corresponding overlap"],
 ] as const;
 
 const ORB_GUIDE = [

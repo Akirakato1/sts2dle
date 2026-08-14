@@ -27,9 +27,9 @@ describe("GameGuide", () => {
         "Cards with an identical complete paired feature set are accepted as equivalent answers.",
       ],
       "Result colors": [
-        "Both base and upgraded features match",
-        "Exactly one version matches",
-        "Neither version matches",
+        "Both corresponding forms match exactly",
+        "One corresponding form is exact, or a set has corresponding overlap",
+        "Neither scalar form matches; sets have no corresponding overlap",
       ],
       "Set features": [
         "Powers and Keywords are sets. Exact sets match green. Any corresponding overlap is yellow. No overlap is red.",
