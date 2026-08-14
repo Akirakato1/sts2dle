@@ -42,6 +42,10 @@ export interface ProcessRunOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+export interface NpmCheckOptions {
+  excludeCommittedSnapshotTest?: boolean;
+}
+
 export type ArgumentArrayRunner = (
   command: string,
   args: readonly string[],
@@ -562,13 +566,26 @@ export async function runNpmCheck(
   repositoryRoot: string,
   npmCliPath: string,
   runner: ArgumentArrayRunner = runBoundedProcess,
+  options: NpmCheckOptions = {},
 ): Promise<ProcessResult> {
   const resolvedCli = validateNpmCliPath(npmCliPath);
-  return runner(process.execPath, [resolvedCli, "run", "check"], {
+  const processOptions: ProcessRunOptions = {
     cwd: repositoryRoot,
     timeoutMs: 15 * 60 * 1000,
     maxOutputBytes: 4 * 1024 * 1024,
-  });
+  };
+  if (options.excludeCommittedSnapshotTest !== true) {
+    return runner(process.execPath, [resolvedCli, "run", "check"], processOptions);
+  }
+  await runner(process.execPath, [resolvedCli, "run", "typecheck"], processOptions);
+  await runner(process.execPath, [
+    resolvedCli,
+    "test",
+    "--",
+    "--exclude",
+    "tests/deployment/committed-snapshot.test.ts",
+  ], processOptions);
+  return runner(process.execPath, [resolvedCli, "run", "build"], processOptions);
 }
 
 export function resolveNpmCliPath(environment: NodeJS.ProcessEnv): string {

@@ -51,7 +51,7 @@ export interface SnapshotBuildDependencies {
 export interface ReleaseSnapshotDependencies extends SnapshotBuildDependencies {
   gitClient: Pick<GitClient, "assertReady" | "assertOnlySnapshotChanges" | "rollbackSnapshotIndex" | "commitSnapshot" | "cleanupPrivateIndex" | "completeSnapshotRecovery" | "recoverSnapshot" | "pushMain">;
   readCommittedRevision(): Promise<string | null>;
-  runChecks(): Promise<void>;
+  runChecks(options: { excludeCommittedSnapshotTest: boolean }): Promise<void>;
   outputDir?: string;
 }
 
@@ -136,7 +136,9 @@ export async function releaseSnapshot(
     if (!options.force && fetched.sourceRevision === committedRevision) {
       result = { status: "unchanged", sourceRevision: fetched.sourceRevision, sourceFeatureAudit };
     } else {
-      await dependencies.runChecks();
+      await dependencies.runChecks({
+        excludeCommittedSnapshotTest: options.force === true,
+      });
       temporary = await dependencies.buildTemporarySnapshot(fetched);
       await dependencies.validateTemporarySnapshot(temporary.active);
       const outputDir = dependencies.outputDir ?? "deploy/snapshot-data.tar.gz";
@@ -289,8 +291,8 @@ export function createReleaseSnapshotDependencies(
     gitClient: new GitClient(options.repositoryRoot, runner),
     outputDir,
     readCommittedRevision: () => readDeploymentRevision(outputDir, validationOptions),
-    runChecks: async () => {
-      await runNpmCheck(options.repositoryRoot, npmCliPath, runner);
+    runChecks: async (checkOptions) => {
+      await runNpmCheck(options.repositoryRoot, npmCliPath, runner, checkOptions);
     },
   };
 }

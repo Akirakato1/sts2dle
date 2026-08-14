@@ -122,7 +122,10 @@ describe("releaseSnapshot", () => {
   });
 
   it("force replaces an unreadable committed archive through the strict publication transaction", async () => {
-    const harness = createReleaseHarness({ failCommittedRevisionRead: true });
+    const harness = createReleaseHarness({
+      failCommittedRevisionRead: true,
+      requireCommittedSnapshotExclusion: true,
+    });
 
     await expect(releaseSnapshot({ force: true }, harness.dependencies)).resolves.toEqual({
       status: "released",
@@ -131,6 +134,7 @@ describe("releaseSnapshot", () => {
     });
 
     expect(harness.readCommittedRevision).not.toHaveBeenCalled();
+    expect(harness.runChecks).toHaveBeenCalledWith({ excludeCommittedSnapshotTest: true });
     expect(harness.events).toEqual([
       "git-ready", "fetch", "checks", "build-temp", "validate-temp",
       "publish", "validate-published", "scope-check", "commit", "push",
@@ -295,9 +299,37 @@ describe("releaseSnapshot", () => {
       },
     });
 
-    await dependencies.runChecks();
+    await dependencies.runChecks({ excludeCommittedSnapshotTest: false });
 
     expect(calls).toEqual([[process.execPath, [npmCliPath, "run", "check"]]]);
+  });
+
+  it("excludes only the committed snapshot contract from forced pre-build checks", async () => {
+    const calls: Array<[string, readonly string[]]> = [];
+    const npmCliPath = resolveNpmCliPath(process.env);
+    const dependencies = createReleaseSnapshotDependencies({
+      repositoryRoot: "C:\\repository",
+      config: validConfig(),
+      npmCliPath,
+      runner: async (command, args) => {
+        calls.push([command, args]);
+        return { stdout: "", stderr: "" };
+      },
+    });
+
+    await dependencies.runChecks({ excludeCommittedSnapshotTest: true });
+
+    expect(calls).toEqual([
+      [process.execPath, [npmCliPath, "run", "typecheck"]],
+      [process.execPath, [
+        npmCliPath,
+        "test",
+        "--",
+        "--exclude",
+        "tests/deployment/committed-snapshot.test.ts",
+      ]],
+      [process.execPath, [npmCliPath, "run", "build"]],
+    ]);
   });
 
   it("restores a real repository publication and index together after commit failure", async () => {
@@ -696,6 +728,7 @@ describe("snapshot build CLI", () => {
 interface HarnessOptions {
   committedRevision?: string | null;
   failCommittedRevisionRead?: boolean;
+  requireCommittedSnapshotExclusion?: boolean;
   failAt?: string;
   failure?: Error;
   failRollback?: boolean;
@@ -762,6 +795,14 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     if (options.failCommittedRevisionRead) throw failure;
     return options.committedRevision ?? CURRENT_REVISION;
   });
+  const runChecks = vi.fn(async (checkOptions?: { excludeCommittedSnapshotTest: boolean }) => {
+    events.push("checks");
+    if (
+      options.requireCommittedSnapshotExclusion &&
+      checkOptions?.excludeCommittedSnapshotTest !== true
+    ) throw failure;
+    fail("checks");
+  });
   const dependencies: ReleaseSnapshotDependencies = {
     gitClient: {
       assertReady: async () => { events.push("git-ready"); fail("git-ready"); },
@@ -793,7 +834,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     },
     readCommittedRevision,
     fetchCards,
-    runChecks: async () => { events.push("checks"); fail("checks"); },
+    runChecks,
     buildTemporarySnapshot: async (received) => {
       events.push("build-temp");
       fetchedByBuilder = received;
@@ -831,6 +872,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
     fetched,
     fetchCards,
     readCommittedRevision,
+    runChecks,
     finalize,
     privateCleanup,
     completeSnapshotRecovery,
