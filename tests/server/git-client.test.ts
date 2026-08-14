@@ -675,9 +675,47 @@ describe("runBoundedProcess", () => {
     15_000,
   );
 
-  it.each(["timeout", "overflow"] as const)(
-    "terminates descendants through a live supervisor after the command parent exits on %s",
-    async (mode) => {
+  it("treats an exited successful command as success while terminating its descendants", async () => {
+    const root = await makeTemporaryRoot();
+    const pidFile = join(root, "orphan-grandchild.pid");
+    const fixture = join(process.cwd(), "tests", "server", "fixtures", "process-tree-child.mjs");
+    const sentinel = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(Number.isInteger(sentinel.pid) && sentinel.pid! > 0).toBe(true);
+    const beforeResources = countTimeoutResources();
+    const beforeProcessResources = countProcessResources();
+    try {
+      const result = await runBoundedProcess(
+        process.execPath,
+        [fixture, "parent-exit-timeout", pidFile],
+        {
+          cwd: root,
+          timeoutMs: 5_000,
+          maxOutputBytes: 1024 * 1024,
+        },
+      );
+      const descendantPid = Number((await readFile(pidFile, "utf8")).trim());
+      const supervisorPid = Number((await readFile(`${pidFile}.supervisor`, "utf8")).trim());
+
+      expect(result).toEqual({ stdout: "", stderr: "" });
+      await expectProcessToExit(descendantPid);
+      await expectProcessToExit(supervisorPid);
+      expectProcessAlive(sentinel.pid!);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(countTimeoutResources()).toBeLessThanOrEqual(beforeResources);
+      expectProcessResourcesNotIncreased(beforeProcessResources);
+    } finally {
+      sentinel.kill("SIGKILL");
+      await new Promise<void>((resolveClose) => sentinel.once("close", () => resolveClose()));
+    }
+  }, 15_000);
+
+  it(
+    "terminates descendants through a live supervisor after the command parent exits on overflow",
+    async () => {
       const root = await makeTemporaryRoot();
       const pidFile = join(root, "orphan-grandchild.pid");
       const fixture = join(process.cwd(), "tests", "server", "fixtures", "process-tree-child.mjs");
@@ -692,11 +730,11 @@ describe("runBoundedProcess", () => {
       try {
         const error = await captureError(runBoundedProcess(
           process.execPath,
-          [fixture, `parent-exit-${mode}`, pidFile],
+          [fixture, "parent-exit-overflow", pidFile],
           {
             cwd: root,
-            timeoutMs: mode === "timeout" ? 300 : 5_000,
-            maxOutputBytes: mode === "overflow" ? 1_024 : 1024 * 1024,
+            timeoutMs: 5_000,
+            maxOutputBytes: 1_024,
           },
         ));
         const descendantPid = Number((await readFile(pidFile, "utf8")).trim());
