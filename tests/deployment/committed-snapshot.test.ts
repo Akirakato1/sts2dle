@@ -35,8 +35,8 @@ describe("committed production snapshot", () => {
       const loaded = await loadActivatedSnapshot(active!.path, OFFICIAL_VALIDATION_OPTIONS);
       expect(loaded.report.cardCount).toBe(577);
       expect(loaded.report.upgradeCount).toBe(541);
-      expect(loaded.report.baseGroupCount).toBe(276);
-      expect(loaded.report.pairGroupCount).toBe(324);
+      expect(loaded.report.baseGroupCount).toBe(378);
+      expect(loaded.report.pairGroupCount).toBe(406);
       expect(loaded.report.fallbackCardIds).toEqual(["MAD_SCIENCE"]);
 
       const cards = await readJson<CardIdentity[]>(active!.path, "cards.json");
