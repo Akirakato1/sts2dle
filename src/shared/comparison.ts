@@ -1,4 +1,10 @@
-import { FEATURE_ORDER, type CardIdentity, type FeatureName, type FeatureVector } from "./domain.js";
+import {
+  FEATURE_ORDER,
+  type CardIdentity,
+  type CardTarget,
+  type FeatureName,
+  type FeatureVector,
+} from "./domain.js";
 
 export type TileColor = "green" | "yellow" | "red";
 
@@ -9,6 +15,20 @@ export interface FeatureResult {
 }
 
 type FeatureValue = FeatureVector[FeatureName];
+
+const CARD_TARGET_LABELS: Readonly<Record<CardTarget, string>> = {
+  Self: "Self",
+  AnyEnemy: "Single Enemy",
+  AllEnemies: "All Enemies",
+  RandomEnemy: "Random Enemy",
+  AnyAlly: "Single Ally",
+  AllAllies: "All Allies",
+  None: "None",
+};
+
+export function formatCardTarget(target: CardTarget): string {
+  return CARD_TARGET_LABELS[target];
+}
 
 function isSetFeature(feature: FeatureName): feature is "powers" | "keywords" {
   return feature === "powers" || feature === "keywords";
@@ -27,14 +47,15 @@ export function sameFeatureValue(feature: FeatureName, left: FeatureValue, right
   return left === right;
 }
 
-function formatSingleFeatureValue(value: unknown): string {
+function formatSingleFeatureValue(feature: FeatureName, value: FeatureValue): string {
+  if (feature === "target") return formatCardTarget(value as CardTarget);
   if (Array.isArray(value)) return value.length === 0 ? "None" : value.join(", ");
   return String(value);
 }
 
-export function formatFeatureValue(base: unknown, upgraded: unknown): string {
-  const baseDisplay = formatSingleFeatureValue(base);
-  const upgradedDisplay = formatSingleFeatureValue(upgraded);
+export function formatFeatureValue(feature: FeatureName, base: FeatureValue, upgraded: FeatureValue): string {
+  const baseDisplay = formatSingleFeatureValue(feature, base);
+  const upgradedDisplay = formatSingleFeatureValue(feature, upgraded);
   return baseDisplay === upgradedDisplay ? baseDisplay : `${baseDisplay} \u2192 ${upgradedDisplay}`;
 }
 
@@ -55,7 +76,7 @@ export function compareFeature(feature: FeatureName, guess: CardIdentity, answer
   return {
     feature,
     color,
-    displayValue: formatFeatureValue(guess.base[feature], guess.upgraded[feature]),
+    displayValue: formatFeatureValue(feature, guess.base[feature], guess.upgraded[feature]),
   };
 }
 

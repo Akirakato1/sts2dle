@@ -48,6 +48,26 @@ export async function runReleaseCli(
       return 0;
     }
     const result = await resolvedDependencies.release(options, releaseDependencies);
+    if (result.status === "released") {
+      const audit = result.releaseAudit;
+      resolvedDependencies.writeOutput(`Source revision: ${audit.sourceRevision}`);
+      resolvedDependencies.writeOutput(`Cards: ${audit.cardCount}`);
+      resolvedDependencies.writeOutput(`Upgrades: ${audit.upgradeCount}`);
+      resolvedDependencies.writeOutput(`Base groups: ${audit.baseGroupCount}`);
+      resolvedDependencies.writeOutput(`Pair groups: ${audit.pairGroupCount}`);
+      resolvedDependencies.writeOutput(
+        `Candidate sprite: ${audit.candidateSprite.width}x${audit.candidateSprite.height}; ${audit.candidateSprite.bytes} bytes`,
+      );
+      resolvedDependencies.writeOutput(
+        `Guess sprite: ${audit.guessSprite.width}x${audit.guessSprite.height}; ${audit.guessSprite.bytes} bytes`,
+      );
+      resolvedDependencies.writeOutput(
+        `Fallback invariant: ${audit.fallbackInvariantSatisfied ? "validated" : "failed"}`,
+      );
+      resolvedDependencies.writeOutput(`Fallback cards: ${audit.fallbackCardCount}`);
+      resolvedDependencies.writeOutput(`Archive compressed bytes: ${audit.archiveCompressedBytes}`);
+      resolvedDependencies.writeOutput(`Archive SHA-256: ${audit.archiveSha256}`);
+    }
     resolvedDependencies.writeOutput(`Targets: ${result.sourceFeatureAudit.targets.join(", ")}`);
     resolvedDependencies.writeOutput(
       `Power keys: ${result.sourceFeatureAudit.singletonPowerKeyCount} singleton; ${result.sourceFeatureAudit.recurringPowerKeyCount} recurring`,

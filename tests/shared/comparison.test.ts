@@ -44,8 +44,23 @@ describe("paired feature comparison", () => {
   });
 
   it("formats equal paired values once and changed values with an arrow", () => {
-    expect(formatFeatureValue("Basic", "Basic")).toBe("Basic");
-    expect(formatFeatureValue("Self", "None")).toBe("Self → None");
+    expect(formatFeatureValue("rarity", "Basic", "Basic")).toBe("Basic");
+    expect(formatFeatureValue("target", "Self", "None")).toBe("Self → None");
+  });
+
+  it.each([
+    ["Self", "Self"],
+    ["AnyEnemy", "Single Enemy"],
+    ["AllEnemies", "All Enemies"],
+    ["RandomEnemy", "Random Enemy"],
+    ["AnyAlly", "Single Ally"],
+    ["AllAllies", "All Allies"],
+    ["None", "None"],
+  ] as const)("formats the %s target for comparison results as %s", (target, expected) => {
+    expect(compareFeature("target", card("target", { target }, { target }), card("answer"))).toMatchObject({
+      feature: "target",
+      displayValue: expected,
+    });
   });
 
   it("compares corresponding set-valued forms by exactness or overlap", () => {
@@ -60,9 +75,9 @@ describe("paired feature comparison", () => {
     const emptyBaseAnswer = card("empty-answer", { keywords: [] }, { keywords: [] });
 
     expect(compareFeature("keywords", card("partial", { keywords: [] }, { keywords: ["Innate"] }), emptyBaseAnswer).color).toBe("yellow");
-    expect(formatFeatureValue([], [])).toBe("None");
-    expect(formatFeatureValue(["Strength", "Weak"], ["Strength", "Weak"])).toBe("Strength, Weak");
-    expect(formatFeatureValue(["Ethereal", "Exhaust"], ["Exhaust"])).toBe("Ethereal, Exhaust → Exhaust");
+    expect(formatFeatureValue("keywords", [], [])).toBe("None");
+    expect(formatFeatureValue("powers", ["Strength", "Weak"], ["Strength", "Weak"])).toBe("Strength, Weak");
+    expect(formatFeatureValue("keywords", ["Ethereal", "Exhaust"], ["Exhaust"])).toBe("Ethereal, Exhaust → Exhaust");
   });
 
   it("compares set feature values by contents rather than array identity", () => {

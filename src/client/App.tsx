@@ -84,6 +84,7 @@ function resolveOrbUse(
       consumers.consumeReveal({ feature: target.feature });
       {
         const answerValue = formatFeatureValue(
+          target.feature,
           answerCard.base[target.feature],
           answerCard.upgraded[target.feature],
         );

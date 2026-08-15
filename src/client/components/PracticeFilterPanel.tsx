@@ -8,6 +8,7 @@ import {
   type PracticeFilterState,
   type PracticeFilterValue,
 } from "../game/practice-filter.js";
+import { formatCardTarget } from "../../shared/comparison.js";
 import type { CardTarget } from "../../shared/domain.js";
 
 export const FILTER_HELP_DISMISSED_KEY = "stsdle:filter-help-dismissed:v1";
@@ -35,19 +36,9 @@ const GROUPS: readonly GroupDefinition[] = [
   { key: "keywords", label: "Keywords" },
 ];
 
-const TARGET_LABELS: Readonly<Record<CardTarget, string>> = {
-  Self: "Self",
-  AnyEnemy: "Single Enemy",
-  AllEnemies: "All Enemies",
-  RandomEnemy: "Random Enemy",
-  AnyAlly: "Single Ally",
-  AllAllies: "All Allies",
-  None: "None",
-};
-
 function formatValue(group: PracticeFilterGroupName, value: PracticeFilterValue): string {
   if (value === POWER_FILTER_NONE || value === KEYWORD_FILTER_NONE) return "None";
-  if (group === "target") return TARGET_LABELS[value as CardTarget];
+  if (group === "target") return formatCardTarget(value as CardTarget);
   return String(value);
 }
 

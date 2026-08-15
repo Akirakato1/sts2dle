@@ -7,7 +7,8 @@ import { FeatureTile, REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "../../src/cl
 import { OrbInteractionProvider, type OrbTargetDescriptor } from "../../src/client/components/OrbInteractionContext.js";
 import { OrbTray } from "../../src/client/components/OrbTray.js";
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
-import type { FeatureResult } from "../../src/shared/comparison.js";
+import { compareFeature, type FeatureResult } from "../../src/shared/comparison.js";
+import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
 
 afterEach(() => {
   cleanup();
@@ -20,6 +21,18 @@ function result(overrides: Partial<FeatureResult> = {}): FeatureResult {
     color: "green",
     displayValue: "Ironclad",
     ...overrides,
+  };
+}
+
+const targetVector: FeatureVector = {
+  cardClass: "Ironclad", cardType: "Attack", mana: 1, rarity: "Common",
+  target: "AnyEnemy", powers: [], keywords: [],
+};
+
+function targetCard(id: string): CardIdentity {
+  return {
+    id, name: id, hasUpgrade: false, artUrl: "", baseCardUrl: null, upgradedCardUrl: null,
+    base: targetVector, upgraded: targetVector,
   };
 }
 
@@ -63,6 +76,13 @@ describe("FeatureTile", () => {
     renderTile({ result: result({ feature: "mana", displayValue: "2 \u2192 1" }), revealIndex: 1 });
     expect(screen.getByText("2 \u2192 1")).toBeInTheDocument();
 
+  });
+
+  test("shows a friendly target comparison in both the tile and its accessible label", () => {
+    renderTile({ result: compareFeature("target", targetCard("guess"), targetCard("answer")), animate: false });
+
+    expect(screen.getByRole("cell", { name: "Target: Single Enemy. Result: green." }))
+      .toHaveTextContent("Single Enemy");
   });
 
   test.each([

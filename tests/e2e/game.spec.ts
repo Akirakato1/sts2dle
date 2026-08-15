@@ -613,10 +613,10 @@ test("offline fixture drives seven set-aware columns, comparisons, reveal, and p
     name: "Keywords: Ethereal, Exhaust → Exhaust. Result: green.",
   })).toBeVisible();
   await expect(guessRow(page, targetExact).getByRole("cell", {
-    name: "Target: AllAllies. Result: green.",
+    name: "Target: All Allies. Result: green.",
   })).toBeVisible();
   await expect(guessRow(page, disjoint).getByRole("cell", {
-    name: "Target: RandomEnemy. Result: red.",
+    name: "Target: Random Enemy. Result: red.",
   })).toBeVisible();
 
   const keywordsHeader = page.locator('.guess-grid__header[data-feature="keywords"]');
@@ -666,6 +666,7 @@ test("Normal Daily preloads atlases and persists orb targets, classifications, v
   await expectAnimatedPoof(page, "reveal");
   await expect(page.getByRole("status")).toContainText(
     `Reveal Orb showed ${FEATURE_LABELS[revealFeature]}: ${formatFeatureValue(
+      revealFeature,
       selectedAnswerCard.base[revealFeature],
       selectedAnswerCard.upgraded[revealFeature],
     )}.`,
@@ -1234,7 +1235,7 @@ test("keyboard orb use exposes pressed, status, classification, bubble, and badg
   await revealTarget.press("Enter");
   const answerCard = model.cards.find((card) => card.id === model.dailyAnswer.selectedCardId)!;
   await expect(page.locator(".orb-announcement")).toHaveText(
-    `Reveal Orb showed Mana: ${formatFeatureValue(answerCard.base.mana, answerCard.upgraded.mana)}.`,
+    `Reveal Orb showed Mana: ${formatFeatureValue("mana", answerCard.base.mana, answerCard.upgraded.mana)}.`,
   );
   await expect(revealHeader.getByRole("note", { name: /^Answer:/ })).toBeVisible();
 

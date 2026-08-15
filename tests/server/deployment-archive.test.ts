@@ -139,6 +139,25 @@ describe("deployment snapshot archive", () => {
       newRevision,
       validationOptions,
     );
+    const publishedBytes = await readFile(destination);
+    expect(published.audit).toEqual({
+      sourceRevision: newRevision,
+      cardCount: 11,
+      upgradeCount: 6,
+      baseGroupCount: 11,
+      pairGroupCount: 11,
+      candidateSprite: { width: 256, height: 192, bytes: expect.any(Number) },
+      guessSprite: { width: 640, height: 480, bytes: expect.any(Number) },
+      fallbackInvariantSatisfied: true,
+      fallbackCardCount: 1,
+      archiveCompressedBytes: publishedBytes.length,
+      archiveSha256: sha256(publishedBytes),
+    });
+    expect(published.audit.candidateSprite.bytes).toBeGreaterThan(0);
+    expect(published.audit.guessSprite.bytes).toBeGreaterThan(0);
+    expect(Object.isFrozen(published.audit)).toBe(true);
+    expect(Object.isFrozen(published.audit.candidateSprite)).toBe(true);
+    expect(Object.isFrozen(published.audit.guessSprite)).toBe(true);
     expect(await readDeploymentRevision(destination, validationOptions)).toBe(newRevision);
     expect(published.recoveryArtifact!()).toMatch(/^\.snapshot-data\.tar\.gz\.backup-/);
     await published.rollback();

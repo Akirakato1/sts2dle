@@ -19,6 +19,7 @@ import {
   beginDeploymentArchivePublish,
   createDeploymentArchive,
   readDeploymentRevision,
+  type PublishedArchiveAudit,
   type PublishedArchive as PublishedBundle,
 } from "./deployment-archive.js";
 import {
@@ -82,11 +83,21 @@ export interface SourceFeatureAudit {
   readonly keywords: readonly CardKeyword[];
 }
 
-export interface ReleaseSnapshotResult {
-  readonly status: "unchanged" | "released";
+interface ReleaseSnapshotResultBase {
   readonly sourceRevision: string;
   readonly sourceFeatureAudit: SourceFeatureAudit;
 }
+
+export interface UnchangedReleaseSnapshotResult extends ReleaseSnapshotResultBase {
+  readonly status: "unchanged";
+}
+
+export interface ReleasedSnapshotResult extends ReleaseSnapshotResultBase {
+  readonly status: "released";
+  readonly releaseAudit: PublishedArchiveAudit;
+}
+
+export type ReleaseSnapshotResult = UnchangedReleaseSnapshotResult | ReleasedSnapshotResult;
 
 export class SnapshotPushError extends Error {
   constructor() {
@@ -196,7 +207,12 @@ export async function releaseSnapshot(
       } catch {
         throw new SnapshotPushError();
       }
-      result = { status: "released", sourceRevision: fetched.sourceRevision, sourceFeatureAudit };
+      result = {
+        status: "released",
+        sourceRevision: fetched.sourceRevision,
+        sourceFeatureAudit,
+        releaseAudit: published.audit,
+      };
     }
   } catch (error: unknown) {
     failure = error instanceof SnapshotPushError || error instanceof SnapshotPostCommitCleanupError

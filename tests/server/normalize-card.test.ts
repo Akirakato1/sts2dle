@@ -145,6 +145,51 @@ describe("normalizeCard", () => {
     }])).toThrow();
   });
 
+  it("accepts known base keywords case-insensitively", () => {
+    const [parsed] = RawSpireCardsSchema.parse([{
+      ...card("ALCHEMIZE"), keywords_key: ["exhaust", "UNPLAYABLE"],
+    }]);
+
+    expect(parsed?.keywords_key).toEqual(["exhaust", "UNPLAYABLE"]);
+  });
+
+  it("rejects unknown base keywords", () => {
+    expect(() => RawSpireCardsSchema.parse([{
+      ...card("ALCHEMIZE"), keywords_key: ["Exhaust", "FutureKeyword"],
+    }])).toThrow();
+  });
+
+  it("preserves unrelated upgrades alongside numeric and boolean keyword flags", () => {
+    const upgrade = {
+      add_innate: 1,
+      remove_exhaust: true,
+      damage: "+3",
+      cost: 0,
+    };
+
+    const [parsed] = RawSpireCardsSchema.parse([{ ...card("ALCHEMIZE"), upgrade }]);
+
+    expect(parsed?.upgrade).toEqual(upgrade);
+  });
+
+  it.each([
+    ["string", "true"],
+    ["null", null],
+  ])("rejects %s keyword upgrade flags", (_label, value) => {
+    expect(() => RawSpireCardsSchema.parse([{
+      ...card("ALCHEMIZE"), upgrade: { add_innate: value },
+    }])).toThrow();
+  });
+
+  it.each(["add_innatee", "remove_futurekeyword"])(
+    "rejects unknown keyword upgrade field %s",
+    (key) => {
+      expect(() => RawSpireCardsSchema.parse([{
+        ...card("ALCHEMIZE"), upgrade: { [key]: 1 },
+      }])).toThrow();
+    },
+  );
+
   it("counts each power key once per source card", () => {
     const analysis = analyzeSourceFeatures([
       card("ABRASIVE"), card("COMET"), card("RESONANCE"), card("DUPLICATE_STRENGTH"),

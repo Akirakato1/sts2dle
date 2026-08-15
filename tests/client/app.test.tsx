@@ -283,6 +283,28 @@ describe("App snapshot cleanup", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Reveal Orb showed Keywords: None.");
   });
 
+  test("announces a revealed target with its friendly label", async () => {
+    const targetAnswer = {
+      ...appCards[0]!,
+      base: { ...appCards[0]!.base, target: "AnyEnemy" },
+      upgraded: { ...appCards[0]!.upgraded, target: "AnyEnemy" },
+    };
+    loads.mockResolvedValue({
+      ...searchSnapshot,
+      cards: [targetAnswer, appCards[1]!],
+      cardsById: new Map([[targetAnswer.id, targetAnswer], [appCards[1]!.id, appCards[1]!]]),
+    });
+    games.mockReturnValue(readyGame(assistedRound()));
+
+    render(<App />);
+    await screen.findByRole("combobox");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Orb, available" }));
+    fireEvent.click(screen.getByRole("button", { name: /Target feature heading.*Use Reveal Orb/ }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Reveal Orb showed Target: Single Enemy.");
+    expect(screen.getByRole("status")).not.toHaveTextContent("AnyEnemy");
+  });
+
   test("keeps a stale Filter orb selected and announces the fixed semantic rejection", async () => {
     const consumeFilter = vi.fn();
     const staleGuess = { ...mixedGuess, results: mixedGuess.results.map((result) => ({ ...result })) };

@@ -29,7 +29,7 @@ function FeatureHeader({ feature, selectedAnswer, revealed }: {
     ["reveal"],
     `${FEATURE_LABELS[feature]} feature heading`,
   );
-  const displayValue = formatFeatureValue(selectedAnswer.base[feature], selectedAnswer.upgraded[feature]);
+  const displayValue = formatFeatureValue(feature, selectedAnswer.base[feature], selectedAnswer.upgraded[feature]);
 
   return <div className="guess-grid__header" role="columnheader" data-feature={feature}>
     <span className="guess-grid__header-label">{FEATURE_LABELS[feature]}</span>

@@ -120,7 +120,7 @@ describe("GuessGrid", () => {
     expect(onUse).toHaveBeenCalledWith("reveal", { kind: "header", feature });
   });
 
-  test("persists one textual formatted Reveal bubble for a changed set", () => {
+  test("persists one textual formatted Reveal bubble, including friendly target labels", () => {
     const assistance = { ...createDefaultAssistance(), reveal: { feature: "powers" as const } };
     const view = render(<GridHarness
       guesses={[]}
@@ -148,6 +148,19 @@ describe("GuessGrid", () => {
       assistance={{ ...createDefaultAssistance(), reveal: { feature: "mana" } }}
     />);
     expect(screen.getByLabelText("Answer: 2 \u2192 1")).toHaveTextContent("2 \u2192 1");
+    expect(view.container.querySelectorAll(".guess-grid__reveal-bubble")).toHaveLength(1);
+
+    view.rerender(<GridHarness
+      guesses={[]}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      roundKey="round-bubble"
+      animateFromIndex={0}
+      selectedAnswer={selectedAnswer}
+      assistance={{ ...createDefaultAssistance(), reveal: { feature: "target" } }}
+    />);
+    expect(screen.getByLabelText("Answer: Single Enemy")).toHaveTextContent("Single Enemy");
+    expect(screen.queryByText("AnyEnemy")).not.toBeInTheDocument();
     expect(view.container.querySelectorAll(".guess-grid__reveal-bubble")).toHaveLength(1);
   });
 

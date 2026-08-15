@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
   lstat,
@@ -25,6 +25,7 @@ import { SOURCE_REVISION_PATTERN } from "../../shared/snapshot-schema.js";
 import { SnapshotStore, type ActiveSnapshot } from "../sync/snapshot-store.js";
 import {
   loadActivatedSnapshot,
+  type SnapshotAcceptanceReport,
   type SnapshotValidationOptions,
 } from "../sync/validate-snapshot.js";
 
@@ -41,9 +42,24 @@ const RETRY_DELAY_MS = 50;
 export interface ValidatedDeploymentArchive {
   active: ActiveSnapshot;
   sourceRevision: string;
+  audit: PublishedArchiveAudit;
   entryNames: readonly string[];
   extractedDataDir: string;
   cleanup(): Promise<void>;
+}
+
+export interface PublishedArchiveAudit {
+  readonly sourceRevision: string;
+  readonly cardCount: number;
+  readonly upgradeCount: number;
+  readonly baseGroupCount: number;
+  readonly pairGroupCount: number;
+  readonly candidateSprite: Readonly<{ width: number; height: number; bytes: number }>;
+  readonly guessSprite: Readonly<{ width: number; height: number; bytes: number }>;
+  readonly fallbackInvariantSatisfied: true;
+  readonly fallbackCardCount: number;
+  readonly archiveCompressedBytes: number;
+  readonly archiveSha256: string;
 }
 
 export interface ArchiveValidationOperations {
@@ -60,6 +76,7 @@ export interface ArchiveCreateOperations extends ArchiveValidationOperations {
 
 export interface PublishedArchive {
   active: ActiveSnapshot;
+  audit: PublishedArchiveAudit;
   finalize(): Promise<void>;
   rollback(): Promise<void>;
   recoveryArtifact?(): string | null;
@@ -339,6 +356,7 @@ function createTransaction(
   };
   return {
     active: validation.active,
+    audit: validation.audit,
     finalize: () => settle("finalize"),
     rollback: () => settle("rollback"),
     recoveryArtifact: () => backup?.name ?? null,
@@ -407,6 +425,11 @@ async function validateArchiveInternal(
     return {
       active: loaded.active,
       sourceRevision: loaded.sourceRevision,
+      audit: createPublishedArchiveAudit(
+        loaded.sourceRevision,
+        loaded.report,
+        await readFile(immutableArchive),
+      ),
       entryNames,
       extractedDataDir: dataDir,
       cleanup,
@@ -665,7 +688,7 @@ function validateEntry(entry: ReadEntry): string {
 async function loadSafeActive(
   dataDir: string,
   options: SnapshotValidationOptions,
-): Promise<{ active: ActiveSnapshot; sourceRevision: string }> {
+): Promise<{ active: ActiveSnapshot; sourceRevision: string; report: SnapshotAcceptanceReport }> {
   const root = resolve(dataDir);
   if (!samePath(await realpath(root), root)) throw new Error("Unsafe data root");
   const metadata = await lstat(root);
@@ -676,7 +699,27 @@ async function loadSafeActive(
   if (!samePath(dirname(active.path), expectedParent)) throw new Error("Snapshot escaped data root");
   const loaded = await loadActivatedSnapshot(active.path, options);
   assertRevision(loaded.manifest.sourceRevision);
-  return { active, sourceRevision: loaded.manifest.sourceRevision };
+  return { active, sourceRevision: loaded.manifest.sourceRevision, report: loaded.report };
+}
+
+function createPublishedArchiveAudit(
+  sourceRevision: string,
+  report: SnapshotAcceptanceReport,
+  archiveBytes: Buffer,
+): PublishedArchiveAudit {
+  return Object.freeze({
+    sourceRevision,
+    cardCount: report.cardCount,
+    upgradeCount: report.upgradeCount,
+    baseGroupCount: report.baseGroupCount,
+    pairGroupCount: report.pairGroupCount,
+    candidateSprite: Object.freeze({ ...report.candidateSprite }),
+    guessSprite: Object.freeze({ ...report.guessSprite }),
+    fallbackInvariantSatisfied: true as const,
+    fallbackCardCount: report.fallbackCardIds.length,
+    archiveCompressedBytes: archiveBytes.length,
+    archiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
+  });
 }
 
 async function collectArchiveEntries(dataDir: string, active: ActiveSnapshot): Promise<string[]> {

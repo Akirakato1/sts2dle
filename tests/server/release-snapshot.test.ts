@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FetchedCards } from "../../src/server/spire-codex/client.js";
 import type { RawSpireCard } from "../../src/server/spire-codex/schema.js";
 import type { ActiveSnapshot } from "../../src/server/sync/snapshot-store.js";
-import type { PublishedBundle } from "../../src/server/release/deployment-bundle.js";
+import type { PublishedArchive } from "../../src/server/release/deployment-archive.js";
 import {
   buildSnapshotBundle,
   createReleaseSnapshotDependencies,
@@ -48,6 +48,19 @@ const EXPECTED_SOURCE_FEATURE_AUDIT = {
   cardsWithMultipleSingletonPowers: [],
   keywords: ["Eternal", "Ethereal", "Exhaust", "Innate", "Retain", "Sly", "Unplayable"],
 } as const;
+const EXPECTED_RELEASE_AUDIT = {
+  sourceRevision: NEXT_REVISION,
+  cardCount: 3,
+  upgradeCount: 2,
+  baseGroupCount: 4,
+  pairGroupCount: 5,
+  candidateSprite: { width: 128, height: 64, bytes: 1_234 },
+  guessSprite: { width: 320, height: 160, bytes: 5_678 },
+  fallbackInvariantSatisfied: true,
+  fallbackCardCount: 1,
+  archiveCompressedBytes: 9_876,
+  archiveSha256: "c".repeat(64),
+} as const;
 
 describe("releaseSnapshot", () => {
   it("runs the guarded release workflow in the required order", async () => {
@@ -59,6 +72,7 @@ describe("releaseSnapshot", () => {
       status: "released",
       sourceRevision: NEXT_REVISION,
       sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+      releaseAudit: EXPECTED_RELEASE_AUDIT,
     });
     expect(harness.events).toEqual([
       "git-ready", "fetch", "checks", "build-temp", "validate-temp",
@@ -117,6 +131,7 @@ describe("releaseSnapshot", () => {
       status: "released",
       sourceRevision: NEXT_REVISION,
       sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+      releaseAudit: EXPECTED_RELEASE_AUDIT,
     });
     expect(harness.events).toContain("build-temp");
   });
@@ -131,6 +146,7 @@ describe("releaseSnapshot", () => {
       status: "released",
       sourceRevision: NEXT_REVISION,
       sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+      releaseAudit: EXPECTED_RELEASE_AUDIT,
     });
 
     expect(harness.readCommittedRevision).not.toHaveBeenCalled();
@@ -225,6 +241,7 @@ describe("releaseSnapshot", () => {
       status: "released",
       sourceRevision: NEXT_REVISION,
       sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+      releaseAudit: EXPECTED_RELEASE_AUDIT,
     });
 
     expect(harness.events).toContain("private-index-cleanup");
@@ -361,6 +378,7 @@ describe("releaseSnapshot", () => {
           await writeFile(snapshot, "published snapshot\n");
           return {
             active: PUBLISHED_ACTIVE,
+            audit: EXPECTED_RELEASE_AUDIT,
             finalize: async () => undefined,
             rollback: async () => { await writeFile(snapshot, "old snapshot\n"); },
           };
@@ -398,7 +416,7 @@ describe("buildSnapshotBundle", () => {
       publishTemporarySnapshot: async (_temporary, outputDir) => {
         expect(outputDir).toBe("C:\\repository\\deploy\\snapshot-data.tar.gz");
         events.push("publish");
-        return { active: PUBLISHED_ACTIVE, finalize, rollback };
+        return { active: PUBLISHED_ACTIVE, audit: EXPECTED_RELEASE_AUDIT, finalize, rollback };
       },
       validatePublishedSnapshot: async () => { events.push("validate-published"); },
     };
@@ -430,6 +448,7 @@ describe("buildSnapshotBundle", () => {
         destination = "new-snapshot";
         return {
           active: PUBLISHED_ACTIVE,
+          audit: EXPECTED_RELEASE_AUDIT,
           finalize: async () => undefined,
           rollback: async () => { await Promise.resolve(); destination = "head-snapshot"; },
         };
@@ -456,6 +475,7 @@ describe("buildSnapshotBundle", () => {
       validateTemporarySnapshot: async () => undefined,
       publishTemporarySnapshot: async () => ({
         active: PUBLISHED_ACTIVE,
+        audit: EXPECTED_RELEASE_AUDIT,
         finalize: async () => undefined,
         rollback: async () => { throw new Error("private rollback payload"); },
       }),
@@ -506,20 +526,42 @@ describe("snapshot release CLI", () => {
     const output: string[] = [];
     const errors: string[] = [];
 
+    const result = status === "released"
+      ? {
+          status,
+          sourceRevision: NEXT_REVISION,
+          sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+          releaseAudit: EXPECTED_RELEASE_AUDIT,
+        }
+      : {
+          status,
+          sourceRevision: NEXT_REVISION,
+          sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
+        };
     const exitCode = await runReleaseCli([], {
       createDependencies: () => createReleaseHarness().dependencies,
-      release: async () => ({
-        status,
-        sourceRevision: NEXT_REVISION,
-        sourceFeatureAudit: EXPECTED_SOURCE_FEATURE_AUDIT,
-      }),
+      release: async () => result,
       writeOutput: (line) => output.push(line),
       writeError: (line) => errors.push(line),
       repositoryRoot: "C:\\repository",
     });
 
     expect(exitCode).toBe(0);
+    const releaseLines = status === "released" ? [
+      `Source revision: ${NEXT_REVISION}`,
+      "Cards: 3",
+      "Upgrades: 2",
+      "Base groups: 4",
+      "Pair groups: 5",
+      "Candidate sprite: 128x64; 1234 bytes",
+      "Guess sprite: 320x160; 5678 bytes",
+      "Fallback invariant: validated",
+      "Fallback cards: 1",
+      "Archive compressed bytes: 9876",
+      `Archive SHA-256: ${"c".repeat(64)}`,
+    ] : [];
     expect(output).toEqual([
+      ...releaseLines,
       "Targets: Self, AnyEnemy, AllEnemies",
       "Power keys: 2 singleton; 1 recurring",
       "Multiple unique powers: none",
@@ -842,7 +884,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
       return { active: TEMP_ACTIVE, dataDir: "C:\\temporary\\snapshot-data", cleanup };
     },
     validateTemporarySnapshot: async () => { events.push("validate-temp"); fail("validate-temp"); },
-    publishTemporarySnapshot: async (): Promise<PublishedBundle> => {
+    publishTemporarySnapshot: async (): Promise<PublishedArchive> => {
       events.push("publish");
       destination = "new-snapshot";
       if (options.failAt === "publish") {
@@ -853,6 +895,7 @@ function createReleaseHarness(options: HarnessOptions = {}) {
       }
       return {
         active: PUBLISHED_ACTIVE,
+        audit: EXPECTED_RELEASE_AUDIT,
         finalize,
         rollback,
         recoveryArtifact: () => finalized
