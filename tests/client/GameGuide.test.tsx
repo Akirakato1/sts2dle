@@ -41,6 +41,8 @@ describe("GameGuide", () => {
         "Red candidate marking overrides green marking.",
         "Drag an orb, or operate it with click, tap, or keyboard.",
         "Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.",
+      ],
+      "Practice Filter Mode": [
         "Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.",
         "Scalar groups use OR; Powers and Keywords use AND; enabled groups combine with AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.",
         "Power None matches a form with no powers and clears other power choices; Keyword None does the same for keywords.",
@@ -52,7 +54,7 @@ describe("GameGuide", () => {
       ],
       "Modes": [
         "Daily: one UTC-date round that restores locally and creates a share result after a win.",
-        "Hardcore Daily: a separate daily answer with no orbs or name hints.",
+        "Hardcore Daily: no candidate list, orbs, or progressive name hints; enter a complete card name from memory (punctuation, case, and spacing ignored).",
         "Practice: repeatable rounds that restore the current round and reset filters on a new round.",
         "End game forfeits the current Practice round.",
       ],
