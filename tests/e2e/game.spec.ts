@@ -263,6 +263,34 @@ async function submitWinningGuess(page: Page, card: CardIdentity): Promise<void>
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeDisabled();
 }
 
+function hardcoreSearch(page: Page): Locator {
+  return page.getByRole("searchbox", { name: "Guess a card" });
+}
+
+async function enterHardcoreName(page: Page, query: string): Promise<void> {
+  const search = hardcoreSearch(page);
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await search.fill(query);
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await search.press("Enter");
+}
+
+async function submitHardcoreGuessAndWait(page: Page, card: CardIdentity, query = card.name): Promise<void> {
+  const rowCount = await page.getByRole("rowheader").count();
+  await enterHardcoreName(page, query);
+  await expect(guessRow(page, card)).toBeVisible();
+  await expect(page.getByRole("rowheader")).toHaveCount(rowCount + 1);
+  await expect(hardcoreSearch(page)).toBeEnabled({ timeout: 5_000 });
+}
+
+async function submitHardcoreWinningGuess(page: Page, card: CardIdentity, query = card.name): Promise<void> {
+  await enterHardcoreName(page, query);
+  await expect(guessRow(page, card)).toBeVisible();
+  await expect(hardcoreSearch(page)).toBeDisabled();
+}
+
 async function openEmptySearch(page: Page): Promise<Locator> {
   const search = page.getByRole("combobox", { name: "Guess a card" });
   await search.fill("");
@@ -883,14 +911,17 @@ test("Hardcore Daily keeps a separate answer, progress domain, and secret-free s
 
   await page.getByRole("button", { name: "Hardcore Daily" }).click();
   await expect(page.getByRole("button", { name: "Hardcore Daily" })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled();
+  await expect(hardcoreSearch(page)).toBeEnabled();
+  await expect(page.getByRole("combobox", { name: "Guess a card" })).toHaveCount(0);
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("option")).toHaveCount(0);
   expect(model.hardcoreAnswer.selectedCardId).not.toBe(model.dailyAnswer.selectedCardId);
   await expect(page.getByRole("region", { name: "Orb inventory" })).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Candidate visibility" })).toHaveCount(0);
   await expect(page.locator(".name-hint")).toHaveCount(0);
 
   for (const card of model.hardcoreWrongGuesses.slice(0, 8)) {
-    await submitGuessAndWait(page, card);
+    await submitHardcoreGuessAndWait(page, card);
   }
   await expect(page.locator(".name-hint")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Orb inventory" })).toHaveCount(0);
@@ -900,7 +931,7 @@ test("Hardcore Daily keeps a separate answer, progress domain, and secret-free s
   expect(hardcoreStored.round.assistance).toBeNull();
   expect(await page.evaluate(() => localStorage.getItem("stsdle:round:daily:v1"))).toBe(dailyStorageBefore);
 
-  await submitWinningGuess(page, model.hardcoreEquivalent);
+  await submitHardcoreWinningGuess(page, model.hardcoreEquivalent);
   await expect(page.getByRole("heading", { name: "Accepted answers" })).toBeVisible();
   await page.getByRole("button", { name: "Copy Hardcore Daily result" }).click();
   await expect(page.getByRole("region", { name: "Hardcore Daily result" }).getByRole("status"))
@@ -1181,6 +1212,135 @@ test("Practice manual filters explain, suppress, match, persist, restore assista
   expect(codexGuard.blockedRequests).toEqual([]);
 });
 
+test("Hardcore memory entry rejects invalid and already-guessed names but accepts complete normalized names", async ({ page, request }) => {
+  const model = await loadFixtureModel(request);
+  const codexGuard = await prepareOfflinePage(page);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Hardcore Daily" }).click();
+
+  const search = hardcoreSearch(page);
+  const invalidCard = model.hardcoreWrongGuesses.find((card) => card.name.includes(" "))
+    ?? model.hardcoreWrongGuesses[0]!;
+  const characters = Array.from(invalidCard.name);
+  const words = invalidCard.name.split(/\s+/u);
+  const invalidQueries = [
+    "",
+    characters.slice(0, -1).join(""),
+    words.length > 1 ? [...words].reverse().join(" ") : [...characters].reverse().join(""),
+    `${characters.slice(0, -1).join("")}x`,
+  ];
+
+  for (const [index, query] of invalidQueries.entries()) {
+    const rowCount = await page.getByRole("rowheader").count();
+    await enterHardcoreName(page, query);
+    await expect(search).toHaveValue(query);
+    await expect(search).toBeFocused();
+    await expect(search).toHaveAttribute("data-invalid-attempt", String(index + 1));
+    await expect(search).toHaveClass(new RegExp(`card-search__input--invalid-${index % 2 === 0 ? "a" : "b"}`));
+    await expect(page.getByRole("rowheader")).toHaveCount(rowCount);
+    await expect(page.locator(".card-search").getByRole("status"))
+      .toHaveText("No matching unguessed card name.");
+    const animation = await search.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const effect = element.getAnimations()[0]?.effect;
+      const keyframes = effect instanceof KeyframeEffect ? effect.getKeyframes() : [];
+      return {
+        name: style.animationName,
+        duration: style.animationDuration,
+        borderColors: keyframes.flatMap((frame) => [
+          frame.borderTopColor,
+          frame.borderRightColor,
+          frame.borderBottomColor,
+          frame.borderLeftColor,
+        ]).filter(Boolean),
+        backgroundColors: keyframes.map((frame) => frame.backgroundColor).filter(Boolean),
+        transforms: keyframes.map((frame) => frame.transform).filter(Boolean),
+      };
+    });
+    expect(animation.name).toBe(`card-search-invalid-${index % 2 === 0 ? "a" : "b"}`);
+    expect(animation.duration).toBe("0.24s");
+    expect(animation.borderColors).toContain("rgb(216, 107, 100)");
+    expect(animation.backgroundColors).toContain("rgb(59, 25, 24)");
+    expect(animation.transforms.some((transform) => transform !== "none" && transform !== "translateX(0px)"))
+      .toBe(true);
+  }
+
+  const validCard = model.hardcoreWrongGuesses.find((card) => card.id !== invalidCard.id)!;
+  const normalizedVariant = Array.from(validCard.name.toLocaleUpperCase("en-US")).join(" . ");
+  const initialRowCount = await page.getByRole("rowheader").count();
+  await submitHardcoreGuessAndWait(page, validCard, normalizedVariant);
+  await expect(page.getByRole("rowheader")).toHaveCount(initialRowCount + 1);
+  await expect(page.getByRole("rowheader").first())
+    .toHaveAttribute("aria-label", `${validCard.name} artwork and name`);
+  await expect(search).toHaveValue("");
+
+  await enterHardcoreName(page, normalizedVariant);
+  await expect(search).toHaveValue(normalizedVariant);
+  await expect(search).toBeFocused();
+  await expect(search).toHaveAttribute("data-invalid-attempt", "1");
+  await expect(page.getByRole("rowheader")).toHaveCount(initialRowCount + 1);
+  await expect(page.locator(".card-search").getByRole("status"))
+    .toHaveText("No matching unguessed card name.");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("option")).toHaveCount(0);
+  expect(codexGuard.attemptedRequests).toEqual([]);
+  expect(codexGuard.blockedRequests).toEqual([]);
+});
+
+test("Hardcore reduced motion keeps red invalid feedback and status without transform shake", async ({ page, request }) => {
+  const model = await loadFixtureModel(request);
+  const codexGuard = await prepareOfflinePage(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Hardcore Daily" }).click();
+
+  const search = hardcoreSearch(page);
+  const card = model.hardcoreWrongGuesses[0]!;
+  const misspelled = `${Array.from(card.name).slice(0, -1).join("")}x`;
+  await enterHardcoreName(page, misspelled);
+  await expect(search).toHaveValue(misspelled);
+  await expect(search).toBeFocused();
+  await expect(page.locator(".card-search").getByRole("status"))
+    .toHaveText("No matching unguessed card name.");
+  const animation = await search.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      name: style.animationName,
+      duration: style.animationDuration,
+      computedTransform: style.transform,
+    };
+  });
+  expect(animation.name).toBe("card-search-invalid-reduced-a");
+  expect(Number.parseFloat(animation.duration)).toBeGreaterThan(0);
+  expect(animation.computedTransform).toBe("none");
+  const midpoint = await search.evaluate((element) => {
+    element.style.setProperty("animation-duration", "240ms", "important");
+    element.style.setProperty("animation-timing-function", "linear", "important");
+    const running = element.getAnimations()[0];
+    running?.pause();
+    if (running) running.currentTime = 120;
+    const style = getComputedStyle(element);
+    const effect = running?.effect;
+    const keyframes = effect instanceof KeyframeEffect ? effect.getKeyframes() : [];
+    const result = {
+      borderColor: style.borderTopColor,
+      backgroundColor: style.backgroundColor,
+      transform: style.transform,
+      transforms: keyframes.map((frame) => frame.transform).filter(Boolean),
+    };
+    element.style.removeProperty("animation-duration");
+    element.style.removeProperty("animation-timing-function");
+    return result;
+  });
+  expect(midpoint.borderColor).toBe("rgb(216, 107, 100)");
+  expect(midpoint.backgroundColor).toBe("rgb(59, 25, 24)");
+  expect(midpoint.transform).toBe("none");
+  expect(midpoint.transforms.every((transform) => transform === "none")).toBe(true);
+  expect(codexGuard.attemptedRequests).toEqual([]);
+  expect(codexGuard.blockedRequests).toEqual([]);
+});
+
 test("keyboard orb use exposes pressed, status, classification, bubble, and badge semantics without reduced-motion animation", async ({ page, request }) => {
   const model = await loadFixtureModel(request);
   const codexGuard = await prepareOfflinePage(page);
@@ -1245,6 +1405,59 @@ test("keyboard orb use exposes pressed, status, classification, bubble, and badg
   await expect(cardOption(page, dualCandidate)).toHaveClass(/card-search__option--red/);
   expect(await page.locator(".orb-tray").evaluate((element) => element.getAnimations({ subtree: true })
     .filter((animation) => animation.playState === "running").length)).toBe(0);
+  expect(codexGuard.attemptedRequests).toEqual([]);
+  expect(codexGuard.blockedRequests).toEqual([]);
+});
+
+test("guess decoration cannot be selected or alter the grid while the orb target still works", async ({ page, request }) => {
+  const model = await loadFixtureModel(request);
+  const codexGuard = await prepareOfflinePage(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+
+  const { guess, greenFeature } = model.orbFixture;
+  await submitGuessAndWait(page, guess);
+  const row = guessRow(page, guess);
+  const cardName = row.locator(".guess-grid__card-name");
+  const featureValue = row.locator(".feature-tile__value").last();
+  const before = await row.evaluate((element) => ({
+    text: element.textContent,
+    className: element.className,
+    tileBackgrounds: [...element.querySelectorAll<HTMLElement>(".feature-tile__back")]
+      .map((tile) => getComputedStyle(tile).backgroundColor),
+  }));
+  const [cardNameBox, featureValueBox] = await Promise.all([cardName.boundingBox(), featureValue.boundingBox()]);
+  expect(cardNameBox).not.toBeNull();
+  expect(featureValueBox).not.toBeNull();
+
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await page.mouse.move(cardNameBox!.x + 3, cardNameBox!.y + cardNameBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    featureValueBox!.x + featureValueBox!.width - 3,
+    featureValueBox!.y + featureValueBox!.height / 2,
+    { steps: 12 },
+  );
+  await page.mouse.up();
+
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+  await expect(cardName).toHaveCSS("user-select", "none");
+  await expect(featureValue).toHaveCSS("user-select", "none");
+  expect(await row.evaluate((element) => ({
+    text: element.textContent,
+    className: element.className,
+    tileBackgrounds: [...element.querySelectorAll<HTMLElement>(".feature-tile__back")]
+      .map((tile) => getComputedStyle(tile).backgroundColor),
+  }))).toEqual(before);
+
+  const target = row.getByRole("cell", {
+    name: new RegExp(`^${FEATURE_LABELS[greenFeature]}:.*Result: green`),
+  });
+  await dragOrbTo(page, "Filter", target);
+  await expect(page.locator(".orb-announcement"))
+    .toHaveText(`Filter Orb now marks candidates matching ${FEATURE_LABELS[greenFeature]}.`);
+  await expect(page.getByLabel("Filter Orb, used")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Filter Orb, available" })).toHaveCount(0);
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
 });
@@ -1447,6 +1660,151 @@ test("Daily and Practice complete the full paired-card experience without leakin
   await expect(page.getByRole("button", { name: /copy/i })).toHaveCount(0);
   expect(await page.evaluate(() => Object.fromEntries(Object.entries(localStorage)
     .filter(([key]) => key === "stsdle:round:daily:v1" || key === "stsdle:stats:v1")))).toEqual(dailyStorage);
+  expect(codexGuard.attemptedRequests).toEqual([]);
+  expect(codexGuard.blockedRequests).toEqual([]);
+});
+
+for (const viewport of [
+  { width: 390, height: 844 },
+  { width: 768, height: 1024 },
+]) {
+  test(`measured overflow cues at ${viewport.width}x${viewport.height} move one column and never obstruct the page`, async ({ page }) => {
+    const codexGuard = await prepareOfflinePage(page);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+
+    const scroller = page.locator(".guess-grid-scroll");
+    const hint = page.getByText("Swipe or scroll for more columns", { exact: false });
+    const right = page.getByRole("button", { name: "Scroll guesses right" });
+    const left = page.getByRole("button", { name: "Scroll guesses left" });
+    await expect(scroller).toBeVisible();
+    await expect(hint).toBeVisible();
+    await expect(right).toBeVisible();
+    await expect(left).toHaveCount(0);
+    await expect(page.locator(".guess-grid-overflow__fade--right")).toHaveCount(1);
+    await expect(page.locator(".guess-grid-overflow__fade--left")).toHaveCount(0);
+    await expectAccessibleTarget(right);
+
+    const initial = await scroller.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollLeft: element.scrollLeft,
+      scrollWidth: element.scrollWidth,
+      maxScrollLeft: element.scrollWidth - element.clientWidth,
+      pageClientWidth: document.documentElement.clientWidth,
+      pageScrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(initial.scrollWidth).toBeGreaterThan(initial.clientWidth + 1);
+    expect(initial.scrollLeft).toBe(0);
+    expect(initial.pageScrollWidth).toBeLessThanOrEqual(initial.pageClientWidth);
+
+    await page.getByRole("button", { name: "Reveal Orb, available" }).click();
+    const headerTarget = page.locator('.guess-grid__header[data-feature="cardClass"]')
+      .getByRole("button", { name: "Class feature heading. Use Reveal Orb." });
+    await expect(headerTarget).toBeVisible();
+    const unobstructed = await page.evaluate(() => {
+      const rect = (selector: string) => {
+        const box = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height };
+      };
+      const overlaps = (a: ReturnType<typeof rect>, b: ReturnType<typeof rect>) => (
+        a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+      );
+      const control = rect(".guess-grid-overflow__control--right");
+      const target = rect('.guess-grid__header[data-feature="cardClass"] .guess-grid__header-target');
+      const orbTray = rect(".orb-tray");
+      const centerX = (target.left + target.right) / 2;
+      const centerY = (target.top + target.bottom) / 2;
+      const targetElement = document.querySelector<HTMLElement>(
+        '.guess-grid__header[data-feature="cardClass"] .guess-grid__header-target',
+      )!;
+      const hit = document.elementFromPoint(centerX, centerY);
+      return {
+        controlOverlapsTarget: overlaps(control, target),
+        controlOverlapsOrbTray: overlaps(control, orbTray),
+        targetHeight: target.height,
+        hitIsTarget: hit === targetElement || targetElement.contains(hit),
+      };
+    });
+    expect(unobstructed.controlOverlapsTarget).toBe(false);
+    expect(unobstructed.controlOverlapsOrbTray).toBe(false);
+    expect(unobstructed.targetHeight).toBeGreaterThanOrEqual(44);
+    expect(unobstructed.hitIsTarget).toBe(true);
+
+    const manualScrollLeft = Math.min(12, initial.maxScrollLeft);
+    await scroller.evaluate((element, nextScrollLeft) => {
+      element.scrollLeft = nextScrollLeft;
+      element.dispatchEvent(new Event("scroll"));
+    }, manualScrollLeft);
+    await expect(hint).toHaveCount(0);
+    await expect(left).toBeVisible();
+    await scroller.evaluate((element) => {
+      element.scrollLeft = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect.poll(() => scroller.evaluate((element) => element.scrollLeft)).toBe(0);
+    await expect(hint).toHaveCount(0);
+    await expect(left).toHaveCount(0);
+    await expect(right).toBeVisible();
+
+    const expectedOneColumn = Math.min(88, initial.maxScrollLeft);
+    await right.click();
+    await expect.poll(() => scroller.evaluate((element) => element.scrollLeft))
+      .toBe(expectedOneColumn);
+    await expect(left).toBeVisible();
+    await expect(hint).toHaveCount(0);
+
+    await scroller.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect.poll(() => scroller.evaluate((element) => (
+      element.scrollWidth - element.clientWidth - element.scrollLeft
+    ))).toBe(0);
+    await expect(left).toBeVisible();
+    await expect(right).toHaveCount(0);
+    await expect(page.locator(".guess-grid-overflow__fade--left")).toHaveCount(1);
+    await expect(page.locator(".guess-grid-overflow__fade--right")).toHaveCount(0);
+    const finalPageSize = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(finalPageSize.scrollWidth).toBeLessThanOrEqual(finalPageSize.clientWidth);
+    expect(codexGuard.attemptedRequests).toEqual([]);
+    expect(codexGuard.blockedRequests).toEqual([]);
+  });
+}
+
+test("wide measured grid omits overflow hint, fades, and controls when every column fits", async ({ page }) => {
+  const codexGuard = await prepareOfflinePage(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const scroller = page.locator(".guess-grid-scroll");
+  await expect(scroller).toBeVisible();
+  await expect(page.getByText("Swipe or scroll for more columns", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Scroll guesses left" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Scroll guesses right" })).toHaveCount(0);
+  await expect(page.locator(".guess-grid-overflow__fade")).toHaveCount(0);
+  const geometry = await scroller.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    pageClientWidth: document.documentElement.clientWidth,
+    pageScrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  expect(geometry.pageScrollWidth).toBeLessThanOrEqual(geometry.pageClientWidth);
+
+  await page.getByRole("button", { name: "Reveal Orb, available" }).click();
+  const headerTarget = page.locator('.guess-grid__header[data-feature="cardClass"]')
+    .getByRole("button", { name: "Class feature heading. Use Reveal Orb." });
+  await expect(headerTarget).toBeVisible();
+  expect(await headerTarget.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return box.height >= 44 && (hit === element || element.contains(hit));
+  })).toBe(true);
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
 });
