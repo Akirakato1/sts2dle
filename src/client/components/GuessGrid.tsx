@@ -5,6 +5,7 @@ import type { AssistanceState, ConstraintOrbTarget } from "../game/assistance.js
 import { formatFeatureValue } from "../../shared/comparison.js";
 import { FEATURE_ORDER, type CardIdentity, type FeatureName, type SpriteMap } from "../../shared/domain.js";
 import { FEATURE_LABELS, FeatureTile, REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "./FeatureTile.js";
+import { GuessGridOverflowFrame } from "./GuessGridOverflowFrame.js";
 import { useOrbInteraction } from "./OrbInteractionContext.js";
 import { SpriteArt } from "./SpriteArt.js";
 
@@ -143,7 +144,7 @@ export function GuessGrid({
     completeReveal(controller);
   }, [completeReveal]);
 
-  return <section className="guess-grid-scroll" aria-label="Guess results">
+  return <GuessGridOverflowFrame resetKey={roundKey} reducedMotion={reducedMotion}>
     <div className="guess-grid" role="table" aria-label="Card feature comparisons" aria-colcount={FEATURE_ORDER.length + 1}>
       <div className="guess-grid__row guess-grid__header-row" role="row">
         <div className="guess-grid__header guess-grid__art-header" role="columnheader">Card</div>
@@ -183,5 +184,5 @@ export function GuessGrid({
         </div>;
       })}
     </div>
-  </section>;
+  </GuessGridOverflowFrame>;
 }

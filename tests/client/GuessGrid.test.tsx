@@ -98,6 +98,24 @@ function GridHarness({
 }
 
 describe("GuessGrid", () => {
+  test("keeps the labeled overflow frame outside the sole horizontal scroller", () => {
+    const view = render(<GridHarness
+      guesses={[guesses[0]!]}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      roundKey="round-overflow-frame"
+      animateFromIndex={1}
+    />);
+
+    const frame = screen.getByRole("region", { name: "Guess results" });
+    const scrollers = view.container.querySelectorAll<HTMLElement>(".guess-grid-scroll");
+    expect(frame).toHaveClass("guess-grid-overflow");
+    expect(scrollers).toHaveLength(1);
+    expect(frame).toContainElement(scrollers[0]!);
+    expect(scrollers[0]).toContainElement(screen.getByRole("table", { name: "Card feature comparisons" }));
+    expect(scrollers[0]).not.toHaveAttribute("aria-label");
+  });
+
   test.each(FEATURE_ORDER)("makes only the %s heading dispatchable after selecting Reveal", (feature) => {
     const onUse = vi.fn(() => ({ accepted: true, announcement: "Feature revealed." }));
     render(<GridHarness

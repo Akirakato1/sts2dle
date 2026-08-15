@@ -1,9 +1,74 @@
-.guess-grid-scroll {
+.guess-grid-overflow {
   width: 100%;
   margin: .8rem 0 1.25rem;
+}
+
+.guess-grid-overflow__controls {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .35rem;
+  margin-bottom: .25rem;
+}
+
+.guess-grid-overflow__hint {
+  margin-right: auto;
+  color: #bdb486;
+  font-size: .74rem;
+  letter-spacing: .02em;
+}
+
+.guess-grid-overflow__control {
+  display: inline-grid;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgb(216 201 145 / 48%);
+  border-radius: .4rem;
+  color: #fff7dc;
+  background: #283226;
+  font-size: 1.7rem;
+  line-height: 1;
+}
+
+.guess-grid-overflow__control:hover,
+.guess-grid-overflow__control:focus-visible {
+  border-color: #d8c991;
+  background: #34402f;
+}
+
+.guess-grid-overflow__viewport {
+  position: relative;
+}
+
+.guess-grid-scroll {
+  width: 100%;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+.guess-grid-overflow__fade {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  pointer-events: none;
+}
+
+.guess-grid-overflow__fade--left {
+  left: 0;
+  background: linear-gradient(to right, rgb(25 32 24 / 92%), transparent);
+}
+
+.guess-grid-overflow__fade--right {
+  right: 0;
+  background: linear-gradient(to left, rgb(25 32 24 / 92%), transparent);
 }
 
 .guess-grid {
