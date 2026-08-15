@@ -1266,6 +1266,33 @@ test("Hardcore memory entry rejects invalid and already-guessed names but accept
       .toBe(true);
   }
 
+  const unchangedQuery = invalidQueries.at(-1)!;
+  const retryStatus = page.locator(".card-search").getByRole("status");
+  const previousStatusNode = await retryStatus.elementHandle();
+  const retryRowCount = await page.getByRole("rowheader").count();
+  await search.press("Enter");
+  await expect(search).toHaveValue(unchangedQuery);
+  await expect(search).toBeFocused();
+  await expect(search).toHaveAttribute("data-invalid-attempt", "5");
+  await expect(search).toHaveClass(/card-search__input--invalid-a/);
+  await expect(page.getByRole("rowheader")).toHaveCount(retryRowCount);
+  await expect(retryStatus).toHaveText("No matching unguessed card name.");
+  expect(await previousStatusNode!.evaluate((element) => element.isConnected)).toBe(false);
+  const retryAnimation = await search.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const animation = element.getAnimations()[0];
+    return {
+      name: style.animationName,
+      duration: style.animationDuration,
+      running: animation?.playState === "running",
+    };
+  });
+  expect(retryAnimation).toEqual({
+    name: "card-search-invalid-a",
+    duration: "0.24s",
+    running: true,
+  });
+
   const validCard = model.hardcoreWrongGuesses.find((card) => card.id !== invalidCard.id)!;
   const normalizedVariant = Array.from(validCard.name.toLocaleUpperCase("en-US")).join(" . ");
   const initialRowCount = await page.getByRole("rowheader").count();
@@ -1312,31 +1339,34 @@ test("Hardcore reduced motion keeps red invalid feedback and status without tran
     };
   });
   expect(animation.name).toBe("card-search-invalid-reduced-a");
-  expect(Number.parseFloat(animation.duration)).toBeGreaterThan(0);
+  expect(animation.duration).toBe("0.24s");
   expect(animation.computedTransform).toBe("none");
-  const midpoint = await search.evaluate((element) => {
-    element.style.setProperty("animation-duration", "240ms", "important");
-    element.style.setProperty("animation-timing-function", "linear", "important");
-    const running = element.getAnimations()[0];
-    running?.pause();
-    if (running) running.currentTime = 120;
+  await expect.poll(() => search.evaluate((element) => {
     const style = getComputedStyle(element);
+    const running = element.getAnimations()[0];
     const effect = running?.effect;
     const keyframes = effect instanceof KeyframeEffect ? effect.getKeyframes() : [];
-    const result = {
+    const channels = (value: string) => (value.match(/[\d.]+/gu) ?? []).map(Number);
+    const border = channels(style.borderTopColor);
+    const background = channels(style.backgroundColor);
+    return {
+      name: style.animationName,
+      duration: style.animationDuration,
+      running: running?.playState === "running",
+      redVisible: border[0]! > 119 && background[0]! > 17 && background[2]! > 17,
       borderColor: style.borderTopColor,
       backgroundColor: style.backgroundColor,
       transform: style.transform,
       transforms: keyframes.map((frame) => frame.transform).filter(Boolean),
     };
-    element.style.removeProperty("animation-duration");
-    element.style.removeProperty("animation-timing-function");
-    return result;
+  }), { intervals: [0, 10, 20, 30], timeout: 180 }).toMatchObject({
+    name: "card-search-invalid-reduced-a",
+    duration: "0.24s",
+    running: true,
+    redVisible: true,
+    transform: "none",
+    transforms: [],
   });
-  expect(midpoint.borderColor).toBe("rgb(216, 107, 100)");
-  expect(midpoint.backgroundColor).toBe("rgb(59, 25, 24)");
-  expect(midpoint.transform).toBe("none");
-  expect(midpoint.transforms.every((transform) => transform === "none")).toBe(true);
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
 });

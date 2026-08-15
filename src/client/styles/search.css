@@ -57,8 +57,15 @@
     50% { border-color: #d86b64; background: #3b1918; }
   }
 
-  .card-search__input--invalid-a { animation-name: card-search-invalid-reduced-a; }
-  .card-search__input--invalid-b { animation-name: card-search-invalid-reduced-b; }
+  .card-search__input--invalid-a {
+    animation-name: card-search-invalid-reduced-a;
+    animation-duration: 240ms !important;
+  }
+
+  .card-search__input--invalid-b {
+    animation-name: card-search-invalid-reduced-b;
+    animation-duration: 240ms !important;
+  }
 }
 
 .card-search > .orb-tray {
