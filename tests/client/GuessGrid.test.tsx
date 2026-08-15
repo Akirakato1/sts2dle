@@ -187,6 +187,60 @@ describe("GuessGrid", () => {
     expect(within(rows[2]!).queryByLabelText("Negation Orb used here")).not.toBeInTheDocument();
   });
 
+  test("keeps decorative guess text inert while orb targets remain named buttons", () => {
+    const assistance: AssistanceState = {
+      ...createDefaultAssistance(),
+      filter: { guessIndex: 0, cardId: "first", feature: "cardType" },
+    };
+    const view = render(<GridHarness
+      guesses={[guesses[0]!]}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      roundKey="round-inert-text"
+      animateFromIndex={1}
+      assistance={assistance}
+    />);
+    const { container } = view;
+
+    expect(container.querySelectorAll(".guess-grid__card-name.guess-grid__noninteractive-text")).toHaveLength(1);
+    expect(container.querySelectorAll(".feature-tile__value.guess-grid__noninteractive-text")).toHaveLength(FEATURE_ORDER.length);
+    expect(container.querySelectorAll(".feature-tile__orb-badge.guess-grid__noninteractive-text")).toHaveLength(1);
+
+    view.rerender(<GridHarness
+      guesses={[guesses[0]!]}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      roundKey="round-inert-text"
+      animateFromIndex={1}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Orb, available" }));
+    const revealTargets = screen.getAllByRole("button", { name: /Use Reveal Orb/ });
+    expect(revealTargets).not.toHaveLength(0);
+    revealTargets.forEach((target) => {
+      expect(target).not.toHaveClass("guess-grid__noninteractive-text");
+      expect(target).toHaveAccessibleName(/Use Reveal Orb/);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Orb, available" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter Orb, available" }));
+    const filterTargets = screen.getAllByRole("button", { name: /Use Filter Orb/ });
+    expect(filterTargets).not.toHaveLength(0);
+    filterTargets.forEach((target) => {
+      expect(target).not.toHaveClass("guess-grid__noninteractive-text");
+      expect(target).toHaveAccessibleName(/Use Filter Orb/);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter Orb, available" }));
+    fireEvent.click(screen.getByRole("button", { name: "Negation Orb, available" }));
+    const negationTargets = screen.getAllByRole("button", { name: /Use Negation Orb/ });
+    expect(negationTargets).not.toHaveLength(0);
+    negationTargets.forEach((target) => {
+      expect(target).not.toHaveClass("guess-grid__noninteractive-text");
+      expect(target).toHaveAccessibleName(/Use Negation Orb/);
+    });
+  });
+
   test("renders a sticky artwork column followed by exactly the seven canonical feature columns", () => {
     render(<GridHarness guesses={[guesses[0]!]} cardsById={cardsById} spriteMap={spriteMap} roundKey="round-1" animateFromIndex={1} />);
 

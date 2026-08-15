@@ -61,7 +61,7 @@ export function FeatureTile({
   }, [animate]);
 
   const label = `${FEATURE_LABELS[result.feature]}: ${result.displayValue}. Result: ${result.color}.`;
-  const valueClassName = `feature-tile__value feature-tile__value--${result.feature}${
+  const valueClassName = `feature-tile__value guess-grid__noninteractive-text feature-tile__value--${result.feature}${
     result.feature === "cardClass" && result.displayValue === "Necrobinder"
       ? " feature-tile__value--necrobinder"
       : ""
@@ -106,7 +106,7 @@ export function FeatureTile({
         <span className={valueClassName}>{result.displayValue}</span>
       </span>
     </div>
-    {orbBadge && <span className={`feature-tile__orb-badge feature-tile__orb-badge--${orbBadge}`} role="img" aria-label={`${orbBadge === "filter" ? "Filter" : "Negation"} Orb used here`}>
+    {orbBadge && <span className={`feature-tile__orb-badge guess-grid__noninteractive-text feature-tile__orb-badge--${orbBadge}`} role="img" aria-label={`${orbBadge === "filter" ? "Filter" : "Negation"} Orb used here`}>
       <OrbVisual compact kind={orbBadge} />
     </span>}
     {binding.active && <button

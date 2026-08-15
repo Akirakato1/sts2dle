@@ -162,7 +162,7 @@ export function GuessGrid({
         return <div className="guess-grid__row" role="row" key={`${String(roundKey)}:${guess.cardId}:${chronologicalIndex}`}>
           <div className="guess-grid__art" role="rowheader" aria-label={`${card.name} artwork and name`}>
             <SpriteArt cardId={card.id} spriteMap={spriteMap} kind="guess" label={`${card.name} guess artwork`} />
-            <span className="guess-grid__card-name">{card.name}</span>
+            <span className="guess-grid__card-name guess-grid__noninteractive-text">{card.name}</span>
           </div>
           {guess.results.map((result, featureIndex) => <FeatureTile
             key={`${animate ? activeRevealKey : `settled:${chronologicalIndex}`}:${result.feature}`}
