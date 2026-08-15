@@ -174,6 +174,82 @@ describe("searchCards", () => {
 });
 
 describe("CardSearch", () => {
+  test("hardcore name mode hides candidates and submits an accepted exact name with Enter", () => {
+    const submitExactName = vi.fn((query: string) => query === "Known Card");
+    const onSelect = vi.fn();
+    render(<CardSearch
+      cards={cards}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      guessedCardIds={new Set()}
+      assistance={null}
+      roundKey="hardcore-round"
+      searchMode={{ kind: "hardcore-name", submitExactName }}
+      onVisibilityChange={vi.fn()}
+      onSelect={onSelect}
+    />);
+
+    const input = screen.getByRole("searchbox", { name: "Guess a card" });
+    expect(input).not.toHaveAttribute("aria-controls");
+    expect(input).not.toHaveAttribute("aria-expanded");
+    expect(input).not.toHaveAttribute("aria-activedescendant");
+    expect(input).not.toHaveAttribute("aria-autocomplete");
+
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "Known Card" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "Home" });
+    fireEvent.keyDown(input, { key: "End" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.queryByText("No visible candidates")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(submitExactName).toHaveBeenCalledTimes(1);
+    expect(submitExactName).toHaveBeenCalledWith("Known Card");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(input).toHaveValue("");
+  });
+
+  test("hardcore name mode restarts invalid feedback without clearing or blurring the query", () => {
+    const submitExactName = vi.fn(() => false);
+    const onSelect = vi.fn();
+    render(<CardSearch
+      cards={cards}
+      cardsById={cardsById}
+      spriteMap={spriteMap}
+      guessedCardIds={new Set()}
+      assistance={null}
+      roundKey="hardcore-round"
+      searchMode={{ kind: "hardcore-name", submitExactName }}
+      onVisibilityChange={vi.fn()}
+      onSelect={onSelect}
+    />);
+
+    const input = screen.getByRole("searchbox", { name: "Guess a card" });
+    input.focus();
+    fireEvent.change(input, { target: { value: "Not a card" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(input).toHaveValue("Not a card");
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute("data-invalid-attempt", "1");
+    expect(input).toHaveClass("card-search__input--invalid-a");
+    expect(screen.getByRole("status")).toHaveTextContent("No matching unguessed card name.");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(submitExactName).toHaveBeenCalledTimes(2);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(input).toHaveValue("Not a card");
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute("data-invalid-attempt", "2");
+    expect(input).toHaveClass("card-search__input--invalid-b");
+    expect(screen.getByRole("status")).toHaveTextContent("No matching unguessed card name.");
+  });
+
   test("composes assisted controls with search input last", () => {
     const { view } = renderSearch({
       assistance: assisted,

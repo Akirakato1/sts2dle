@@ -31,6 +31,36 @@
   outline-offset: 2px;
 }
 
+@keyframes card-search-invalid-a {
+  0%, 100% { border-color: #77805b; background: #111811; transform: translateX(0); }
+  35% { border-color: #d86b64; background: #3b1918; transform: translateX(-4px); }
+  70% { border-color: #d86b64; background: #3b1918; transform: translateX(4px); }
+}
+
+@keyframes card-search-invalid-b {
+  0%, 100% { border-color: #77805b; background: #111811; transform: translateX(0); }
+  35% { border-color: #d86b64; background: #3b1918; transform: translateX(-4px); }
+  70% { border-color: #d86b64; background: #3b1918; transform: translateX(4px); }
+}
+
+.card-search__input--invalid-a { animation: card-search-invalid-a 240ms ease-out; }
+.card-search__input--invalid-b { animation: card-search-invalid-b 240ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes card-search-invalid-reduced-a {
+    0%, 100% { border-color: #77805b; background: #111811; }
+    50% { border-color: #d86b64; background: #3b1918; }
+  }
+
+  @keyframes card-search-invalid-reduced-b {
+    0%, 100% { border-color: #77805b; background: #111811; }
+    50% { border-color: #d86b64; background: #3b1918; }
+  }
+
+  .card-search__input--invalid-a { animation-name: card-search-invalid-reduced-a; }
+  .card-search__input--invalid-b { animation-name: card-search-invalid-reduced-b; }
+}
+
 .card-search > .orb-tray {
   margin-block: .65rem .55rem;
 }

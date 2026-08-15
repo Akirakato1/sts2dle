@@ -20,6 +20,10 @@ export interface ClassifiedCandidate {
   formMatch: CandidateFormMatch;
 }
 
+export type CardSearchMode =
+  | { readonly kind: "candidates" }
+  | { readonly kind: "hardcore-name"; readonly submitExactName: (query: string) => boolean };
+
 export interface CardSearchProps {
   cards: readonly CardIdentity[];
   cardsById: ReadonlyMap<string, CardIdentity>;
@@ -32,6 +36,7 @@ export interface CardSearchProps {
   assistanceControlsDisabled?: boolean;
   assistanceSlot?: React.ReactNode;
   nameHintSlot?: React.ReactNode;
+  searchMode?: CardSearchMode;
   onVisibilityChange(category: CandidateCategory, visible: boolean): void;
   onSelect(cardId: string): void;
 }
@@ -84,9 +89,11 @@ export function CardSearch({
   assistanceControlsDisabled = false,
   assistanceSlot,
   nameHintSlot,
+  searchMode = { kind: "candidates" },
   onVisibilityChange,
   onSelect,
 }: CardSearchProps) {
+  const hardcoreNameMode = searchMode.kind === "hardcore-name";
   const listboxId = useId();
   const pointerSelecting = useRef(false);
   const visibilityPointerDown = useRef(false);
@@ -95,17 +102,19 @@ export function CardSearch({
   const [isOpen, setIsOpen] = useState(false);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
+  const [invalidAttempt, setInvalidAttempt] = useState(0);
   const visibilityControlsDisabled = disabled || assistanceControlsDisabled;
   const results = useMemo(
-    () => searchCards(cards, query, guessedCardIds, assistance, cardsById, practiceFilter),
-    [assistance, cards, cardsById, guessedCardIds, practiceFilter, query],
+    () => hardcoreNameMode ? [] : searchCards(cards, query, guessedCardIds, assistance, cardsById, practiceFilter),
+    [assistance, cards, cardsById, guessedCardIds, hardcoreNameMode, practiceFilter, query],
   );
   const duplicateNames = useMemo(() => {
+    if (hardcoreNameMode) return new Set<string>();
     const counts = new Map<string, number>();
     for (const card of cards) counts.set(card.name, (counts.get(card.name) ?? 0) + 1);
     return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
-  }, [cards]);
-  const menuOpen = !disabled && isOpen;
+  }, [cards, hardcoreNameMode]);
+  const menuOpen = !hardcoreNameMode && !disabled && isOpen;
   const activeIndex = activeCardId === null ? -1 : results.findIndex(({ card }) => card.id === activeCardId);
   const activeCandidate = activeIndex < 0 ? undefined : results[activeIndex];
   const hasResults = menuOpen && results.length > 0;
@@ -119,6 +128,7 @@ export function CardSearch({
     setQuery("");
     setActiveCardId(null);
     setIsOpen(false);
+    setInvalidAttempt(0);
   }, [disabled]);
 
   useEffect(() => {
@@ -127,6 +137,7 @@ export function CardSearch({
     setQuery("");
     setActiveCardId(null);
     setIsOpen(false);
+    setInvalidAttempt(0);
   }, [roundKey]);
 
   useEffect(() => {
@@ -162,6 +173,18 @@ export function CardSearch({
         : (currentIndex + direction + results.length) % results.length;
       return results[nextIndex]!.card.id;
     });
+  }
+
+  function submitHardcoreName() {
+    if (disabled || searchMode.kind !== "hardcore-name") return;
+    if (searchMode.submitExactName(query)) {
+      setQuery("");
+      setActiveCardId(null);
+      setIsOpen(false);
+      setInvalidAttempt(0);
+    } else {
+      setInvalidAttempt((current) => current + 1);
+    }
   }
 
   return <section className="card-search" aria-label="Card search">
@@ -202,14 +225,15 @@ export function CardSearch({
     <label className="card-search__label" htmlFor={`${listboxId}-input`}>Guess a card</label>
     <input
       id={`${listboxId}-input`}
-      className="card-search__input"
+      className={`card-search__input${hardcoreNameMode && invalidAttempt > 0 ? ` card-search__input--invalid-${invalidAttempt % 2 === 1 ? "a" : "b"}` : ""}`}
       type="search"
       autoComplete="off"
-      role="combobox"
-      aria-autocomplete="list"
-      aria-controls={listboxId}
-      aria-expanded={menuOpen}
-      aria-activedescendant={canNavigate ? optionId(activeCandidate.card.id) : undefined}
+      role={hardcoreNameMode ? undefined : "combobox"}
+      aria-autocomplete={hardcoreNameMode ? undefined : "list"}
+      aria-controls={hardcoreNameMode ? undefined : listboxId}
+      aria-expanded={hardcoreNameMode ? undefined : menuOpen}
+      aria-activedescendant={hardcoreNameMode || !canNavigate ? undefined : optionId(activeCandidate.card.id)}
+      data-invalid-attempt={hardcoreNameMode ? invalidAttempt : undefined}
       value={query}
       disabled={disabled}
       onChange={(event) => {
@@ -217,10 +241,11 @@ export function CardSearch({
         const nextQuery = event.currentTarget.value;
         setQuery(nextQuery);
         setActiveCardId(null);
-        setIsOpen(true);
+        if (!hardcoreNameMode) setIsOpen(true);
       }}
-      onFocus={() => { if (!disabled) setIsOpen(true); }}
+      onFocus={() => { if (!disabled && !hardcoreNameMode) setIsOpen(true); }}
       onBlur={() => {
+        if (hardcoreNameMode) return;
         if (pointerSelecting.current || visibilityPointerDown.current) {
           pointerSelecting.current = false;
           visibilityPointerDown.current = false;
@@ -231,7 +256,12 @@ export function CardSearch({
       }}
       onKeyDown={(event) => {
         if (disabled) return;
-        if (event.key === "ArrowDown") {
+        if (hardcoreNameMode) {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            submitHardcoreName();
+          }
+        } else if (event.key === "ArrowDown") {
           event.preventDefault();
           moveActive(1);
         } else if (event.key === "ArrowUp") {
@@ -255,7 +285,8 @@ export function CardSearch({
         }
       }}
     />
-    {menuOpen && (results.length > 0 ? <ul id={listboxId} className="card-search__options" role="listbox">
+    {hardcoreNameMode && invalidAttempt > 0 && <p key={invalidAttempt} className="card-search__sr-only" role="status">No matching unguessed card name.</p>}
+    {!hardcoreNameMode && menuOpen && (results.length > 0 ? <ul id={listboxId} className="card-search__options" role="listbox">
       {results.map((candidate) => {
         const { card, category, formMatch } = candidate;
         return <li

@@ -794,6 +794,86 @@ describe("App snapshot cleanup", () => {
     expect(view.container.querySelector(".guess-grid__header-target, .feature-tile__target")).toBeNull();
   });
 
+  test("submits remembered Hardcore names without exposing answer candidates", async () => {
+    const strikeCards = ["ironclad", "silent", "defect", "watcher", "neutral"].map((cardClass) => card(`strike-${cardClass}`, "Strike"));
+    const defendCards = ["zeta", "alpha", "omega", "beta", "gamma"].map((suffix) => card(`defend-${suffix}`, "Defend"));
+    const hardcoreCards = [...strikeCards, ...defendCards];
+    const hardcoreSnapshot = {
+      ...searchSnapshot,
+      cards: hardcoreCards,
+      cardsById: new Map(hardcoreCards.map((item) => [item.id, item])),
+      spriteMap: {
+        ...searchSnapshot.spriteMap,
+        cards: Object.fromEntries(hardcoreCards.map((item) => [item.id, appSprite])),
+      },
+    };
+    const submit = vi.fn();
+    let roundToken = 1;
+    let round = assistedRound({
+      mode: "hardcore-daily",
+      hardcore: true,
+      roundId: "hardcore-daily:remembered-names",
+      answer: {
+        baseGroupKey: "strike",
+        selectedCardId: "strike-silent",
+        pairKey: "strike",
+        acceptedCardIds: strikeCards.map((item) => item.id),
+      },
+      assistance: null,
+    });
+    games.mockImplementation(() => readyGame(round, { submit, roundToken }));
+    loads.mockResolvedValue(hardcoreSnapshot);
+
+    const view = render(<App />);
+    let input = await screen.findByRole("searchbox", { name: "Guess a card" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "  sTRIKE!!!  " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(submit).toHaveBeenCalledWith("strike-defect");
+
+    fireEvent.change(input, { target: { value: "Defend" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(submit).toHaveBeenLastCalledWith("defend-alpha");
+
+    round = { ...round, guesses: [{ cardId: "defend-alpha", results: [] }] };
+    roundToken = 2;
+    view.rerender(<App />);
+    input = screen.getByRole("searchbox", { name: "Guess a card" });
+    fireEvent.change(input, { target: { value: "Defend" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(input).toHaveValue("Defend");
+    expect(screen.getByText("No matching unguessed card name.")).toHaveAttribute("role", "status");
+  });
+
+  test("keeps Daily and Practice candidate search click and keyboard submission", async () => {
+    const dailySubmit = vi.fn();
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound({ assistance: null }), { submit: dailySubmit }));
+    const dailyView = render(<App />);
+    const dailyInput = await screen.findByRole("combobox", { name: "Guess a card" });
+    fireEvent.change(dailyInput, { target: { value: "apo" } });
+    fireEvent.click(screen.getByRole("option", { name: /Apotheosis/ }));
+    expect(dailySubmit).toHaveBeenCalledWith("apotheosis");
+    dailyView.unmount();
+
+    const practiceSubmit = vi.fn();
+    games.mockReturnValue(readyGame(assistedRound({
+      mode: "practice",
+      roundId: "practice:candidate-input",
+      assistance: null,
+      practiceFilter: createDefaultPracticeFilter(),
+    }), { submit: practiceSubmit }));
+    render(<App />);
+    const practiceInput = await screen.findByRole("combobox", { name: "Guess a card" });
+    fireEvent.change(practiceInput, { target: { value: "apo" } });
+    fireEvent.keyDown(practiceInput, { key: "ArrowDown" });
+    fireEvent.keyDown(practiceInput, { key: "Enter" });
+    expect(practiceSubmit).toHaveBeenCalledWith("apotheosis");
+  });
+
   test("omits every assistance surface and orb share marker in Hardcore", async () => {
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue(readyGame(assistedRound({
@@ -805,7 +885,7 @@ describe("App snapshot cleanup", () => {
     })));
 
     const view = render(<App />);
-    await screen.findByRole("combobox");
+    await screen.findByRole("searchbox");
     expect(screen.queryByRole("region", { name: "Orb inventory" })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Candidate visibility" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Card name hint:/)).not.toBeInTheDocument();

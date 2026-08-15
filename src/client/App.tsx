@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { CardSearch } from "./components/CardSearch.js";
@@ -21,6 +21,7 @@ import {
   type PracticeFilterValue,
 } from "./game/practice-filter.js";
 import { deriveNameHint } from "./game/name-hints.js";
+import { resolveHardcoreCardName } from "./game/hardcore-name.js";
 import type { CandidateCategory, ConstraintOrbTarget, OrbKind, RevealOrbTarget } from "./game/assistance.js";
 import { FEATURE_ORDER, type CardIdentity } from "../shared/domain.js";
 import { formatFeatureValue } from "../shared/comparison.js";
@@ -135,6 +136,19 @@ function RoundGameBoard({
     [snapshot.cards],
   );
   const showResult = round.status !== "playing" && !isRevealing;
+  const guessedCardIds = useMemo(() => new Set(round.guesses.map((guess) => guess.cardId)), [round.guesses]);
+  const acceptedCardIds = useMemo(() => new Set(round.answer.acceptedCardIds), [round.answer.acceptedCardIds]);
+  const submitHardcoreName = useCallback((query: string): boolean => {
+    const cardId = resolveHardcoreCardName({
+      cards: snapshot.cards,
+      guessedCardIds,
+      acceptedCardIds,
+      query,
+    });
+    if (cardId === null) return false;
+    onSubmit(cardId);
+    return true;
+  }, [acceptedCardIds, guessedCardIds, onSubmit, snapshot.cards]);
   const answerCard = snapshot.cardsById.get(round.answer.selectedCardId);
   if (!answerCard) return <p role="alert">The selected answer is missing from the card snapshot.</p>;
   const wrongGuessCount = round.guesses.filter((guess) => !round.answer.acceptedCardIds.includes(guess.cardId)).length;
@@ -162,7 +176,7 @@ function RoundGameBoard({
       cards={snapshot.cards}
       cardsById={snapshot.cardsById}
       spriteMap={snapshot.spriteMap}
-      guessedCardIds={new Set(round.guesses.map((guess) => guess.cardId))}
+      guessedCardIds={guessedCardIds}
       assistance={round.assistance ?? null}
       practiceFilter={round.mode === "practice" ? round.practiceFilter : null}
       roundKey={roundKey}
@@ -170,6 +184,7 @@ function RoundGameBoard({
       assistanceControlsDisabled={filterEnabled}
       assistanceSlot={round.assistance && <OrbTray assistance={round.assistance} disabled={interactionDisabled || filterEnabled} />}
       nameHintSlot={<NameHint hint={nameHint} cardName={answerCard.name} />}
+      {...(round.mode === "hardcore-daily" ? { searchMode: { kind: "hardcore-name" as const, submitExactName: submitHardcoreName } } : {})}
       onVisibilityChange={onCandidateVisibility}
       onSelect={onSubmit}
     />
