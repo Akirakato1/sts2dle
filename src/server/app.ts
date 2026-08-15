@@ -29,6 +29,19 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     if (hasUnsafeStaticPath(request.raw.url ?? request.url)) {
       return reply.code(404).type("application/json").send({ error: "Not Found" });
     }
+    if (isRuntimeJsonPath(request.raw.url ?? request.url)) {
+      delete request.headers["if-none-match"];
+      delete request.headers["if-modified-since"];
+    }
+  });
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (isRuntimeJsonPath(request.raw.url ?? request.url)) {
+      reply.header("Cache-Control", "no-store");
+      reply.removeHeader("etag");
+      reply.removeHeader("last-modified");
+    }
+    return payload;
   });
 
   await app.register(fastifyStatic, {
@@ -82,6 +95,11 @@ function isRuntimeNamespace(rawUrl: string): boolean {
     const normalized = layer.replaceAll("\\", "/");
     return normalized === "/runtime" || normalized.startsWith("/runtime/");
   });
+}
+
+function isRuntimeJsonPath(rawUrl: string): boolean {
+  const pathname = rawUrl.split("?", 1)[0] ?? rawUrl;
+  return pathname.startsWith("/runtime/") && pathname.endsWith(".json");
 }
 
 function decodePathLayers(pathname: string): { layers: string[]; complete: boolean } {

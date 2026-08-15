@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile, mkdir, utimes } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -125,6 +125,57 @@ describe("createApp", () => {
         sourceRevision: "source-revision",
         generatedAt: "2026-08-12T00:00:00.000Z",
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("prevents stale runtime JSON reuse while retaining atlas validator caching", async () => {
+    const roots = await createStaticRoots();
+    const manifestPath = join(roots.snapshotRoot, "manifest.json");
+    const manifestBase = JSON.stringify({
+      sourceRevision: "source-revision",
+      generatedAt: "2026-08-12T00:00:00.000Z",
+      padding: "",
+    });
+    const manifest = JSON.stringify({
+      sourceRevision: "source-revision",
+      generatedAt: "2026-08-12T00:00:00.000Z",
+      padding: "x".repeat(1_125 - Buffer.byteLength(manifestBase)),
+    });
+    expect(Buffer.byteLength(manifest)).toBe(1_125);
+    await Promise.all([
+      writeFile(manifestPath, manifest),
+      writeFile(join(roots.snapshotRoot, "candidate.webp"), "sprite-bytes"),
+    ]);
+    await utimes(manifestPath, new Date(0), new Date(0));
+    const app = await createApp({ ...roots, logger: false });
+
+    try {
+      const first = await app.inject({ url: "/runtime/manifest.json" });
+      expect(first.statusCode).toBe(200);
+      expect(first.headers["cache-control"]).toBe("no-store");
+      expect(first.headers.etag).toBeUndefined();
+      expect(first.headers["last-modified"]).toBeUndefined();
+
+      const etagConditional = await app.inject({
+        url: "/runtime/manifest.json",
+        headers: { "if-none-match": 'W/"465-0"' },
+      });
+      expect(etagConditional.statusCode).toBe(200);
+      expect(etagConditional.json()).toMatchObject({ sourceRevision: "source-revision" });
+
+      const modifiedSinceConditional = await app.inject({
+        url: "/runtime/manifest.json",
+        headers: { "if-modified-since": "Thu, 01 Jan 1970 00:00:00 GMT" },
+      });
+      expect(modifiedSinceConditional.statusCode).toBe(200);
+      expect(modifiedSinceConditional.json()).toMatchObject({ sourceRevision: "source-revision" });
+
+      const atlas = await app.inject({ url: "/runtime/candidate.webp" });
+      expect(atlas.statusCode).toBe(200);
+      expect(atlas.headers["cache-control"]).toBe("public, max-age=0");
+      expect(atlas.headers.etag).toBeDefined();
     } finally {
       await app.close();
     }
