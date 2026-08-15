@@ -49,7 +49,7 @@ describe("SharePanel", () => {
     expect(copied).toContain("STS-dle 2026-08-12 1/∞");
     expect(copied).toContain("Orbs: \u{1F7E3} \u{1F7E2} \u{1F534}");
     expect(copied).not.toContain("SECRET_GUESS_ID");
-    expect(screen.getByRole("status")).toHaveTextContent("Daily result copied");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Daily result copied"));
   });
 
   test("announces clipboard failure accessibly", async () => {
