@@ -855,7 +855,7 @@ describe("App snapshot cleanup", () => {
     const dailyView = render(<App />);
     const dailyInput = await screen.findByRole("combobox", { name: "Guess a card" });
     fireEvent.change(dailyInput, { target: { value: "apo" } });
-    fireEvent.click(screen.getByRole("option", { name: /Apotheosis/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /Apotheosis/ }));
     expect(dailySubmit).toHaveBeenCalledWith("apotheosis");
     dailyView.unmount();
 
