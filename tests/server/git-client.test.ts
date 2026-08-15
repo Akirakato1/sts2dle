@@ -162,6 +162,35 @@ describe("GitClient", () => {
     expect(runner.calls).not.toContainEqual(["git", ["add", "-A", "--", "deploy/snapshot-data.tar.gz"]]);
   });
 
+  it("permits only the root release archive beside its owned ignored backup", async () => {
+    const repository = await createGitRepository();
+    await writeFile(
+      join(repository, ".gitignore"),
+      await readFile(join(REPOSITORY_ROOT, ".gitignore"), "utf8"),
+    );
+    await git(repository, ["add", ".gitignore"]);
+    await git(repository, ["commit", "-m", "use production ignore rules"]);
+    const ownedBackup = "deploy/.snapshot-data.tar.gz.backup-00000000-0000-4000-8000-000000000000";
+    const nearMissBackup = "deploy/.snapshot-data.tar.gz.backup";
+    const unrelatedDeployFile = "deploy/release-notes.txt";
+    await writeFile(join(repository, ...ownedBackup.split("/")), "owned backup\n");
+    await writeFile(join(repository, "deploy", "snapshot-data.tar.gz"), "new snapshot\n");
+    const client = new GitClient(repository, runBoundedProcess);
+
+    expect((await git(repository, ["check-ignore", "--", ownedBackup])).trim()).toBe(ownedBackup);
+    await expect(client.assertOnlySnapshotChanges()).resolves.toBeUndefined();
+    await client.rollbackSnapshotIndex();
+
+    await writeFile(join(repository, ...nearMissBackup.split("/")), "near miss\n");
+    await writeFile(join(repository, ...unrelatedDeployFile.split("/")), "unrelated\n");
+    await expect(git(repository, ["check-ignore", "--", nearMissBackup]))
+      .rejects.toMatchObject({ code: 1 });
+    await expect(git(repository, ["check-ignore", "--", unrelatedDeployFile]))
+      .rejects.toMatchObject({ code: 1 });
+    await expect(client.assertOnlySnapshotChanges())
+      .rejects.toThrow("Snapshot release changes are unsafe");
+  }, 15_000);
+
   it("uses a source-revision commit message and hides commit failures", async () => {
     const runner = new RecordingRunner();
     const secret = "fake-ssh-private-key";
