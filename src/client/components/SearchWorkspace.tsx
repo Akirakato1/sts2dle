@@ -8,7 +8,7 @@ import {
   updateCardFilterGroupValue,
   type CardFilterState,
 } from "../game/card-filter.js";
-import { loadSearchFilter, saveSearchFilter } from "../game/search-storage.js";
+import { loadSearchPreferences, saveSearchPreferences } from "../game/search-storage.js";
 import { preloadCardPreview } from "../game/preload-card-preview.js";
 import { CardPreviewModal } from "./CardPreviewModal.js";
 import { SearchCardList, type SearchCardResult } from "./SearchCardList.js";
@@ -37,7 +37,7 @@ export function deriveSearchResults(cards: readonly CardIdentity[], filter: Card
 
 export function SearchWorkspace({ cards, spriteMap, storage }: SearchWorkspaceProps): React.JSX.Element {
   const options = useMemo(() => collectCardFilterOptions(cards), [cards]);
-  const [filter, setFilter] = useState(() => loadSearchFilter(storage, options));
+  const [filter, setFilter] = useState(() => loadSearchPreferences(storage, options).filter);
   const [query, setQuery] = useState("");
   const [selectedCard, setSelectedCard] = useState<CardIdentity | null>(null);
   const previewOpenerRef = useRef<HTMLElement | null>(null);
@@ -45,7 +45,7 @@ export function SearchWorkspace({ cards, spriteMap, storage }: SearchWorkspacePr
 
   function update(next: CardFilterState): void {
     setFilter(next);
-    saveSearchFilter(storage, next);
+    saveSearchPreferences(storage, { filter: next, collapsed: false });
   }
 
   return <>

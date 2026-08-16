@@ -25,13 +25,25 @@ function card(id: string, baseChanges: Partial<FeatureVector> = {}, upgradedChan
   };
 }
 
+function passThroughFilter(): CardFilterState {
+  return {
+    cardClass: { disabled: true, selected: [] },
+    cardType: { disabled: true, selected: [] },
+    mana: { disabled: true, selected: [] },
+    rarity: { disabled: true, selected: [] },
+    target: { disabled: true, selected: [] },
+    powers: { disabled: true, selected: [] },
+    keywords: { disabled: true, selected: [] },
+  };
+}
+
 describe("card filter defaults and snapshot options", () => {
-  it("creates an independent all-disabled default filter", () => {
+  it("creates an independent enabled-empty default filter", () => {
     expect(createDefaultCardFilter()).toEqual({
-      cardClass: { disabled: true, selected: [] }, cardType: { disabled: true, selected: [] },
-      mana: { disabled: true, selected: [] }, rarity: { disabled: true, selected: [] },
-      target: { disabled: true, selected: [] }, powers: { disabled: true, selected: [] },
-      keywords: { disabled: true, selected: [] },
+      cardClass: { disabled: false, selected: [] }, cardType: { disabled: false, selected: [] },
+      mana: { disabled: false, selected: [] }, rarity: { disabled: false, selected: [] },
+      target: { disabled: false, selected: [] }, powers: { disabled: false, selected: [] },
+      keywords: { disabled: false, selected: [] },
     });
     const first = createDefaultCardFilter();
     first.powers.selected.push("Strength");
@@ -57,7 +69,7 @@ describe("card filter form classification", () => {
   const baseCard = card("base", { mana: 2, target: "AnyEnemy", powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] }, { mana: 3, target: "Self", powers: [], keywords: [] });
   const upgradeCard = card("upgrade", { mana: 3, target: "Self", powers: [], keywords: [] }, { mana: 2, target: "AnyEnemy", powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] });
   const hiddenCard = card("hidden", { mana: 3, target: "Self", powers: [], keywords: [] }, { mana: 4, target: "Self", powers: [], keywords: [] });
-  function activeFilter() { const filter = createDefaultCardFilter(); filter.target = { disabled: false, selected: ["Self", "AnyEnemy"] }; filter.powers = { disabled: false, selected: ["Strength", "Dexterity"] }; filter.keywords = { disabled: false, selected: ["Exhaust", "Unplayable"] }; return filter; }
+  function activeFilter() { const filter = passThroughFilter(); filter.target = { disabled: false, selected: ["Self", "AnyEnemy"] }; filter.powers = { disabled: false, selected: ["Strength", "Dexterity"] }; filter.keywords = { disabled: false, selected: ["Exhaust", "Unplayable"] }; return filter; }
 
   it("reports which complete card form matches scalar and set groups", () => {
     const filter = activeFilter();
@@ -67,30 +79,30 @@ describe("card filter form classification", () => {
     expect(classifyCardCandidate(hiddenCard, filter)).toBeNull();
   });
   it("uses OR within scalar groups and AND across enabled groups", () => {
-    const filter = createDefaultCardFilter(); filter.mana = { disabled: false, selected: [2, 3] }; filter.rarity = { disabled: false, selected: ["Rare"] };
+    const filter = passThroughFilter(); filter.mana = { disabled: false, selected: [2, 3] }; filter.rarity = { disabled: false, selected: ["Rare"] };
     expect(classifyCardCandidate(card("either-mana", { mana: 2, rarity: "Rare" }, { mana: 3, rarity: "Rare" }), filter)).toBe("both");
     expect(classifyCardCandidate(card("wrong-rarity", { mana: 2, rarity: "Basic" }, { mana: 3, rarity: "Basic" }), filter)).toBeNull();
   });
   it("requires every selected power and keyword on the same form", () => {
-    const filter = createDefaultCardFilter(); filter.powers = { disabled: false, selected: ["Strength", "Dexterity"] }; filter.keywords = { disabled: false, selected: ["Exhaust", "Unplayable"] };
+    const filter = passThroughFilter(); filter.powers = { disabled: false, selected: ["Strength", "Dexterity"] }; filter.keywords = { disabled: false, selected: ["Exhaust", "Unplayable"] };
     expect(classifyCardCandidate(card("all-sets", { powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] }, { powers: ["Strength", "Dexterity"], keywords: ["Exhaust", "Unplayable"] }), filter)).toBe("both");
     expect(classifyCardCandidate(card("split-sets", { powers: ["Strength", "Dexterity"], keywords: ["Exhaust"] }), filter)).toBeNull();
   });
   it("matches each None sentinel only when a complete form has an empty corresponding set", () => {
-    const powersNone = createDefaultCardFilter(); powersNone.powers = { disabled: false, selected: [POWER_FILTER_NONE] };
+    const powersNone = passThroughFilter(); powersNone.powers = { disabled: false, selected: [POWER_FILTER_NONE] };
     expect(classifyCardCandidate(card("power-free"), powersNone)).toBe("both");
     expect(classifyCardCandidate(card("gains-power", {}, { powers: ["Strength"] }), powersNone)).toBe("base-only");
-    const keywordsNone = createDefaultCardFilter(); keywordsNone.keywords = { disabled: false, selected: [KEYWORD_FILTER_NONE] };
+    const keywordsNone = passThroughFilter(); keywordsNone.keywords = { disabled: false, selected: [KEYWORD_FILTER_NONE] };
     expect(classifyCardCandidate(card("keyword-free"), keywordsNone)).toBe("both");
     expect(classifyCardCandidate(card("gains-keyword", {}, { keywords: ["Innate"] }), keywordsNone)).toBe("base-only");
   });
   it("treats disabled groups as passing and enabled empty groups as failing", () => {
-    expect(classifyCardCandidate(hiddenCard, createDefaultCardFilter())).toBe("both");
-    const empty = createDefaultCardFilter(); empty.target = { disabled: false, selected: [] };
+    expect(classifyCardCandidate(hiddenCard, passThroughFilter())).toBe("both");
+    const empty = createDefaultCardFilter();
     expect(classifyCardCandidate(hiddenCard, empty)).toBeNull();
   });
   it("does not combine matching values from different forms", () => {
-    const filter = createDefaultCardFilter(); filter.target = { disabled: false, selected: ["AnyEnemy"] }; filter.keywords = { disabled: false, selected: ["Retain"] };
+    const filter = passThroughFilter(); filter.target = { disabled: false, selected: ["AnyEnemy"] }; filter.keywords = { disabled: false, selected: ["Retain"] };
     expect(classifyCardCandidate(card("split", { target: "AnyEnemy", keywords: [] }, { target: "Self", keywords: ["Retain"] }), filter)).toBeNull();
   });
 });
@@ -98,11 +110,11 @@ describe("card filter form classification", () => {
 describe("card filter immutable updates and validation", () => {
   it("updates group disabled state and values immutably", () => {
     const filter = createDefaultCardFilter(); filter.powers.selected = ["Strength"];
-    const updated = updateCardFilterGroupDisabled(filter, "powers", false);
+    const updated = updateCardFilterGroupDisabled(filter, "powers", true);
     const selected = updateCardFilterGroupValue(updated, "mana", 2, true);
     const duplicate = updateCardFilterGroupValue(selected, "mana", 2, true);
     const removed = updateCardFilterGroupValue(duplicate, "mana", 2, false);
-    expect(updated).toEqual({ ...filter, powers: { disabled: false, selected: ["Strength"] } });
+    expect(updated).toEqual({ ...filter, powers: { disabled: true, selected: ["Strength"] } });
     expect(updated).not.toBe(filter); expect(duplicate).toBe(selected); expect(removed.mana.selected).toEqual([]);
   });
   it("keeps None mutually exclusive and rejects a value from another group", () => {

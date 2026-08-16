@@ -54,10 +54,10 @@ export type CardFormMatch = "both" | "base-only" | "upgrade-only" | null;
 
 export function createDefaultCardFilter(): CardFilterState {
   return {
-    cardClass: { disabled: true, selected: [] }, cardType: { disabled: true, selected: [] },
-    mana: { disabled: true, selected: [] }, rarity: { disabled: true, selected: [] },
-    target: { disabled: true, selected: [] }, powers: { disabled: true, selected: [] },
-    keywords: { disabled: true, selected: [] },
+    cardClass: { disabled: false, selected: [] }, cardType: { disabled: false, selected: [] },
+    mana: { disabled: false, selected: [] }, rarity: { disabled: false, selected: [] },
+    target: { disabled: false, selected: [] }, powers: { disabled: false, selected: [] },
+    keywords: { disabled: false, selected: [] },
   };
 }
 

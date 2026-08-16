@@ -1,8 +1,13 @@
 import { expect, test } from "vitest";
 
 import type { CardIdentity, FeatureVector } from "../../src/shared/domain.js";
-import { collectCardFilterOptions, createDefaultCardFilter, updateCardFilterGroupDisabled, updateCardFilterGroupValue } from "../../src/client/game/card-filter.js";
-import { SEARCH_FILTER_STORAGE_KEY, loadSearchFilter, saveSearchFilter } from "../../src/client/game/search-storage.js";
+import { collectCardFilterOptions, createDefaultCardFilter, updateCardFilterGroupValue } from "../../src/client/game/card-filter.js";
+import {
+  SEARCH_FILTER_STORAGE_KEY,
+  createDefaultSearchPreferences,
+  loadSearchPreferences,
+  saveSearchPreferences,
+} from "../../src/client/game/search-storage.js";
 
 class MemoryStorage implements Storage {
   readonly values = new Map<string, string>();
@@ -16,50 +21,59 @@ const vector: FeatureVector = { cardClass: "Ironclad", cardType: "Attack", mana:
 const card: CardIdentity = { id: "card", name: "Card", hasUpgrade: false, artUrl: "", baseCardUrl: null, upgradedCardUrl: null, base: vector, upgraded: vector };
 const options = collectCardFilterOptions([card]);
 
-test("round-trips only the versioned Search filter", () => {
+test("round-trips only versioned Search filter preferences", () => {
   const storage = new MemoryStorage();
-  const state = updateCardFilterGroupValue(updateCardFilterGroupDisabled(createDefaultCardFilter(), "mana", false), "mana", 2, true);
-  saveSearchFilter(storage, state);
-  expect(JSON.parse(storage.getItem(SEARCH_FILTER_STORAGE_KEY)!)).toEqual({ version: 1, filter: state });
-  expect(loadSearchFilter(storage, options)).toEqual(state);
+  const preferences = {
+    filter: updateCardFilterGroupValue(createDefaultCardFilter(), "mana", 2, true),
+    collapsed: true,
+  };
+  saveSearchPreferences(storage, preferences);
+  expect(JSON.parse(storage.getItem(SEARCH_FILTER_STORAGE_KEY)!)).toEqual({ version: 2, ...preferences });
+  expect(loadSearchPreferences(storage, options)).toEqual(preferences);
 });
 
 test.each([
   "not-json",
+  JSON.stringify({ version: 1, filter: createDefaultCardFilter() }),
   JSON.stringify({ version: 2, filter: createDefaultCardFilter() }),
-  JSON.stringify({ version: 1, filter: { ...createDefaultCardFilter(), mana: { disabled: false, selected: [99] } } }),
-  JSON.stringify({ version: 1, filter: { ...createDefaultCardFilter(), powers: { disabled: false, selected: ["power:none", "Strength"] } } }),
-])("resets invalid Search storage", (value) => {
+  JSON.stringify({ version: 2, filter: createDefaultCardFilter(), collapsed: "yes" }),
+  JSON.stringify({ version: 2, filter: { ...createDefaultCardFilter(), mana: { disabled: false, selected: [99] } }, collapsed: false }),
+  JSON.stringify({ version: 2, filter: { ...createDefaultCardFilter(), powers: { disabled: false, selected: ["power:none", "Strength"] } }, collapsed: false }),
+])("resets invalid Search preferences", (value) => {
   const storage = new MemoryStorage(); storage.setItem(SEARCH_FILTER_STORAGE_KEY, value);
-  expect(loadSearchFilter(storage, options)).toEqual(createDefaultCardFilter());
+  expect(loadSearchPreferences(storage, options)).toEqual(createDefaultSearchPreferences());
   expect(storage.getItem(SEARCH_FILTER_STORAGE_KEY)).toBeNull();
 });
 
 test("writes no query, modal, card data, or image bytes", () => {
-  const storage = new MemoryStorage(); saveSearchFilter(storage, createDefaultCardFilter());
-  expect(Object.keys(JSON.parse(storage.getItem(SEARCH_FILTER_STORAGE_KEY)!))).toEqual(["version", "filter"]);
+  const storage = new MemoryStorage(); saveSearchPreferences(storage, createDefaultSearchPreferences());
+  expect(Object.keys(JSON.parse(storage.getItem(SEARCH_FILTER_STORAGE_KEY)!))).toEqual(["version", "filter", "collapsed"]);
 });
 
-test("persists only canonical filter and group fields from runtime objects", () => {
+test("persists only canonical preference and group fields from runtime objects", () => {
   const storage = new MemoryStorage();
-  const state = {
-    ...createDefaultCardFilter(),
+  const preferences = {
+    filter: {
+      ...createDefaultCardFilter(),
+      mana: { disabled: false, selected: [2], imageBytes: "not-a-group" },
+    },
+    collapsed: true,
     query: "Dazed",
     modal: { open: true },
     card: { id: "card", name: "Dazed" },
     imageBytes: "not-a-filter",
-    mana: { disabled: false, selected: [2], imageBytes: "not-a-group" },
   };
 
-  saveSearchFilter(storage, state as typeof state & Parameters<typeof saveSearchFilter>[1]);
+  saveSearchPreferences(storage, preferences as typeof preferences & Parameters<typeof saveSearchPreferences>[1]);
 
   expect(JSON.parse(storage.getItem(SEARCH_FILTER_STORAGE_KEY)!)).toEqual({
-    version: 1,
+    version: 2,
     filter: {
-      cardClass: { disabled: true, selected: [] }, cardType: { disabled: true, selected: [] },
-      mana: { disabled: false, selected: [2] }, rarity: { disabled: true, selected: [] },
-      target: { disabled: true, selected: [] }, powers: { disabled: true, selected: [] },
-      keywords: { disabled: true, selected: [] },
+      cardClass: { disabled: false, selected: [] }, cardType: { disabled: false, selected: [] },
+      mana: { disabled: false, selected: [2] }, rarity: { disabled: false, selected: [] },
+      target: { disabled: false, selected: [] }, powers: { disabled: false, selected: [] },
+      keywords: { disabled: false, selected: [] },
     },
+    collapsed: true,
   });
 });
