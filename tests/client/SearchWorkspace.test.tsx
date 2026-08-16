@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { deriveSearchResults, SearchWorkspace } from "../../src/client/components/SearchWorkspace.js";
+import { SEARCH_FILTER_HELP_DISMISSED_KEY } from "../../src/client/components/SearchFilterPanel.js";
 import { createDefaultCardFilter } from "../../src/client/game/card-filter.js";
+import { preloadCardPreview } from "../../src/client/game/preload-card-preview.js";
 import type { CardIdentity, FeatureVector, SpriteMap } from "../../src/shared/domain.js";
+
+vi.mock("../../src/client/game/preload-card-preview.js", () => ({ preloadCardPreview: vi.fn() }));
 
 class MemoryStorage implements Storage { readonly values = new Map<string, string>(); get length() { return this.values.size; } clear() { this.values.clear(); } getItem(key: string) { return this.values.get(key) ?? null; } key(index: number) { return [...this.values.keys()][index] ?? null; } removeItem(key: string) { this.values.delete(key); } setItem(key: string, value: string) { this.values.set(key, value); } }
 const vector: FeatureVector = { cardClass: "Silent", cardType: "Skill", mana: 1, rarity: "Common", target: "Self", powers: [], keywords: [] };
@@ -29,5 +33,24 @@ describe("SearchWorkspace", () => {
   test("persists selected filters but resets query and nonzero list scroll across remount", () => {
     const storage = new MemoryStorage(); const first = render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />); const classGroup = screen.getByRole("group", { name: "Class" }); fireEvent.click(classGroup.getElementsByTagName("input")[0]!); fireEvent.click(classGroup.getElementsByTagName("input")[1]!); const list = screen.getByRole("list", { name: "Search results" }); list.scrollTop = 48; expect(list.scrollTop).toBe(48); fireEvent.change(screen.getByRole("searchbox", { name: "Search cards" }), { target: { value: "zul" } }); first.unmount();
     render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />); const restoredClass = screen.getByRole("group", { name: "Class" }); expect(restoredClass.getElementsByTagName("input")[0]).not.toBeChecked(); expect(restoredClass.getElementsByTagName("input")[1]).toBeChecked(); expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue(""); expect(screen.getByRole("list", { name: "Search results" }).scrollTop).toBe(0);
+  });
+  test("warms a result on hover or focus and opens an inert-background preview that returns focus on close", async () => {
+    window.localStorage.setItem(SEARCH_FILTER_HELP_DISMISSED_KEY, "1");
+    const storage = new MemoryStorage();
+    render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />);
+    const result = screen.getByRole("button", { name: "Preview Zulu" });
+
+    fireEvent.pointerEnter(result);
+    fireEvent.focus(result);
+    expect(preloadCardPreview).toHaveBeenCalledWith(cards[0]);
+
+    fireEvent.click(result);
+    expect(screen.getByRole("dialog", { name: "Preview Zulu" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Card search workspace" })).toHaveAttribute("inert", "");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+    expect(screen.queryByRole("dialog", { name: "Preview Zulu" })).not.toBeInTheDocument();
+    await Promise.resolve();
+    expect(result).toHaveFocus();
   });
 });
