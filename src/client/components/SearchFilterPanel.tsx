@@ -17,6 +17,9 @@ export const SEARCH_FILTER_HELP_DISMISSED_KEY = "stsdle:search-filter-help-dismi
 export interface SearchFilterPanelProps {
   state: CardFilterState;
   options: CardFilterOptions;
+  collapsed: boolean;
+  onCollapsedChange(collapsed: boolean): void;
+  onReset(): void;
   onGroupDisabledChange(group: CardFilterGroupName, disabled: boolean): void;
   onValueChange(group: CardFilterGroupName, value: CardFilterValue, selected: boolean): void;
 }
@@ -48,9 +51,10 @@ function saveDismissal(): void {
   try { storage.setItem(SEARCH_FILTER_HELP_DISMISSED_KEY, "1"); } catch { /* Best effort. */ }
 }
 
-export function SearchFilterPanel({ state, options, onGroupDisabledChange, onValueChange }: SearchFilterPanelProps): React.JSX.Element {
+export function SearchFilterPanel({ state, options, collapsed, onCollapsedChange, onReset, onGroupDisabledChange, onValueChange }: SearchFilterPanelProps): React.JSX.Element {
   const [helpOpen, setHelpOpen] = useState(() => !dismissed());
   const titleId = useId();
+  const groupsId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -76,12 +80,18 @@ export function SearchFilterPanel({ state, options, onGroupDisabledChange, onVal
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [close, helpOpen]);
 
-  return <section className="search-filter" aria-label="Search filters">
+  return <section className={`search-filter${collapsed ? " search-filter--collapsed" : ""}`} aria-label="Search filters">
     <header className="search-filter__header">
+      <button type="button" className="search-filter__collapse" aria-label={collapsed ? "Expand filters" : "Collapse filters"} aria-expanded={!collapsed} aria-controls={groupsId} onClick={() => onCollapsedChange(!collapsed)}>
+        <span className="search-filter__chevron" aria-hidden="true">›</span>
+      </button>
       <h2>Filters</h2>
-      <button ref={triggerRef} type="button" className="search-filter__help-trigger" aria-label="Filter help" onClick={() => setHelpOpen(true)}>?</button>
+      <div className="search-filter__actions">
+        {!collapsed && <button type="button" className="search-filter__reset" aria-label="Reset filters" onClick={onReset}>↺</button>}
+        <button ref={triggerRef} type="button" className="search-filter__help-trigger" aria-label="Filter help" onClick={() => setHelpOpen(true)}>?</button>
+      </div>
     </header>
-    <div className="search-filter__groups">
+    {!collapsed && <div id={groupsId} className="search-filter__groups">
       {GROUPS.map(({ key, label }) => {
         const group = state[key];
         const values = options[key] as CardFilterValue[];
@@ -103,7 +113,7 @@ export function SearchFilterPanel({ state, options, onGroupDisabledChange, onVal
           {!group.disabled && group.selected.length === 0 && <p className="search-filter__warning">Choose at least one.</p>}
         </fieldset>;
       })}
-    </div>
+    </div>}
     {helpOpen && <div className="search-filter-help__backdrop" onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
       <div ref={dialogRef} className="search-filter-help__dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header className="search-filter-help__header">

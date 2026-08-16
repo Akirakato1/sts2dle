@@ -6,6 +6,7 @@ import { deriveSearchResults, SearchWorkspace } from "../../src/client/component
 import { SEARCH_FILTER_HELP_DISMISSED_KEY } from "../../src/client/components/SearchFilterPanel.js";
 import { createDefaultCardFilter } from "../../src/client/game/card-filter.js";
 import { preloadCardPreview } from "../../src/client/game/preload-card-preview.js";
+import { loadSearchPreferences, saveSearchPreferences } from "../../src/client/game/search-storage.js";
 import type { CardIdentity, FeatureVector, SpriteMap } from "../../src/shared/domain.js";
 
 vi.mock("../../src/client/game/preload-card-preview.js", () => ({ preloadCardPreview: vi.fn() }));
@@ -14,6 +15,8 @@ class MemoryStorage implements Storage { readonly values = new Map<string, strin
 const vector: FeatureVector = { cardClass: "Silent", cardType: "Skill", mana: 1, rarity: "Common", target: "Self", powers: [], keywords: [] };
 const cards: CardIdentity[] = ["Zulu", "Álpha", "Alpha"].map((name, index) => ({ id: `card-${index}`, name, hasUpgrade: true, artUrl: "", baseCardUrl: null, upgradedCardUrl: null, base: vector, upgraded: vector }));
 const spriteMap: SpriteMap = { candidate: { url: "/candidate.png", width: 1, height: 1, displayScale: 1 }, guess: { url: "/guess.png", width: 1, height: 1, displayScale: 1 }, cards: Object.fromEntries(cards.map((card) => [card.id, { candidate: { x: 0, y: 0, width: 1, height: 1 }, guess: { x: 0, y: 0, width: 1, height: 1 } }])) };
+function passThroughFilter() { const filter = createDefaultCardFilter(); for (const group of Object.values(filter)) group.disabled = true; return filter; }
+function seed(storage: Storage, collapsed = false) { saveSearchPreferences(storage, { filter: passThroughFilter(), collapsed }); }
 afterEach(cleanup);
 describe("SearchWorkspace", () => {
   test("renders query, filters, and results in the approved DOM order", () => {
@@ -33,22 +36,36 @@ describe("SearchWorkspace", () => {
       { ...cards[0]!, id: "z-card", name: "Same" },
       { ...cards[1]!, id: "a-card", name: "Same" },
     ];
-    expect(deriveSearchResults(cards, createDefaultCardFilter(), " Ａｌｐｈａ ").map(({ card }) => card.name)).toEqual(["Alpha"]);
-    expect(deriveSearchResults(cards, createDefaultCardFilter(), "").map(({ card }) => card.name)).toEqual(["Alpha", "Álpha", "Zulu"]);
-    expect(deriveSearchResults(tiedCards, createDefaultCardFilter(), "").map(({ card }) => card.id)).toEqual(["a-card", "z-card"]);
-    render(<SearchWorkspace cards={cards} spriteMap={spriteMap} />); expect(screen.queryByRole("combobox", { name: /Guess a card/i })).not.toBeInTheDocument(); expect(screen.getAllByRole("button", { name: /Preview/ })).toHaveLength(cards.length);
+    expect(deriveSearchResults(cards, passThroughFilter(), " Ａｌｐｈａ ").map(({ card }) => card.name)).toEqual(["Alpha"]);
+    expect(deriveSearchResults(cards, passThroughFilter(), "").map(({ card }) => card.name)).toEqual(["Alpha", "Álpha", "Zulu"]);
+    expect(deriveSearchResults(tiedCards, passThroughFilter(), "").map(({ card }) => card.id)).toEqual(["a-card", "z-card"]);
+    render(<SearchWorkspace cards={cards} spriteMap={spriteMap} />); expect(screen.queryByRole("combobox", { name: /Guess a card/i })).not.toBeInTheDocument(); expect(screen.queryAllByRole("button", { name: /Preview/ })).toHaveLength(0); expect(screen.getByRole("status")).toHaveTextContent("No cards match these filters.");
   });
   test("narrows by name and keeps an empty result list beside the no-results status", () => {
-    render(<SearchWorkspace cards={cards} spriteMap={spriteMap} />); fireEvent.change(screen.getByRole("searchbox", { name: "Search cards" }), { target: { value: "zul" } }); expect(screen.getAllByRole("button", { name: /Preview/ })).toHaveLength(1);
-    fireEvent.click(screen.getByRole("group", { name: "Class" }).getElementsByTagName("input")[0]!); expect(screen.getByRole("status")).toHaveTextContent("No cards match these filters."); expect(screen.getByRole("list", { name: "Search results" })).toBeEmptyDOMElement();
+    const storage = new MemoryStorage(); seed(storage);
+    render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />); fireEvent.change(screen.getByRole("searchbox", { name: "Search cards" }), { target: { value: "zul" } }); expect(screen.getAllByRole("button", { name: /Preview/ })).toHaveLength(1);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search cards" }), { target: { value: "missing" } }); expect(screen.getByRole("status")).toHaveTextContent("No cards match these filters."); expect(screen.getByRole("list", { name: "Search results" })).toBeEmptyDOMElement();
   });
-  test("persists selected filters but resets query and nonzero list scroll across remount", () => {
-    const storage = new MemoryStorage(); const first = render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />); const classGroup = screen.getByRole("group", { name: "Class" }); fireEvent.click(classGroup.getElementsByTagName("input")[0]!); fireEvent.click(classGroup.getElementsByTagName("input")[1]!); const list = screen.getByRole("list", { name: "Search results" }); list.scrollTop = 48; expect(list.scrollTop).toBe(48); fireEvent.change(screen.getByRole("searchbox", { name: "Search cards" }), { target: { value: "zul" } }); first.unmount();
-    render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />); const restoredClass = screen.getByRole("group", { name: "Class" }); expect(restoredClass.getElementsByTagName("input")[0]).not.toBeChecked(); expect(restoredClass.getElementsByTagName("input")[1]).toBeChecked(); expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue(""); expect(screen.getByRole("list", { name: "Search results" }).scrollTop).toBe(0);
+  test("persists collapse and filters, resets query on remount, and resets filters without clearing query", () => {
+    const storage = new MemoryStorage(); seed(storage); const first = render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search cards" }), { target: { value: "zul" } });
+    fireEvent.click(screen.getByRole("button", { name: "Collapse filters" }));
+    expect(screen.getByRole("button", { name: "Expand filters" })).toBeVisible(); first.unmount();
+
+    render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />);
+    expect(screen.getByRole("button", { name: "Expand filters" })).toBeVisible();
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "Expand filters" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search cards" }), { target: { value: "zul" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("zul");
+    expect(screen.queryAllByRole("button", { name: /Preview/ })).toHaveLength(0);
+    expect(screen.getAllByRole("group").flatMap((group) => [...group.getElementsByTagName("input")]).every((input) => !input.checked)).toBe(true);
+    expect(loadSearchPreferences(storage, { cardClass: ["Silent"], cardType: ["Skill"], mana: [1], rarity: ["Common"], target: ["Self"], powers: [], keywords: [] })).toEqual({ filter: createDefaultCardFilter(), collapsed: false });
   });
   test("warms a result on hover or focus and opens an inert-background preview that returns focus on close", async () => {
     window.localStorage.setItem(SEARCH_FILTER_HELP_DISMISSED_KEY, "1");
-    const storage = new MemoryStorage();
+    const storage = new MemoryStorage(); seed(storage);
     render(<SearchWorkspace cards={cards} spriteMap={spriteMap} storage={storage} />);
     const result = screen.getByRole("button", { name: "Preview Zulu" });
 

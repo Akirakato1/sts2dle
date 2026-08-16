@@ -4,11 +4,12 @@ import type { CardIdentity, SpriteMap } from "../../shared/domain.js";
 import {
   classifyCardCandidate,
   collectCardFilterOptions,
+  createDefaultCardFilter,
   updateCardFilterGroupDisabled,
   updateCardFilterGroupValue,
   type CardFilterState,
 } from "../game/card-filter.js";
-import { loadSearchPreferences, saveSearchPreferences } from "../game/search-storage.js";
+import { loadSearchPreferences, saveSearchPreferences, type SearchPreferences } from "../game/search-storage.js";
 import { preloadCardPreview } from "../game/preload-card-preview.js";
 import { CardPreviewModal } from "./CardPreviewModal.js";
 import { SearchCardList, type SearchCardResult } from "./SearchCardList.js";
@@ -37,15 +38,16 @@ export function deriveSearchResults(cards: readonly CardIdentity[], filter: Card
 
 export function SearchWorkspace({ cards, spriteMap, storage }: SearchWorkspaceProps): React.JSX.Element {
   const options = useMemo(() => collectCardFilterOptions(cards), [cards]);
-  const [filter, setFilter] = useState(() => loadSearchPreferences(storage, options).filter);
+  const [preferences, setPreferences] = useState(() => loadSearchPreferences(storage, options));
+  const { filter, collapsed } = preferences;
   const [query, setQuery] = useState("");
   const [selectedCard, setSelectedCard] = useState<CardIdentity | null>(null);
   const previewOpenerRef = useRef<HTMLElement | null>(null);
   const results = useMemo(() => deriveSearchResults(cards, filter, query), [cards, filter, query]);
 
-  function update(next: CardFilterState): void {
-    setFilter(next);
-    saveSearchPreferences(storage, { filter: next, collapsed: false });
+  function update(next: SearchPreferences): void {
+    setPreferences(next);
+    saveSearchPreferences(storage, next);
   }
 
   return <>
@@ -65,8 +67,11 @@ export function SearchWorkspace({ cards, spriteMap, storage }: SearchWorkspacePr
       <SearchFilterPanel
         state={filter}
         options={options}
-        onGroupDisabledChange={(group, disabled) => update(updateCardFilterGroupDisabled(filter, group, disabled))}
-        onValueChange={(group, value, selected) => update(updateCardFilterGroupValue(filter, group, value, selected))}
+        collapsed={collapsed}
+        onCollapsedChange={(nextCollapsed) => update({ filter, collapsed: nextCollapsed })}
+        onReset={() => update({ filter: createDefaultCardFilter(), collapsed })}
+        onGroupDisabledChange={(group, disabled) => update({ filter: updateCardFilterGroupDisabled(filter, group, disabled), collapsed })}
+        onValueChange={(group, value, selected) => update({ filter: updateCardFilterGroupValue(filter, group, value, selected), collapsed })}
       />
       <SearchCardList
         results={results}
