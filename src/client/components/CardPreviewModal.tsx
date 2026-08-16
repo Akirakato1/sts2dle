@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { CardIdentity } from "../../shared/domain.js";
+import { formatSearchCardName } from "../game/search-card-label.js";
 
 export interface CardPreviewModalProps {
   card: CardIdentity;
@@ -14,9 +15,10 @@ interface CardFaceProps {
   cardName: string;
   label: "Base" | "Upgraded";
   url: string | null;
+  onRetryFocus(): void;
 }
 
-function CardFace({ cardName, label, url }: CardFaceProps): React.JSX.Element {
+function CardFace({ cardName, label, url, onRetryFocus }: CardFaceProps): React.JSX.Element {
   const [{ status, attempt }, setFace] = useState<{ status: FaceStatus; attempt: number }>({ status: "loading", attempt: 0 });
 
   return <section className="card-preview-modal__face-section" aria-label={`${cardName} — ${label} card face`}>
@@ -26,7 +28,10 @@ function CardFace({ cardName, label, url }: CardFaceProps): React.JSX.Element {
         {status === "loading" && <p role="status" aria-label={`${label} image loading`}>Loading {label} image…</p>}
         {status === "error" && <div>
           <p role="status" aria-label={`${label} image failed to load`}>{label} image failed to load.</p>
-          <button type="button" onClick={() => setFace(({ attempt: previousAttempt }) => ({ status: "loading", attempt: previousAttempt + 1 }))}>Retry {label} image</button>
+          <button type="button" onClick={() => {
+            onRetryFocus();
+            setFace(({ attempt: previousAttempt }) => ({ status: "loading", attempt: previousAttempt + 1 }));
+          }}>Retry {label} image</button>
         </div>}
         <img
           key={`${label}-${attempt}`}
@@ -42,6 +47,7 @@ function CardFace({ cardName, label, url }: CardFaceProps): React.JSX.Element {
 
 export function CardPreviewModal({ card, onClose }: CardPreviewModalProps): React.JSX.Element {
   const titleId = useId();
+  const cardName = formatSearchCardName(card);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -49,7 +55,12 @@ export function CardPreviewModal({ card, onClose }: CardPreviewModalProps): Reac
 
   useEffect(() => {
     const appContent = document.querySelector<HTMLElement>(".app-shell__content");
+    const appContentWasInert = appContent?.hasAttribute("inert") ?? false;
+    const htmlStyle = document.documentElement.getAttribute("style");
+    const bodyStyle = document.body.getAttribute("style");
     appContent?.setAttribute("inert", "");
+    document.documentElement.style.setProperty("overflow", "hidden");
+    document.body.style.setProperty("overflow", "hidden");
     closeRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -65,6 +76,11 @@ export function CardPreviewModal({ card, onClose }: CardPreviewModalProps): Reac
       if (focusable.length === 0) return;
       const first = focusable[0]!;
       const last = focusable.at(-1)!;
+      if (!dialogRef.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
       if ((event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
@@ -73,7 +89,11 @@ export function CardPreviewModal({ card, onClose }: CardPreviewModalProps): Reac
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
-      appContent?.removeAttribute("inert");
+      if (!appContentWasInert) appContent?.removeAttribute("inert");
+      if (htmlStyle === null) document.documentElement.removeAttribute("style");
+      else document.documentElement.setAttribute("style", htmlStyle);
+      if (bodyStyle === null) document.body.removeAttribute("style");
+      else document.body.setAttribute("style", bodyStyle);
       queueMicrotask(() => openerRef.current?.focus());
     };
   }, [close]);
@@ -81,12 +101,12 @@ export function CardPreviewModal({ card, onClose }: CardPreviewModalProps): Reac
   const modal = <div className="card-preview-modal__backdrop" onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
     <div ref={dialogRef} className="card-preview-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <header className="card-preview-modal__header">
-        <h2 id={titleId}>Preview {card.name}</h2>
+        <h2 id={titleId}>Preview {cardName}</h2>
         <button ref={closeRef} type="button" aria-label="Close preview" onClick={close}>×</button>
       </header>
       <div className={`card-preview-modal__faces${card.hasUpgrade ? "" : " card-preview-modal__faces--single"}`} style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "1rem" }}>
-        <CardFace cardName={card.name} label="Base" url={card.baseCardUrl} />
-        {card.hasUpgrade && <CardFace cardName={card.name} label="Upgraded" url={card.upgradedCardUrl} />}
+        <CardFace cardName={cardName} label="Base" url={card.baseCardUrl} onRetryFocus={() => closeRef.current?.focus()} />
+        {card.hasUpgrade && <CardFace cardName={cardName} label="Upgraded" url={card.upgradedCardUrl} onRetryFocus={() => closeRef.current?.focus()} />}
       </div>
     </div>
   </div>;

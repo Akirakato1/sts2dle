@@ -14,6 +14,40 @@ test("renders candidate sprites and accessible form-match preview buttons", () =
   render(<SearchCardList results={[{ card: cards[0]!, formMatch: "base-only" }, { card: cards[1]!, formMatch: "upgrade-only" }, { card: cards[2]!, formMatch: "both" }]} spriteMap={spriteMap} onPreview={vi.fn()} onWarmPreview={vi.fn()} />);
   expect(screen.getAllByRole("button", { name: /Preview/ })).toHaveLength(cards.length); expect(screen.getByRole("button", { name: "Preview Apparition — Base only" })).toBeVisible(); expect(screen.getByRole("button", { name: "Preview Alchemize — Upgrade only" })).toBeVisible(); expect(screen.getByRole("button", { name: "Preview Afterimage" })).toBeVisible(); expect(screen.getAllByRole("img")).toHaveLength(cards.length);
 });
+test("visibly and accessibly disambiguates only cards marked with duplicate names", () => {
+  const duplicateVector: FeatureVector = { ...vector, cardClass: "Ironclad" };
+  const duplicateCard: CardIdentity = {
+    ...makeCard("strike-ironclad", "Strike"),
+    duplicateName: true,
+    base: duplicateVector,
+    upgraded: duplicateVector,
+  };
+  const uniqueCard = makeCard("strike-event", "Ceremonial Strike");
+  const duplicateSpriteMap: SpriteMap = {
+    ...spriteMap,
+    cards: {
+      ...spriteMap.cards,
+      [duplicateCard.id]: { candidate: { x: 0, y: 0, width: 32, height: 32 }, guess: { x: 0, y: 0, width: 32, height: 32 } },
+      [uniqueCard.id]: { candidate: { x: 0, y: 0, width: 32, height: 32 }, guess: { x: 0, y: 0, width: 32, height: 32 } },
+    },
+  };
+
+  render(<SearchCardList
+    results={[{ card: duplicateCard, formMatch: "both" }, { card: uniqueCard, formMatch: "both" }]}
+    spriteMap={duplicateSpriteMap}
+    onPreview={vi.fn()}
+    onWarmPreview={vi.fn()}
+  />);
+
+  const duplicateResult = screen.getByRole("button", { name: "Preview Strike (Ironclad)" });
+  expect(duplicateResult).toHaveTextContent("Strike");
+  expect(duplicateResult).toHaveTextContent("Ironclad");
+  expect(screen.getByRole("img", { name: "Strike (Ironclad) artwork" })).toBeVisible();
+  const uniqueResult = screen.getByRole("button", { name: "Preview Ceremonial Strike" });
+  expect(uniqueResult).toHaveTextContent("Ceremonial Strike");
+  expect(uniqueResult).not.toHaveTextContent("Silent");
+  expect(screen.getByRole("img", { name: "Ceremonial Strike artwork" })).toBeVisible();
+});
 test("warms on pointer/focus and lets native Enter activation preview exactly once", () => {
   const onPreview = vi.fn(); const onWarmPreview = vi.fn(); render(<SearchCardList results={[{ card: cards[0]!, formMatch: "both" }]} spriteMap={spriteMap} onPreview={onPreview} onWarmPreview={onWarmPreview} />);
   const button = screen.getByRole("button", { name: "Preview Apparition" }); fireEvent.pointerEnter(button); fireEvent.focus(button);

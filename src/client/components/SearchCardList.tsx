@@ -2,6 +2,7 @@ import React from "react";
 
 import type { CardIdentity, SpriteMap } from "../../shared/domain.js";
 import type { CardFormMatch } from "../game/card-filter.js";
+import { formatSearchCardName } from "../game/search-card-label.js";
 import { SpriteArt } from "./SpriteArt.js";
 
 export interface SearchCardResult {
@@ -26,17 +27,21 @@ export function SearchCardList({ results, spriteMap, onPreview, onWarmPreview }:
   return <ul className="search-card-list" aria-label="Search results">
     {results.map(({ card, formMatch }) => {
       const label = badge(formMatch);
+      const cardName = formatSearchCardName(card);
       return <li key={card.id}>
         <button
           type="button"
           className="search-card-list__result"
-          aria-label={`Preview ${card.name}${label ? ` — ${label}` : ""}`}
+          aria-label={`Preview ${cardName}${label ? ` — ${label}` : ""}`}
           onPointerEnter={() => onWarmPreview(card)}
           onFocus={() => onWarmPreview(card)}
           onClick={() => onPreview(card)}
         >
-          <SpriteArt cardId={card.id} spriteMap={spriteMap} kind="candidate" label={`${card.name} artwork`} />
-          <span>{card.name}</span>
+          <SpriteArt cardId={card.id} spriteMap={spriteMap} kind="candidate" label={`${cardName} artwork`} />
+          <span className="search-card-list__identity">
+            <span className="search-card-list__name">{card.name}</span>
+            {card.duplicateName && <span className="search-card-list__class">({card.base.cardClass})</span>}
+          </span>
           {label && <span className="search-card-list__badge">{label}</span>}
         </button>
       </li>;

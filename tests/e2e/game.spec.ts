@@ -226,11 +226,18 @@ async function loadFixtureModel(request: APIRequestContext): Promise<FixtureMode
   };
 }
 
-async function chooseCard(page: Page, name: string): Promise<void> {
+async function chooseCard(page: Page, cardOrName: CardIdentity | string): Promise<void> {
+  const name = typeof cardOrName === "string" ? cardOrName : cardOrName.name;
+  const cardClass = typeof cardOrName === "string" || !cardOrName.duplicateName
+    ? null
+    : cardOrName.base.cardClass;
   const search = page.getByRole("combobox", { name: "Guess a card" });
   await search.fill(name);
-  const optionNames = await page.getByRole("option").locator(".card-search__name").allTextContents();
-  const optionIndex = optionNames.indexOf(name);
+  const optionIndex = await page.getByRole("option").evaluateAll((options, expected) => options.findIndex((option) => (
+    option.querySelector<HTMLElement>(".card-search__name")?.textContent === expected.name
+      && (expected.cardClass === null
+        || option.querySelector<HTMLElement>(".card-search__class")?.textContent === expected.cardClass)
+  )), { name, cardClass });
   expect(optionIndex, `${name} should be an exact keyboard-selectable candidate`).toBeGreaterThanOrEqual(0);
   await search.press("Home");
   for (let index = 0; index < optionIndex; index += 1) await search.press("ArrowDown");
@@ -245,23 +252,24 @@ function escapeRegExp(value: string): string {
 function guessRow(page: Page, card: CardIdentity): Locator {
   return page.getByRole("row").filter({
     has: page.getByRole("rowheader", { name: new RegExp(`^${escapeRegExp(card.name)} artwork and name$`) }),
-  });
+  }).filter({ hasText: card.base.cardClass });
 }
 
 function cardOption(page: Page, card: CardIdentity): Locator {
+  const discriminator = card.duplicateName ? ` ${escapeRegExp(card.base.cardClass)}` : "";
   return page.getByRole("option", {
-    name: new RegExp(`^${escapeRegExp(card.name)} artwork ${escapeRegExp(card.name)}`),
+    name: new RegExp(`^${escapeRegExp(card.name)} artwork ${escapeRegExp(card.name)}${discriminator}`),
   });
 }
 
 async function submitGuessAndWait(page: Page, card: CardIdentity): Promise<void> {
-  await chooseCard(page, card.name);
+  await chooseCard(page, card);
   await expect(guessRow(page, card)).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeEnabled({ timeout: 5_000 });
 }
 
 async function submitWinningGuess(page: Page, card: CardIdentity): Promise<void> {
-  await chooseCard(page, card.name);
+  await chooseCard(page, card);
   await expect(guessRow(page, card)).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Guess a card" })).toBeDisabled();
 }
@@ -529,16 +537,31 @@ async function prepareOfflinePage(
 }
 
 function searchResult(page: Page, card: CardIdentity, badge?: "Base only" | "Upgrade only"): Locator {
+  const cardLabel = card.duplicateName ? `${card.name} (${card.base.cardClass})` : card.name;
   return page.getByRole("button", {
-    name: `Preview ${card.name}${badge ? ` — ${badge}` : ""}`,
+    name: `Preview ${cardLabel}${badge ? ` — ${badge}` : ""}`,
     exact: true,
   });
 }
 
 async function searchResultNames(page: Page): Promise<string[]> {
   return page.locator(".search-card-list__result").evaluateAll((results) => results.map((result) => (
-    result.querySelector<HTMLElement>(":scope > span:not(.sprite-art):not(.search-card-list__badge)")?.textContent?.trim() ?? ""
+    result.querySelector<HTMLElement>(".search-card-list__name")?.textContent?.trim() ?? ""
   )));
+}
+
+function searchCardLabel(card: CardIdentity): string {
+  return card.duplicateName ? `${card.name} (${card.base.cardClass})` : card.name;
+}
+
+function requestCounts(requests: readonly string[], urls: readonly string[]): number[] {
+  return urls.map((url) => requests.filter((requestUrl) => requestUrl === url).length);
+}
+
+async function performAfterResponses(page: Page, urls: readonly string[], action: () => Promise<void>): Promise<void> {
+  const responses = urls.map((url) => page.waitForResponse((response) => response.url() === url));
+  await action();
+  await Promise.all(responses);
 }
 
 async function dismissSearchFilterHelpOnLoad(page: Page): Promise<void> {
@@ -1110,7 +1133,6 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
   const expectedAllResultNames = [...model.cards]
     .sort((left, right) => left.name.localeCompare(right.name, "en-US") || left.id.localeCompare(right.id, "en-US"))
     .map((card) => card.name);
-  expect(new Set(expectedAllResultNames).size).toBe(model.cards.length);
 
   await openSearchWorkspace(page);
   expect(await searchResultNames(page)).toEqual(expectedAllResultNames);
@@ -1245,6 +1267,111 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
   expect(codexGuard.blockedRequests).toEqual([]);
 });
 
+test("Search disambiguates validated duplicate names by class throughout result and preview labels", async ({ page, request }) => {
+  const model = await loadFixtureModel(request);
+  const ironclad = model.cards.find((card) => card.id === "OVERLAP_SENTINEL")!;
+  const regent = model.cards.find((card) => card.id === "DISJOINT_SENTINEL")!;
+  const unique = model.cards.find((card) => card.id === "ALCHEMIZE")!;
+  expect([ironclad.name, regent.name]).toEqual(["Twin Signal", "Twin Signal"]);
+  expect([ironclad.duplicateName, regent.duplicateName]).toEqual([true, true]);
+  expect([ironclad.base.cardClass, regent.base.cardClass]).toEqual(["Ironclad", "Regent"]);
+  expect(unique.duplicateName).toBeUndefined();
+
+  const codexGuard = await prepareOfflinePage(page);
+  await dismissSearchFilterHelpOnLoad(page);
+  await page.goto("/");
+  await openSearchWorkspace(page);
+
+  for (const card of [ironclad, regent]) {
+    const label = searchCardLabel(card);
+    const result = searchResult(page, card);
+    await expect(result.locator(".search-card-list__name")).toHaveText(card.name);
+    await expect(result.locator(".search-card-list__class")).toHaveText(`(${card.base.cardClass})`);
+    await result.click();
+    const dialog = page.getByRole("dialog", { name: `Preview ${label}` });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("region", { name: `${label} — Base card face` })).toBeVisible();
+    await expect(dialog.getByRole("region", { name: `${label} — Upgraded card face` })).toBeVisible();
+    await expect(dialog.getByRole("img", { name: `${label} — Base card artwork` })).toBeVisible();
+    await expect(dialog.getByRole("img", { name: `${label} — Upgraded card artwork` })).toBeVisible();
+    await dialog.getByRole("button", { name: "Close preview" }).click();
+    await expect(result).toBeFocused();
+  }
+
+  const uniqueResult = searchResult(page, unique);
+  await expect(uniqueResult).toHaveAccessibleName(`Preview ${unique.name}`);
+  await expect(uniqueResult.locator(".search-card-list__class")).toHaveCount(0);
+  expect(codexGuard.attemptedRequests).toEqual([]);
+  expect(codexGuard.blockedRequests).toEqual([]);
+});
+
+test("Search preview traps real wheel scrolling and restores prior root styles", async ({ page, request }) => {
+  const model = await loadFixtureModel(request);
+  const card = model.cards.find((candidate) => candidate.id === "ALCHEMIZE")!;
+  await prepareOfflinePage(page);
+  await dismissSearchFilterHelpOnLoad(page);
+  await page.setViewportSize({ width: 1280, height: 640 });
+  await page.goto("/");
+  await openSearchWorkspace(page);
+
+  const priorStyles = await page.evaluate(() => ({
+    html: document.documentElement.getAttribute("style"),
+    body: document.body.getAttribute("style"),
+  }));
+  const expectedStyles = {
+    html: "color: rgb(1, 2, 3); overflow: auto;",
+    body: "min-height: 300vh; background-color: rgb(4, 5, 6); overflow: visible;",
+  };
+
+  try {
+    await page.evaluate(({ html, body }) => {
+      document.documentElement.setAttribute("style", html);
+      document.body.setAttribute("style", body);
+      window.scrollTo(0, 500);
+    }, expectedStyles);
+    await searchResult(page, card).click();
+    const dialog = page.getByRole("dialog", { name: `Preview ${searchCardLabel(card)}` });
+    const backdrop = page.locator(".card-preview-modal__backdrop");
+    await expect(dialog).toBeVisible();
+    await expect.poll(() => page.evaluate(() => ({
+      html: document.documentElement.style.overflow,
+      body: document.body.style.overflow,
+    }))).toEqual({ html: "hidden", body: "hidden" });
+    expect(await backdrop.evaluate((element) => getComputedStyle(element).overscrollBehavior)).toBe("contain");
+    expect(await dialog.evaluate((element) => getComputedStyle(element).overscrollBehavior)).toBe("contain");
+
+    const backgroundY = await page.evaluate(() => window.scrollY);
+    const backdropPoint = await backdrop.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + 3, y: rect.top + 3 };
+    });
+    await page.mouse.move(backdropPoint.x, backdropPoint.y);
+    await page.mouse.wheel(0, 700);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(backgroundY);
+
+    await dialog.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox).not.toBeNull();
+    await page.mouse.move(dialogBox!.x + dialogBox!.width / 2, dialogBox!.y + dialogBox!.height / 2);
+    await page.mouse.wheel(0, 700);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(backgroundY);
+
+    await dialog.getByRole("button", { name: "Close preview" }).click();
+    await expect(dialog).toBeHidden();
+    expect(await page.evaluate(() => ({
+      html: document.documentElement.getAttribute("style"),
+      body: document.body.getAttribute("style"),
+    }))).toEqual(expectedStyles);
+  } finally {
+    await page.evaluate(({ html, body }) => {
+      if (html === null) document.documentElement.removeAttribute("style");
+      else document.documentElement.setAttribute("style", html);
+      if (body === null) document.body.removeAttribute("style");
+      else document.body.setAttribute("style", body);
+    }, priorStyles);
+  }
+});
+
 test("Search preview uses only snapshot URLs with pointer, keyboard, retry, close, focus, and single-face layouts", async ({ page, request }) => {
   const model = await loadFixtureModel(request);
   const upgraded = model.cards.find((card) => card.id === "ALCHEMIZE")!;
@@ -1260,15 +1387,23 @@ test("Search preview uses only snapshot URLs with pointer, keyboard, retry, clos
   await dismissSearchFilterHelpOnLoad(page);
   await page.goto("/");
   await openSearchWorkspace(page);
-  requests.length = 0;
 
   const pointerOpener = searchResult(page, upgraded);
-  await pointerOpener.hover();
-  await pointerOpener.click();
-  const upgradedDialog = page.getByRole("dialog", { name: `Preview ${upgraded.name}` });
+  const upgradedUrls = [upgraded.baseCardUrl!, upgraded.upgradedCardUrl!];
+  const singleUrl = noUpgrade.baseCardUrl!;
+  const selectedPreviewUrls = [...upgradedUrls, singleUrl];
+  expect(requests.filter((url) => selectedPreviewUrls.includes(url))).toEqual([]);
+  await performAfterResponses(page, upgradedUrls, () => pointerOpener.hover());
+  expect(requestCounts(requests, upgradedUrls)).toEqual([1, 1]);
+  await performAfterResponses(page, [upgraded.upgradedCardUrl!], () => pointerOpener.focus());
+  expect(requestCounts(requests, upgradedUrls)).toEqual([1, 2]);
+  await performAfterResponses(page, [upgraded.upgradedCardUrl!], () => pointerOpener.click());
+  expect(requestCounts(requests, upgradedUrls)).toEqual([1, 3]);
+  const upgradedLabel = searchCardLabel(upgraded);
+  const upgradedDialog = page.getByRole("dialog", { name: `Preview ${upgradedLabel}` });
   await expect(upgradedDialog).toBeVisible();
-  await expect(upgradedDialog.getByRole("region", { name: `${upgraded.name} — Base card face` })).toBeVisible();
-  await expect(upgradedDialog.getByRole("region", { name: `${upgraded.name} — Upgraded card face` })).toBeVisible();
+  await expect(upgradedDialog.getByRole("region", { name: `${upgradedLabel} — Base card face` })).toBeVisible();
+  await expect(upgradedDialog.getByRole("region", { name: `${upgradedLabel} — Upgraded card face` })).toBeVisible();
   await expect(upgradedDialog.getByRole("status", { name: "Upgraded image failed to load" })).toBeVisible();
   await expect(page.locator(".app-shell__content")).toHaveAttribute("inert", "");
   expect(await page.getByRole("button", { name: "Search", exact: true }).evaluate((tab) => {
@@ -1283,29 +1418,35 @@ test("Search preview uses only snapshot URLs with pointer, keyboard, retry, clos
   expect(Math.abs(faces[0]!.top - faces[1]!.top)).toBeLessThanOrEqual(1);
   expect(faces[1]!.left).toBeGreaterThan(faces[0]!.left);
   failureGate.allow = true;
-  await upgradedDialog.getByRole("button", { name: "Retry Upgraded image" }).click();
-  await expect(upgradedDialog.getByRole("img", { name: `${upgraded.name} — Upgraded card artwork` })).toBeVisible();
+  const retry = upgradedDialog.getByRole("button", { name: "Retry Upgraded image" });
+  await retry.focus();
+  await performAfterResponses(page, [upgraded.upgradedCardUrl!], () => (
+    retry.press("Enter")
+  ));
+  await expect(upgradedDialog.getByRole("button", { name: "Close preview" })).toBeFocused();
+  await expect(upgradedDialog.getByRole("img", { name: `${upgradedLabel} — Upgraded card artwork` })).toBeVisible();
+  expect(requestCounts(requests, upgradedUrls)).toEqual([1, 4]);
   expect(consoleIssues.length).toBeGreaterThan(0);
   expect(consoleIssues.every((issue) => issue === "error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)"))
     .toBe(true);
   consoleIssues.length = 0;
-  const expectedUrls = [upgraded.baseCardUrl!, upgraded.upgradedCardUrl!].sort();
-  expect([...new Set(requests)].sort()).toEqual(expectedUrls);
   expect(requests.filter((url) => /\/(?:api\/cards?|runtime\/(?:render|card-data)|render-card)(?:\/|$)/i.test(new URL(url).pathname))).toEqual([]);
   await page.keyboard.press("Escape");
   await expect(upgradedDialog).toBeHidden();
   await expect(pointerOpener).toBeFocused();
 
-  requests.length = 0;
   const keyboardOpener = searchResult(page, noUpgrade);
-  await keyboardOpener.focus();
+  expect(requestCounts(requests, [singleUrl])).toEqual([0]);
+  await performAfterResponses(page, [singleUrl], () => keyboardOpener.focus());
+  expect(requestCounts(requests, [singleUrl])).toEqual([1]);
   await keyboardOpener.press("Enter");
-  const singleDialog = page.getByRole("dialog", { name: `Preview ${noUpgrade.name}` });
+  expect(requestCounts(requests, [singleUrl])).toEqual([1]);
+  const noUpgradeLabel = searchCardLabel(noUpgrade);
+  const singleDialog = page.getByRole("dialog", { name: `Preview ${noUpgradeLabel}` });
   await expect(singleDialog).toBeVisible();
-  await expect(singleDialog.getByRole("region", { name: `${noUpgrade.name} — Base card face` })).toBeVisible();
-  await expect(singleDialog.getByRole("region", { name: `${noUpgrade.name} — Upgraded card face` })).toHaveCount(0);
+  await expect(singleDialog.getByRole("region", { name: `${noUpgradeLabel} — Base card face` })).toBeVisible();
+  await expect(singleDialog.getByRole("region", { name: `${noUpgradeLabel} — Upgraded card face` })).toHaveCount(0);
   await expect(singleDialog.locator(".card-preview-modal__faces--single")).toBeVisible();
-  expect([...new Set(requests)]).toEqual([noUpgrade.baseCardUrl!]);
   await singleDialog.getByRole("button", { name: "Close preview" }).click();
   await expect(singleDialog).toBeHidden();
   await expect(keyboardOpener).toBeFocused();

@@ -135,7 +135,7 @@ describe("App snapshot cleanup", () => {
     loads.mockResolvedValue(snapshotWithDazed);
     games.mockReturnValue(game);
 
-    render(<App />);
+    const view = render(<App />);
     await screen.findByRole("combobox");
     expect(screen.getAllByRole("button", { name: /^(Daily|Hardcore Daily|Practice|Search)$/ })
       .map((button) => button.textContent)).toEqual(["Daily", "Hardcore Daily", "Practice", "Search"]);
@@ -145,16 +145,89 @@ describe("App snapshot cleanup", () => {
     expect(screen.getByRole("region", { name: "Card search workspace" })).toBeVisible();
     expect(game.setMode).not.toHaveBeenCalledWith("search");
     expect(screen.queryByRole("combobox", { name: "Guess a card" })).not.toBeInTheDocument();
-    expect(document.querySelector(".guess-grid")).toBeNull();
+    const gameSurface = view.container.querySelector<HTMLElement>(".game-tab-surface");
+    expect(gameSurface).not.toBeNull();
+    expect(gameSurface).not.toBeVisible();
+    expect(gameSurface).toHaveAttribute("inert", "");
+    expect(gameSurface?.querySelector(".guess-grid")).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Orb inventory" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Accepted answer/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Copy .* result/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Practice" }));
     expect(game.setMode).toHaveBeenCalledWith("practice");
+    expect(gameSurface).toBeVisible();
+    expect(gameSurface).not.toHaveAttribute("inert");
     expect(screen.getByText("Dazed")).toBeVisible();
     expect(screen.getByRole("checkbox", { name: "Hardcore Practice" })).toBeVisible();
     expect(screen.queryByText("Filter Mode")).not.toBeInTheDocument();
+  });
+
+  test("preserves the mounted game query, selected orb, and pending reveal across Search detours", async () => {
+    let gameState = readyGame(assistedRound());
+    games.mockImplementation(() => gameState);
+    loads.mockResolvedValue(searchSnapshot);
+
+    const view = render(<App />);
+    const input = await screen.findByRole("combobox", { name: "Guess a card" });
+    fireEvent.change(input, { target: { value: "apo" } });
+    const filter = screen.getByRole("button", { name: "Filter Orb, available" });
+    fireEvent.click(filter);
+    expect(input).toHaveValue("apo");
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    const gameSurface = view.container.querySelector<HTMLElement>(".game-tab-surface")!;
+    expect(gameSurface).not.toBeVisible();
+    expect(gameSurface).toHaveAttribute("inert", "");
+    fireEvent.click(screen.getByRole("button", { name: "Daily" }));
+
+    expect(screen.getByRole("combobox", { name: "Guess a card" })).toBe(input);
+    expect(input).toHaveValue("apo");
+    expect(screen.getByRole("button", { name: "Filter Orb, available" })).toBe(filter);
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    gameState = {
+      ...gameState,
+      round: { ...gameState.round, guesses: [submittedGuess] },
+    };
+    view.rerender(<App />);
+    expect(input).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(screen.getByRole("button", { name: "Daily" }));
+    expect(screen.getByRole("combobox", { name: "Guess a card" })).toBe(input);
+    expect(input).toBeDisabled();
+
+    const surfaces = view.container.querySelectorAll(".feature-tile__surface");
+    dispatchTransformEnd(surfaces[surfaces.length - 1]!);
+    expect(input).toBeEnabled();
+  });
+
+  test("renders Daily and Search when the browser storage getter throws", async () => {
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound()));
+    const descriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get: () => { throw new DOMException("Storage denied", "SecurityError"); },
+    });
+
+    try {
+      render(<AppErrorBoundary><App /></AppErrorBoundary>);
+      expect(await screen.findByRole("combobox", { name: "Guess a card" })).toBeVisible();
+      expect(screen.queryByText("Storage denied")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Search" }));
+      expect(screen.getByRole("region", { name: "Card search workspace" })).toBeVisible();
+      fireEvent.click(screen.getByRole("button", { name: "Close filter help" }));
+      const classGroup = screen.getByRole("group", { name: "Class" });
+      fireEvent.click(within(classGroup).getByRole("checkbox", { name: "Disable" }));
+      expect(screen.getByRole("status")).toHaveTextContent("No cards match these filters.");
+    } finally {
+      if (descriptor) Object.defineProperty(window, "localStorage", descriptor);
+    }
   });
 
   test("makes the entire App shell inert while a Search preview is open", async () => {

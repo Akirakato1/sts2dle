@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import type { LoadedSnapshot } from "../api/load-snapshot.js";
+import { getBrowserStorage } from "../browser-storage.js";
 import { createDailyRandom, createPracticeRandom } from "../../shared/random.js";
 import { selectAnswer, selectDistinctAnswer, type SelectedAnswer } from "../../shared/selection.js";
 import type { CandidateCategory, ConstraintOrbTarget, RevealOrbTarget } from "./assistance.js";
@@ -113,11 +114,6 @@ function hookReducer(state: HookState, action: HookAction): HookState {
 
 function utcDate(now = new Date()): string { return now.toISOString().slice(0, 10); }
 
-function browserStorage(): Storage | null {
-  if (typeof window === "undefined") return null;
-  try { return window.localStorage; } catch { return null; }
-}
-
 function identityFor(mode: PlayMode, sourceRevision: string, date: string): RoundStorageIdentity {
   if (mode === "practice") {
     return { mode, sourceRevision, ruleset: PRACTICE_RULESET_VERSION, utcDate: null };
@@ -158,7 +154,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     baseGroupsByKey: new Map(snapshot.baseGroups.map((group) => [group.key, group])),
     pairGroupsByKey: snapshot.pairGroupsByKey,
   }), [snapshot]);
-  const storage = browserStorage();
+  const storage = getBrowserStorage();
   const revision = snapshot.manifest.sourceRevision;
 
   const getDailyAnswer = useCallback((date: string): Promise<SelectedAnswer> => {

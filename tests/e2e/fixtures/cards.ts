@@ -83,7 +83,7 @@ const SET_FIXTURE_CARDS: readonly RawSpireCard[] = [
   }),
   fixtureCard({
     id: "OVERLAP_SENTINEL",
-    name: "Overlap Sentinel",
+    name: "Twin Signal",
     color: "ironclad",
     type: "Skill",
     type_key: "Skill",
@@ -100,7 +100,7 @@ const SET_FIXTURE_CARDS: readonly RawSpireCard[] = [
   }),
   fixtureCard({
     id: "DISJOINT_SENTINEL",
-    name: "Disjoint Sentinel",
+    name: "Twin Signal",
     color: "regent",
     type: "Attack",
     type_key: "Attack",

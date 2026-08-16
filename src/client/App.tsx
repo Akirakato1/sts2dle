@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
+import { getBrowserStorage } from "./browser-storage.js";
 import { CardSearch } from "./components/CardSearch.js";
 import { GameGuide } from "./components/GameGuide.js";
 import { GuessGrid } from "./components/GuessGrid.js";
@@ -252,31 +253,34 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
     "hardcore-daily": "Hardcore Daily",
     practice: "Practice",
   };
-  const storage = typeof window === "undefined" ? null : window.localStorage;
+  const storage = getBrowserStorage();
   return <section className="game-panel" aria-label="Card guessing controls">
     <nav className="mode-tabs" aria-label="Round mode">
       {(["daily", "hardcore-daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={activeTab === mode ? "page" : undefined} className={activeTab === mode ? "active" : ""} onClick={() => { setActiveTab(mode); void game.setMode(mode); }}>{modeLabels[mode]}</button>)}
       <button type="button" aria-current={activeTab === "search" ? "page" : undefined} className={activeTab === "search" ? "active" : ""} onClick={() => setActiveTab("search")}>Search</button>
     </nav>
-    {activeTab === "search" ? <SearchWorkspace cards={snapshot.cards} spriteMap={snapshot.spriteMap} storage={storage} /> : game.error ? <section className="load-error mode-error" role="alert">
-      <p>Unable to prepare this game mode.</p>
-      <button type="button" onClick={() => game.retryActiveMode()}>Retry</button>
-    </section> : game.status === "loading" || !game.round ? <p role="status">Preparing today&apos;s card…</p> : <RoundGame
-      key={game.roundToken}
-      round={game.round}
-      roundKey={game.roundToken}
-      snapshot={snapshot}
-      utcDate={game.dailyUtcDate}
-      onSubmit={game.submit}
-      onConsumeReveal={game.consumeReveal}
-      onConsumeFilter={game.consumeFilter}
-      onConsumeNegation={game.consumeNegation}
-      onCandidateVisibility={game.setCandidateVisibility ?? ignoreCandidateVisibility}
-      practiceHardcoreChoice={game.practiceHardcoreChoice}
-      onPracticeHardcoreChoice={game.setPracticeHardcoreChoice}
-      onForfeitPractice={game.forfeitPractice ?? ignoreCandidateVisibility}
-      onNextRound={game.nextPracticeRound ?? game.nextRound}
-    />}
+    <div className="game-tab-surface" hidden={activeTab === "search"} inert={activeTab === "search" ? true : undefined}>
+      {game.error ? <section className="load-error mode-error" role="alert">
+        <p>Unable to prepare this game mode.</p>
+        <button type="button" onClick={() => game.retryActiveMode()}>Retry</button>
+      </section> : game.status === "loading" || !game.round ? <p role="status">Preparing today&apos;s card…</p> : <RoundGame
+        key={game.roundToken}
+        round={game.round}
+        roundKey={game.roundToken}
+        snapshot={snapshot}
+        utcDate={game.dailyUtcDate}
+        onSubmit={game.submit}
+        onConsumeReveal={game.consumeReveal}
+        onConsumeFilter={game.consumeFilter}
+        onConsumeNegation={game.consumeNegation}
+        onCandidateVisibility={game.setCandidateVisibility ?? ignoreCandidateVisibility}
+        practiceHardcoreChoice={game.practiceHardcoreChoice}
+        onPracticeHardcoreChoice={game.setPracticeHardcoreChoice}
+        onForfeitPractice={game.forfeitPractice ?? ignoreCandidateVisibility}
+        onNextRound={game.nextPracticeRound ?? game.nextRound}
+      />}
+    </div>
+    {activeTab === "search" && <SearchWorkspace cards={snapshot.cards} spriteMap={snapshot.spriteMap} storage={storage} />}
   </section>;
 }
 

@@ -16,6 +16,18 @@ const cards: CardIdentity[] = ["Zulu", "Álpha", "Alpha"].map((name, index) => (
 const spriteMap: SpriteMap = { candidate: { url: "/candidate.png", width: 1, height: 1, displayScale: 1 }, guess: { url: "/guess.png", width: 1, height: 1, displayScale: 1 }, cards: Object.fromEntries(cards.map((card) => [card.id, { candidate: { x: 0, y: 0, width: 1, height: 1 }, guess: { x: 0, y: 0, width: 1, height: 1 } }])) };
 afterEach(cleanup);
 describe("SearchWorkspace", () => {
+  test("renders query, filters, and results in the approved DOM order", () => {
+    render(<SearchWorkspace cards={cards} spriteMap={spriteMap} />);
+    const workspace = screen.getByRole("region", { name: "Card search workspace" });
+    const query = screen.getByRole("searchbox", { name: "Search cards" }).closest("label")!;
+    const filters = screen.getByRole("region", { name: "Search filters" });
+    const results = screen.getByRole("list", { name: "Search results" });
+
+    expect(workspace).toContainElement(query);
+    expect(query.compareDocumentPosition(filters) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(filters.compareDocumentPosition(results) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   test("derives stable name/id-sorted NFKC substring matches without a guessed-card input", () => {
     const tiedCards = [
       { ...cards[0]!, id: "z-card", name: "Same" },

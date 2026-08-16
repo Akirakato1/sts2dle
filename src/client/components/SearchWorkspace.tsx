@@ -58,16 +58,16 @@ export function SearchWorkspace({ cards, spriteMap, storage }: SearchWorkspacePr
         if (opener) previewOpenerRef.current = opener;
       }}
     >
+      <label className="search-workspace__query">
+        Search cards
+        <input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} />
+      </label>
       <SearchFilterPanel
         state={filter}
         options={options}
         onGroupDisabledChange={(group, disabled) => update(updateCardFilterGroupDisabled(filter, group, disabled))}
         onValueChange={(group, value, selected) => update(updateCardFilterGroupValue(filter, group, value, selected))}
       />
-      <label className="search-workspace__query">
-        Search cards
-        <input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} />
-      </label>
       <SearchCardList
         results={results}
         spriteMap={spriteMap}

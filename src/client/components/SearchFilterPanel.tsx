@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { formatCardTarget } from "../../shared/comparison.js";
 import type { CardTarget } from "../../shared/domain.js";
+import { getBrowserStorage } from "../browser-storage.js";
 import {
   KEYWORD_FILTER_NONE,
   POWER_FILTER_NONE,
@@ -36,11 +37,15 @@ function formatValue(group: CardFilterGroupName, value: CardFilterValue): string
 }
 
 function dismissed(): boolean {
-  try { return window.localStorage.getItem(SEARCH_FILTER_HELP_DISMISSED_KEY) !== null; } catch { return false; }
+  const storage = getBrowserStorage();
+  if (storage === null) return false;
+  try { return storage.getItem(SEARCH_FILTER_HELP_DISMISSED_KEY) !== null; } catch { return false; }
 }
 
 function saveDismissal(): void {
-  try { window.localStorage.setItem(SEARCH_FILTER_HELP_DISMISSED_KEY, "1"); } catch { /* Best effort. */ }
+  const storage = getBrowserStorage();
+  if (storage === null) return;
+  try { storage.setItem(SEARCH_FILTER_HELP_DISMISSED_KEY, "1"); } catch { /* Best effort. */ }
 }
 
 export function SearchFilterPanel({ state, options, onGroupDisabledChange, onValueChange }: SearchFilterPanelProps): React.JSX.Element {

@@ -62,6 +62,23 @@ describe("CardPreviewModal", () => {
     }
   });
 
+  test("adds the validated class discriminator throughout a duplicate-name preview", () => {
+    const duplicateCard: CardIdentity = {
+      ...upgradedCard,
+      id: "strike-silent",
+      name: "Strike",
+      duplicateName: true,
+    };
+    render(<CardPreviewModal card={duplicateCard} onClose={() => {}} />);
+
+    expect(screen.getByRole("dialog", { name: "Preview Strike (Silent)" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Preview Strike (Silent)" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Strike (Silent) — Base card face" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Strike (Silent) — Upgraded card face" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Strike (Silent) — Base card artwork" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Strike (Silent) — Upgraded card artwork" })).toBeVisible();
+  });
+
   test("shows a centered Base face when a card has no upgrade", () => {
     const view = render(<CardPreviewModal card={baseOnlyCard} onClose={() => {}} />);
 
@@ -85,11 +102,53 @@ describe("CardPreviewModal", () => {
     fireEvent.error(upgraded);
     expect(screen.getByRole("status", { name: "Upgraded image failed to load" })).toBeVisible();
     const retry = screen.getByRole("button", { name: "Retry Upgraded image" });
-    fireEvent.click(retry);
+    retry.focus();
+    fireEvent.click(retry, { detail: 0 });
 
     const afterRetry = screen.getAllByRole("img") as HTMLImageElement[];
     expect(afterRetry[0]).toBe(base);
     expect(afterRetry[1]).not.toBe(upgraded);
+    expect(screen.getByRole("button", { name: "Close preview" })).toHaveFocus();
+
+    const outside = document.createElement("button");
+    outside.textContent = "Outside";
+    document.body.append(outside);
+    try {
+      outside.focus();
+      const recover = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
+      document.dispatchEvent(recover);
+      expect(recover.defaultPrevented).toBe(true);
+      expect(screen.getByRole("button", { name: "Close preview" })).toHaveFocus();
+
+      fireEvent.error(afterRetry[1]!);
+      const repeatedRetry = screen.getByRole("button", { name: "Retry Upgraded image" });
+      repeatedRetry.focus();
+      fireEvent.click(repeatedRetry, { detail: 0 });
+      expect(screen.getByRole("button", { name: "Close preview" })).toHaveFocus();
+    } finally {
+      outside.remove();
+    }
+  });
+
+  test("locks both scroll roots and restores their exact prior inline styles", () => {
+    const htmlStyle = document.documentElement.getAttribute("style");
+    const bodyStyle = document.body.getAttribute("style");
+    document.documentElement.setAttribute("style", "color: red; overflow: clip !important;");
+    document.body.setAttribute("style", "background: blue; overflow: scroll;");
+
+    try {
+      const view = render(<CardPreviewModal card={baseOnlyCard} onClose={() => {}} />);
+      expect(document.documentElement.style.getPropertyValue("overflow")).toBe("hidden");
+      expect(document.body.style.getPropertyValue("overflow")).toBe("hidden");
+      view.unmount();
+      expect(document.documentElement.getAttribute("style")).toBe("color: red; overflow: clip !important;");
+      expect(document.body.getAttribute("style")).toBe("background: blue; overflow: scroll;");
+    } finally {
+      if (htmlStyle === null) document.documentElement.removeAttribute("style");
+      else document.documentElement.setAttribute("style", htmlStyle);
+      if (bodyStyle === null) document.body.removeAttribute("style");
+      else document.body.setAttribute("style", bodyStyle);
+    }
   });
 
   test("reports an unavailable snapshot face without creating an image request", () => {
