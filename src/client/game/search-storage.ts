@@ -14,6 +14,18 @@ const envelopeSchema = z.object({ version: z.literal(SEARCH_FILTER_STORAGE_VERSI
 
 function removeSearchFilter(storage: Storage): void { try { storage.removeItem(SEARCH_FILTER_STORAGE_KEY); } catch { /* Best effort. */ } }
 
+function persistenceFilter(state: CardFilterState): CardFilterState {
+  return {
+    cardClass: { disabled: state.cardClass.disabled, selected: [...state.cardClass.selected] },
+    cardType: { disabled: state.cardType.disabled, selected: [...state.cardType.selected] },
+    mana: { disabled: state.mana.disabled, selected: [...state.mana.selected] },
+    rarity: { disabled: state.rarity.disabled, selected: [...state.rarity.selected] },
+    target: { disabled: state.target.disabled, selected: [...state.target.selected] },
+    powers: { disabled: state.powers.disabled, selected: [...state.powers.selected] },
+    keywords: { disabled: state.keywords.disabled, selected: [...state.keywords.selected] },
+  };
+}
+
 export function loadSearchFilter(storage: Storage | null | undefined, options: CardFilterOptions): CardFilterState {
   if (storage === null || storage === undefined) return createDefaultCardFilter();
   let raw: string | null;
@@ -32,5 +44,5 @@ export function loadSearchFilter(storage: Storage | null | undefined, options: C
 
 export function saveSearchFilter(storage: Storage | null | undefined, state: CardFilterState): void {
   if (storage === null || storage === undefined) return;
-  try { storage.setItem(SEARCH_FILTER_STORAGE_KEY, JSON.stringify({ version: SEARCH_FILTER_STORAGE_VERSION, filter: state })); } catch { /* Best effort. */ }
+  try { storage.setItem(SEARCH_FILTER_STORAGE_KEY, JSON.stringify({ version: SEARCH_FILTER_STORAGE_VERSION, filter: persistenceFilter(state) })); } catch { /* Best effort. */ }
 }

@@ -39,3 +39,27 @@ test("writes no query, modal, card data, or image bytes", () => {
   const storage = new MemoryStorage(); saveSearchFilter(storage, createDefaultCardFilter());
   expect(Object.keys(JSON.parse(storage.getItem(SEARCH_FILTER_STORAGE_KEY)!))).toEqual(["version", "filter"]);
 });
+
+test("persists only canonical filter and group fields from runtime objects", () => {
+  const storage = new MemoryStorage();
+  const state = {
+    ...createDefaultCardFilter(),
+    query: "Dazed",
+    modal: { open: true },
+    card: { id: "card", name: "Dazed" },
+    imageBytes: "not-a-filter",
+    mana: { disabled: false, selected: [2], imageBytes: "not-a-group" },
+  };
+
+  saveSearchFilter(storage, state as typeof state & Parameters<typeof saveSearchFilter>[1]);
+
+  expect(JSON.parse(storage.getItem(SEARCH_FILTER_STORAGE_KEY)!)).toEqual({
+    version: 1,
+    filter: {
+      cardClass: { disabled: true, selected: [] }, cardType: { disabled: true, selected: [] },
+      mana: { disabled: false, selected: [2] }, rarity: { disabled: true, selected: [] },
+      target: { disabled: true, selected: [] }, powers: { disabled: true, selected: [] },
+      keywords: { disabled: true, selected: [] },
+    },
+  });
+});
