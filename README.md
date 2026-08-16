@@ -1,10 +1,14 @@
 # STS-dle
 
-STS-dle is an unofficial Slay the Spire 2 card-deduction game. Daily and Practice rounds compare the base and upgraded forms of every card across seven features: Class, Type, Mana, Rarity, Target, Powers, and Keywords. For Powers and Keywords, exact sets are green, any corresponding overlap is yellow, and no overlap is red.
+STS-dle is an unofficial Slay the Spire 2 card-deduction game. Its four tabs are Daily, Hardcore Daily, Practice, and Search. Game rounds compare the base and upgraded forms of every card across seven features: Class, Type, Mana, Rarity, Target, Powers, and Keywords. For Powers and Keywords, exact sets are green, any corresponding overlap is yellow, and no overlap is red.
 
 ## Gameplay
 
-Daily offers the shared UTC-date puzzle with three one-use assistance orbs and progressive card-name hints. Hardcore Daily is a separate UTC-date puzzle with no candidates, orbs, or progressive name hints: enter a complete remembered card name, with punctuation, case, and spacing ignored. Practice provides unlimited normal assisted rounds; use **End game** to forfeit the current round and reveal its accepted answers. Its optional Manual Filter Mode persists for the current round: selected Class, Type, Mana, Rarity, and Target choices use OR; selected Powers and Keywords each use AND; enabled groups combine with AND; and base and upgraded forms are evaluated separately. Power **None** matches a form with no powers and clears other Power choices, while Keyword **None** does the same for keywords. Starting a **New Practice Round** resets the filters.
+Daily offers the shared UTC-date puzzle with three one-use assistance orbs and progressive card-name hints. Hardcore Daily is a separate UTC-date puzzle with no candidates, orbs, or progressive name hints: enter a complete remembered card name, with punctuation, case, and spacing ignored.
+
+Practice provides unlimited assisted rounds; use **End game** to forfeit the current round and reveal its accepted answers. Before playing, **Hardcore Practice** can instead be selected for the same assistance-free memory entry used by Hardcore Daily. The choice persists across reloads and new Practice rounds, and locks after the first guess or orb use.
+
+Search is a utility workspace, not a game round. It filters every card in the active validated snapshot: scalar choices use OR, Powers and Keywords use AND, enabled groups combine with AND, and base and upgraded forms are checked separately. Filter selections persist locally across reloads; the name query, result scroll, and open preview do not. Opening a result compares its Base and Upgraded card faces using only that card's snapshot-backed `baseCardUrl` and `upgradedCardUrl`. The running application has no card-data API or runtime card renderer.
 
 Round progress and Daily statistics are persisted only in the local browser. STS-dle has no account or database for player progress, and Practice results are not shareable.
 
@@ -87,7 +91,7 @@ If the commit succeeds but the push fails, retry it with:
 git push origin HEAD:main
 ```
 
-The snapshot contains candidate and guess artwork plus exceptional framed fallback cards. Full accepted-answer cards normally load directly from the official CDN in each player's browser; the server does not proxy them. Install local Playwright Chromium only when a missing framed card, such as Mad Science, needs to be rendered for a release.
+The snapshot contains candidate and guess artwork, preview URL references, and exceptional framed fallback cards. Full accepted-answer and Search preview cards normally load directly from the official CDN in each player's browser; the server does not proxy or render them at runtime. The unchanged release-time fallback renderer remains available only to generate a missing framed card, such as Mad Science, while building a snapshot; install local Playwright Chromium when that fallback is needed.
 
 Daily selection uses the UTC date and the active content revision. A restart with the same revision preserves that UTC day's answer and stored progress. If the stable source changes during the same UTC day, the revision changes and the browser starts the new revision-scoped Daily instead of mixing old guesses with new card data. Practice rounds are random and never write Daily round storage or expose sharing.
 

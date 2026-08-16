@@ -42,10 +42,12 @@ describe("GameGuide", () => {
         "Drag an orb, or operate it with click, tap, or keyboard.",
         "Neutral, Green, and Red visibility controls only hide or show candidate rows; accepted answers never change.",
       ],
-      "Practice Filter Mode": [
-        "Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.",
-        "Scalar groups use OR; Powers and Keywords use AND; enabled groups combine with AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.",
-        "Power None matches a form with no powers and clears other power choices; Keyword None does the same for keywords.",
+      "Search": [
+        "Search filters all snapshot cards and is not a game round.",
+        "Disable accepts any value; an enabled empty group matches no cards.",
+        "Scalar choices use OR, Powers and Keywords use AND, and groups combine with AND.",
+        "Base and upgraded forms are checked separately; None matches an empty set.",
+        "Open a result to compare its Base and Upgraded cards.",
       ],
       "Name hints": [
         "After 5 wrong guesses, word-length lines appear.",
@@ -55,7 +57,7 @@ describe("GameGuide", () => {
       "Modes": [
         "Daily: one UTC-date round that restores locally and creates a share result after a win.",
         "Hardcore Daily: no candidate list, orbs, or progressive name hints; enter a complete card name from memory (punctuation, case, and spacing ignored).",
-        "Practice: repeatable rounds that restore the current round and reset filters on a new round.",
+        "Practice: repeatable assisted rounds; choose Hardcore Practice before play for assistance-free memory entry. The choice persists across reloads and new rounds, and locks after the first guess or orb.",
         "End game forfeits the current Practice round.",
       ],
     } as const;
@@ -72,8 +74,8 @@ describe("GameGuide", () => {
     }
     expect(dialog.querySelectorAll(".result-legend__swatch[aria-hidden='true']")).toHaveLength(3);
     expect(dialog.querySelectorAll("svg[data-orb-kind]")).toHaveLength(3);
-    expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(17);
-    expect(dialog).not.toHaveTextContent("Hardcore Practice");
+    expect(dialog.querySelectorAll(".game-guide__row-icon")).toHaveLength(19);
+    expect(dialog).not.toHaveTextContent("Practice Filter Mode");
     expect(view.container.querySelector("details")).toBeNull();
   });
 

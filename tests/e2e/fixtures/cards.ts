@@ -68,6 +68,20 @@ const SET_FIXTURE_CARDS: readonly RawSpireCard[] = [
     upgrade: { add_innate: 1 },
   }),
   fixtureCard({
+    id: "SEARCH_FORM_SENTINEL",
+    name: "Search Form Sentinel",
+    color: "colorless",
+    type: "Skill",
+    type_key: "Skill",
+    rarity: "Token",
+    rarity_key: "Token",
+    cost: 1,
+    target: "Self",
+    powers_applied: [],
+    keywords_key: ["Ethereal", "Exhaust"],
+    upgrade: { cost: 0, remove_ethereal: 1 },
+  }),
+  fixtureCard({
     id: "OVERLAP_SENTINEL",
     name: "Overlap Sentinel",
     color: "ironclad",
@@ -169,6 +183,11 @@ const SET_FIXTURE_CARDS: readonly RawSpireCard[] = [
 
 function withE2eUpgrade(card: RawSpireCard): RawSpireCard {
   const copy = structuredClone(card);
+  if (copy.id === "DAZED") {
+    copy.upgrade = null;
+    copy.image_url_card_upg = null;
+    return copy;
+  }
   if (!copy.upgrade || Object.keys(copy.upgrade).length === 0) {
     copy.upgrade = { fixture_upgrade: true };
   }
@@ -183,7 +202,9 @@ function pairedCopy(card: RawSpireCard): RawSpireCard {
     name: `${card.name} Pair`,
     image_url: `/fixture-art/${card.id.toLowerCase()}-pair.webp`,
     image_url_card: `${FULL_CARD_ORIGIN}/${card.id.toLowerCase()}_pair.webp`,
-    image_url_card_upg: `${FULL_CARD_ORIGIN}/${card.id.toLowerCase()}_pair_upg.webp`,
+    image_url_card_upg: card.upgrade && Object.keys(card.upgrade).length > 0
+      ? `${FULL_CARD_ORIGIN}/${card.id.toLowerCase()}_pair_upg.webp`
+      : null,
   };
   if (card.id === "UNIQUE_SENTINEL") {
     copy.powers_applied = [

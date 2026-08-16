@@ -146,11 +146,13 @@ export function GameGuide(): React.JSX.Element {
             </ul>
           </section>
           <section>
-            <h3>Practice Filter Mode</h3>
+            <h3>Search</h3>
             <ul className="game-guide__row-list">
-              <li><GuideRowIcon kind="controls" /><span>Practice Filter Mode checklists: Disable accepts any value; an enabled group with no checks matches no cards.</span></li>
-              <li><GuideRowIcon kind="controls" /><span>Scalar groups use OR; Powers and Keywords use AND; enabled groups combine with AND. Base and upgraded forms are checked separately, while orbs and category highlights pause.</span></li>
-              <li><GuideRowIcon kind="controls" /><span>Power None matches a form with no powers and clears other power choices; Keyword None does the same for keywords.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Search filters all snapshot cards and is not a game round.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Disable accepts any value; an enabled empty group matches no cards.</span></li>
+              <li><GuideRowIcon kind="controls" /><span>Scalar choices use OR, Powers and Keywords use AND, and groups combine with AND.</span></li>
+              <li><GuideRowIcon kind="card" /><span>Base and upgraded forms are checked separately; None matches an empty set.</span></li>
+              <li><GuideRowIcon kind="card" /><span>Open a result to compare its Base and Upgraded cards.</span></li>
             </ul>
           </section>
           <section>
@@ -166,7 +168,7 @@ export function GameGuide(): React.JSX.Element {
             <ul className="game-guide__row-list">
               <li><GuideRowIcon kind="daily" /><span>Daily: one UTC-date round that restores locally and creates a share result after a win.</span></li>
               <li><GuideRowIcon kind="hardcore" /><span>Hardcore Daily: no candidate list, orbs, or progressive name hints; enter a complete card name from memory (punctuation, case, and spacing ignored).</span></li>
-              <li><GuideRowIcon kind="practice" /><span>Practice: repeatable rounds that restore the current round and reset filters on a new round.</span></li>
+              <li><GuideRowIcon kind="practice" /><span>Practice: repeatable assisted rounds; choose Hardcore Practice before play for assistance-free memory entry. The choice persists across reloads and new rounds, and locks after the first guess or orb.</span></li>
               <li><GuideRowIcon kind="forfeit" /><span>End game forfeits the current Practice round.</span></li>
             </ul>
           </section>
