@@ -10,14 +10,15 @@ export interface CardPreviewModalProps {
 type FaceStatus = "loading" | "ready" | "error";
 
 interface CardFaceProps {
+  cardName: string;
   label: "Base" | "Upgraded";
   url: string | null;
 }
 
-function CardFace({ label, url }: CardFaceProps): React.JSX.Element {
+function CardFace({ cardName, label, url }: CardFaceProps): React.JSX.Element {
   const [{ status, attempt }, setFace] = useState<{ status: FaceStatus; attempt: number }>({ status: "loading", attempt: 0 });
 
-  return <section className="card-preview-modal__face-section" aria-label={`${label} card face`} style={{ textAlign: "center" }}>
+  return <section className="card-preview-modal__face-section" aria-label={`${cardName} — ${label} card face`} style={{ textAlign: "center" }}>
     <h3>{label}</h3>
     <div className="card-preview-modal__face" data-card-preview-face style={{ position: "relative", width: "400px", height: "520px", overflow: "hidden", background: "#0e0d0b" }}>
       {!url ? <p role="status" aria-label={`${label} image unavailable`}>{label} image unavailable.</p> : <>
@@ -29,7 +30,7 @@ function CardFace({ label, url }: CardFaceProps): React.JSX.Element {
         <img
           key={`${label}-${attempt}`}
           src={url}
-          alt={`${label} card artwork`}
+          alt={`${cardName} — ${label} card artwork`}
           onLoad={() => setFace((face) => ({ ...face, status: "ready" }))}
           onError={() => setFace((face) => ({ ...face, status: "error" }))}
           style={{ width: "400px", height: "520px", objectFit: "contain" }}
@@ -81,8 +82,8 @@ export function CardPreviewModal({ card, onClose }: CardPreviewModalProps): Reac
         <button ref={closeRef} type="button" aria-label="Close preview" onClick={close}>×</button>
       </header>
       <div className={`card-preview-modal__faces${card.hasUpgrade ? "" : " card-preview-modal__faces--single"}`} style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "1rem" }}>
-        <CardFace label="Base" url={card.baseCardUrl} />
-        {card.hasUpgrade && <CardFace label="Upgraded" url={card.upgradedCardUrl} />}
+        <CardFace cardName={card.name} label="Base" url={card.baseCardUrl} />
+        {card.hasUpgrade && <CardFace cardName={card.name} label="Upgraded" url={card.upgradedCardUrl} />}
       </div>
     </div>
   </div>;

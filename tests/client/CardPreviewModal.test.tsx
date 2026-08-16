@@ -53,6 +53,10 @@ describe("CardPreviewModal", () => {
 
     expect(screen.getByText("Base")).toBeVisible();
     expect(screen.getByText("Upgraded")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Blur — Base card face" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Blur — Upgraded card face" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Blur — Base card artwork" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Blur — Upgraded card artwork" })).toBeVisible();
     for (const face of document.querySelectorAll<HTMLElement>("[data-card-preview-face]")) {
       expect(face).toHaveStyle({ width: "400px", height: "520px" });
     }
@@ -63,6 +67,9 @@ describe("CardPreviewModal", () => {
 
     expect(screen.getByText("Base")).toBeVisible();
     expect(screen.queryByText("Upgraded")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Defend — Base card face" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Defend — Base card artwork" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Defend — Upgraded card face" })).not.toBeInTheDocument();
     expect(view.container.querySelector(".card-preview-modal__faces--single")).not.toBeNull();
   });
 
