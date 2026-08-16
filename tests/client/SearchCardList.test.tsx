@@ -14,8 +14,9 @@ test("renders candidate sprites and accessible form-match preview buttons", () =
   render(<SearchCardList results={[{ card: cards[0]!, formMatch: "base-only" }, { card: cards[1]!, formMatch: "upgrade-only" }, { card: cards[2]!, formMatch: "both" }]} spriteMap={spriteMap} onPreview={vi.fn()} onWarmPreview={vi.fn()} />);
   expect(screen.getAllByRole("button", { name: /Preview/ })).toHaveLength(cards.length); expect(screen.getByRole("button", { name: "Preview Apparition — Base only" })).toBeVisible(); expect(screen.getByRole("button", { name: "Preview Alchemize — Upgrade only" })).toBeVisible(); expect(screen.getByRole("button", { name: "Preview Afterimage" })).toBeVisible(); expect(screen.getAllByRole("img")).toHaveLength(cards.length);
 });
-test("warms on pointer/focus and previews on click or Enter", () => {
+test("warms on pointer/focus and lets native Enter activation preview exactly once", () => {
   const onPreview = vi.fn(); const onWarmPreview = vi.fn(); render(<SearchCardList results={[{ card: cards[0]!, formMatch: "both" }]} spriteMap={spriteMap} onPreview={onPreview} onWarmPreview={onWarmPreview} />);
-  const button = screen.getByRole("button", { name: "Preview Apparition" }); fireEvent.pointerEnter(button); fireEvent.focus(button); fireEvent.click(button); fireEvent.keyDown(button, { key: "Enter" });
-  expect(onWarmPreview).toHaveBeenCalledWith(cards[0]); expect(onPreview).toHaveBeenCalledTimes(2); expect(onPreview).toHaveBeenLastCalledWith(cards[0]);
+  const button = screen.getByRole("button", { name: "Preview Apparition" }); fireEvent.pointerEnter(button); fireEvent.focus(button);
+  fireEvent.keyDown(button, { key: "Enter" }); fireEvent.click(button);
+  expect(onWarmPreview).toHaveBeenCalledWith(cards[0]); expect(onPreview).toHaveBeenCalledTimes(1); expect(onPreview).toHaveBeenLastCalledWith(cards[0]);
 });

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -31,17 +33,19 @@ describe("SearchFilterPanel", () => {
     fireEvent.click(within(group).getByRole("checkbox", { name: "Disable" }));
     expect(onGroupDisabledChange).toHaveBeenCalledWith("cardClass", true); expect(onValueChange).toHaveBeenCalledWith("cardClass", "Ironclad", true);
   });
-  test("opens first-time help, traps focus, closes on Escape or true backdrop, and restores focus", async () => {
+  test("opens first-time help, explains every matching rule, traps Tab and Shift+Tab, and restores focus", async () => {
     const view = renderPanel(); const trigger = screen.getByRole("button", { name: "Filter help" }); const close = screen.getByRole("button", { name: "Close filter help" });
-    expect(close).toHaveFocus(); expect(screen.getByRole("dialog", { name: "Filter help" })).toHaveTextContent("Base and upgraded forms are evaluated separately");
+    const dialog = screen.getByRole("dialog", { name: "Filter help" }); expect(close).toHaveFocus();
+    expect(dialog).toHaveTextContent("Disable accepts any value for that group"); expect(dialog).toHaveTextContent("An enabled group with nothing checked matches no cards"); expect(dialog).toHaveTextContent("Class, Type, Mana, Rarity, and Target use OR within each group"); expect(dialog).toHaveTextContent("Powers and Keywords use AND"); expect(dialog).toHaveTextContent("None means that form has no Powers or Keywords and clears other choices"); expect(dialog).toHaveTextContent("Enabled groups combine with AND"); expect(dialog).toHaveTextContent("Base and upgraded forms are evaluated separately");
     const tab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" }); document.dispatchEvent(tab); expect(tab.defaultPrevented).toBe(true); expect(close).toHaveFocus();
+    const shiftTab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab", shiftKey: true }); document.dispatchEvent(shiftTab); expect(shiftTab.defaultPrevented).toBe(true); expect(close).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" }); await waitFor(() => expect(trigger).toHaveFocus()); expect(window.localStorage.getItem(SEARCH_FILTER_HELP_DISMISSED_KEY)).toBe("1");
     fireEvent.click(trigger); fireEvent.click(screen.getByRole("dialog", { name: "Filter help" })); expect(screen.getByRole("dialog", { name: "Filter help" })).toBeVisible();
     fireEvent.click(view.container.querySelector(".search-filter-help__backdrop")!); expect(screen.queryByRole("dialog", { name: "Filter help" })).not.toBeInTheDocument();
   });
   test("keeps 44px controls and marks disabled values visually", () => {
     window.localStorage.setItem(SEARCH_FILTER_HELP_DISMISSED_KEY, "1"); renderPanel();
-    expect(screen.getByRole("button", { name: "Filter help" })).toHaveClass("search-filter__help-trigger");
+    const stylesheet = readFileSync(resolve(process.cwd(), "src/client/styles/search.css"), "utf8"); expect(stylesheet).toContain(".search-filter__help-trigger, .search-filter-help__close { display: inline-flex; min-width: 44px; min-height: 44px;"); expect(stylesheet).toContain(".search-filter__choice { display: flex; min-height: 44px;");
     expect(screen.getByRole("group", { name: "Type" }).querySelector(".search-filter__values--disabled")).not.toBeNull();
   });
 });
