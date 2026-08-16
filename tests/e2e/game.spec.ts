@@ -12,6 +12,7 @@ import {
 import { compareGuess, formatFeatureValue, sameFeatureValue } from "../../src/shared/comparison.js";
 import { createDailyRandom } from "../../src/shared/random.js";
 import { selectAnswer, type SelectedAnswer } from "../../src/shared/selection.js";
+import { collectCardFilterOptions } from "../../src/client/game/card-filter.js";
 import {
   installOfficialCodexBlock,
   type OfficialCodexNetworkGuard,
@@ -1094,21 +1095,40 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Practice" }).click();
+  const distinctiveGuess = model.practiceOrbFixture.guess;
+  await submitGuessAndWait(page, distinctiveGuess);
+  await expect(guessRow(page, distinctiveGuess)).toBeVisible();
+  await expect(page.getByRole("button", { name: "End game" })).toBeVisible();
   const practiceBefore = await page.evaluate(() => localStorage.getItem("stsdle:round:practice:v1"));
-  const practiceRoundBefore = (await storedRound(page, "stsdle:round:practice:v1")).round.roundId;
+  const practiceEnvelopeBefore = await storedRound(page, "stsdle:round:practice:v1");
+  expect(practiceEnvelopeBefore.round).toMatchObject({
+    roundId: PRACTICE_ROUND_IDS[0],
+    status: "playing",
+    guesses: [{ cardId: distinctiveGuess.id }],
+  });
+
+  const expectedAllResultNames = [...model.cards]
+    .sort((left, right) => left.name.localeCompare(right.name, "en-US") || left.id.localeCompare(right.id, "en-US"))
+    .map((card) => card.name);
+  expect(new Set(expectedAllResultNames).size).toBe(model.cards.length);
 
   await openSearchWorkspace(page);
-  await expect(page.getByRole("list", { name: "Search results" }).getByRole("button"))
-    .toHaveCount(model.cards.length);
+  expect(await searchResultNames(page)).toEqual(expectedAllResultNames);
   expect(await page.evaluate((key) => localStorage.getItem(key), SEARCH_FILTER_STORAGE_KEY)).toBeNull();
   expect(await page.evaluate(() => localStorage.getItem("stsdle:round:practice:v1"))).toBe(practiceBefore);
   await page.getByRole("button", { name: "Practice" }).click();
-  expect((await storedRound(page, "stsdle:round:practice:v1")).round.roundId).toBe(practiceRoundBefore);
+  await expect(guessRow(page, distinctiveGuess)).toBeVisible();
+  await expect(page.getByRole("button", { name: "End game" })).toBeVisible();
+  expect(await storedRound(page, "stsdle:round:practice:v1")).toEqual(practiceEnvelopeBefore);
+  expect(await page.evaluate(() => localStorage.getItem("stsdle:round:practice:v1"))).toBe(practiceBefore);
   await openSearchWorkspace(page);
 
   const filterPanel = page.getByRole("region", { name: "Search filters" });
   const classGroup = filterPanel.getByRole("group", { name: "Class" });
   await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  await expect(page.getByRole("list", { name: "Search results" }).getByRole("button")).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "No cards match these filters." }))
+    .toHaveText("No cards match these filters.");
   await classGroup.getByRole("checkbox", { name: "Silent" }).check();
   await classGroup.getByRole("checkbox", { name: "Event" }).check();
   expect(await searchResultNames(page)).toEqual([
@@ -1170,12 +1190,20 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
   await keywordsGroup.getByRole("checkbox", { name: "Ethereal" }).check();
   await expect(searchResult(page, oppositeForms)).toHaveCount(0);
 
-  await manaGroup.getByRole("checkbox", { name: "Disable" }).check();
-  await keywordsGroup.getByRole("checkbox", { name: "Disable" }).check();
-  await classGroup.getByRole("checkbox", { name: "Disable" }).check();
-  await manaGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
-  for (const choice of await manaGroup.getByRole("checkbox").all().then((choices) => choices.slice(1))) {
-    if (!(await choice.isChecked())) await choice.check();
+  const groups = await filterPanel.getByRole("group").all();
+  for (const group of groups) {
+    const disable = group.getByRole("checkbox", { name: "Disable" });
+    if (await disable.isChecked()) await disable.uncheck();
+    for (const choice of await group.getByRole("checkbox").all().then((choices) => choices.slice(1))) {
+      if (await choice.isChecked()) await choice.uncheck();
+    }
+    await disable.check();
+  }
+  await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
+  const canonicalClassValues = ["Ironclad", "Silent", "Defect", "Necrobinder", "Regent", "Neutral", "Event"] as const;
+  expect(collectCardFilterOptions(model.cards).cardClass).toEqual(canonicalClassValues);
+  for (const value of canonicalClassValues) {
+    await classGroup.getByRole("checkbox", { name: value }).check();
   }
   const query = page.getByRole("searchbox", { name: "Search cards" });
   await query.fill("a");
@@ -1186,20 +1214,31 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
   await opener.click();
   await expect(page.getByRole("dialog", { name: "Preview Malaise Pair" })).toBeVisible();
   const persisted = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), SEARCH_FILTER_STORAGE_KEY);
-  expect(Object.keys(persisted).sort()).toEqual(["filter", "version"]);
-  expect(JSON.stringify(persisted)).not.toMatch(/query|modal|cardData|image/i);
+  expect(persisted).toStrictEqual({
+    version: 1,
+    filter: {
+      cardClass: { disabled: false, selected: canonicalClassValues },
+      cardType: { disabled: true, selected: [] },
+      mana: { disabled: true, selected: [] },
+      rarity: { disabled: true, selected: [] },
+      target: { disabled: true, selected: [] },
+      powers: { disabled: true, selected: [] },
+      keywords: { disabled: true, selected: [] },
+    },
+  });
 
   await page.reload();
   await expect(page.getByRole("dialog", { name: /Preview/ })).toHaveCount(0);
   await openSearchWorkspace(page);
+  await expect(page.getByRole("dialog", { name: /Preview/ })).toHaveCount(0);
   await expect(query).toHaveValue("");
-  await expect(classGroup.getByRole("checkbox", { name: "Disable" })).toBeChecked();
-  await expect(classGroup.getByRole("checkbox", { name: "Silent" })).toBeChecked();
-  await expect(manaGroup.getByRole("checkbox", { name: "Disable" })).not.toBeChecked();
-  for (const choice of await manaGroup.getByRole("checkbox").all().then((choices) => choices.slice(1))) {
-    await expect(choice).toBeChecked();
+  await expect(classGroup.getByRole("checkbox", { name: "Disable" })).not.toBeChecked();
+  for (const value of canonicalClassValues) {
+    await expect(classGroup.getByRole("checkbox", { name: value })).toBeChecked();
   }
   expect(await resultList.evaluate((list) => list.scrollTop)).toBe(0);
+  expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), SEARCH_FILTER_STORAGE_KEY))
+    .toStrictEqual(persisted);
   expect(await page.evaluate(() => localStorage.getItem("stsdle:round:practice:v1"))).toBe(practiceBefore);
   expect(consoleIssues).toEqual([]);
   expect(codexGuard.attemptedRequests).toEqual([]);
@@ -2235,9 +2274,10 @@ for (const viewport of [
         listClientHeight: list.clientHeight,
         listScrollHeight: list.scrollHeight,
         listOverflowY: getComputedStyle(list).overflowY,
+        listScrollTopBefore: list.scrollTop,
       };
     });
-    expect(searchGeometry.pageScrollWidth).toBeLessThanOrEqual(searchGeometry.pageClientWidth);
+    expect(searchGeometry.pageScrollWidth).toBe(searchGeometry.pageClientWidth);
     for (const element of searchGeometry.contained) {
       expect(element.left, `${element.selector} left containment`).toBeGreaterThanOrEqual(searchGeometry.shell.left - 1);
       expect(element.right, `${element.selector} right containment`).toBeLessThanOrEqual(searchGeometry.shell.right + 1);
@@ -2245,6 +2285,21 @@ for (const viewport of [
     }
     expect(searchGeometry.listScrollHeight).toBeGreaterThan(searchGeometry.listClientHeight);
     expect(searchGeometry.listOverflowY).toBe("auto");
+    const listScrollOwnership = await resultList.evaluate((list) => {
+      const beforeDocument = { x: window.scrollX, y: window.scrollY };
+      list.scrollTop = Math.min(160, list.scrollHeight - list.clientHeight);
+      list.dispatchEvent(new Event("scroll"));
+      return {
+        beforeDocument,
+        afterDocument: { x: window.scrollX, y: window.scrollY },
+        listScrollTop: list.scrollTop,
+        pageClientWidth: document.documentElement.clientWidth,
+        pageScrollWidth: document.documentElement.scrollWidth,
+      };
+    });
+    expect(listScrollOwnership.listScrollTop).toBeGreaterThan(searchGeometry.listScrollTopBefore);
+    expect(listScrollOwnership.afterDocument).toEqual(listScrollOwnership.beforeDocument);
+    expect(listScrollOwnership.pageScrollWidth).toBe(listScrollOwnership.pageClientWidth);
 
     const previewCard = model.cards.find((card) => card.id === "ALCHEMIZE")!;
     const previewOpener = searchResult(page, previewCard);
@@ -2263,13 +2318,19 @@ for (const viewport of [
       });
       const searchTab = document.querySelector<HTMLButtonElement>(".mode-tabs button:last-child")!;
       searchTab.focus();
+      const beforeDocument = { x: window.scrollX, y: window.scrollY };
+      dialog.scrollTop = Math.min(160, dialog.scrollHeight - dialog.clientHeight);
+      dialog.dispatchEvent(new Event("scroll"));
       return {
         dialog: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
         clientHeight: dialog.clientHeight,
         scrollHeight: dialog.scrollHeight,
+        scrollTop: dialog.scrollTop,
         overflowY: getComputedStyle(dialog).overflowY,
         viewport: { width: root.clientWidth, height: window.innerHeight },
         pageScrollWidth: root.scrollWidth,
+        beforeDocument,
+        afterDocument: { x: window.scrollX, y: window.scrollY },
         faces,
         searchTabFocusBlocked: document.activeElement !== searchTab,
       };
@@ -2280,7 +2341,8 @@ for (const viewport of [
     expect(previewGeometry.dialog.bottom).toBeLessThanOrEqual(previewGeometry.viewport.height);
     expect(previewGeometry.overflowY).toBe("auto");
     expect(previewGeometry.scrollHeight).toBeGreaterThanOrEqual(previewGeometry.clientHeight);
-    expect(previewGeometry.pageScrollWidth).toBeLessThanOrEqual(previewGeometry.viewport.width);
+    expect(previewGeometry.pageScrollWidth).toBe(previewGeometry.viewport.width);
+    expect(previewGeometry.afterDocument).toEqual(previewGeometry.beforeDocument);
     expect(previewGeometry.searchTabFocusBlocked).toBe(true);
     expect(previewGeometry.faces).toHaveLength(2);
     for (const face of previewGeometry.faces) {
@@ -2290,6 +2352,10 @@ for (const viewport of [
     }
     if (viewport.width < 1000) {
       expect(previewGeometry.scrollHeight).toBeGreaterThan(previewGeometry.clientHeight);
+      expect(previewGeometry.scrollTop).toBeGreaterThan(0);
+    } else {
+      expect(previewGeometry.scrollHeight).toBe(previewGeometry.clientHeight);
+      expect(previewGeometry.scrollTop).toBe(0);
     }
     await preview.getByRole("button", { name: "Close preview" }).click();
     await expect(previewOpener).toBeFocused();
