@@ -7,17 +7,11 @@ import {
   type AssistanceState,
   type CandidateCategory,
 } from "../game/assistance.js";
-import {
-  classifyPracticeCandidate,
-  type CandidateFormMatch,
-  type PracticeFilterState,
-} from "../game/practice-filter.js";
 import { SpriteArt } from "./SpriteArt.js";
 
 export interface ClassifiedCandidate {
   card: CardIdentity;
   category: CandidateCategory;
-  formMatch: CandidateFormMatch;
 }
 
 export type CardSearchMode =
@@ -30,7 +24,6 @@ export interface CardSearchProps {
   spriteMap: SpriteMap;
   guessedCardIds: ReadonlySet<string>;
   assistance: AssistanceState | null;
-  practiceFilter?: PracticeFilterState | null;
   roundKey: string | number;
   disabled?: boolean;
   assistanceControlsDisabled?: boolean;
@@ -51,27 +44,16 @@ export function searchCards(
   guessedCardIds: ReadonlySet<string>,
   assistance: AssistanceState | null,
   cardsById: ReadonlyMap<string, CardIdentity>,
-  practiceFilter: PracticeFilterState | null = null,
 ): ClassifiedCandidate[] {
   const prefix = query.trim().toLocaleLowerCase("en-US");
   const sortedCards = cards
     .filter((card) => !guessedCardIds.has(card.id))
     .sort((left, right) => left.name.localeCompare(right.name, "en-US") || compareCodeUnits(left.id, right.id));
 
-  if (practiceFilter?.enabled) {
-    return sortedCards
-      .flatMap((card) => {
-        const formMatch = classifyPracticeCandidate(card, practiceFilter);
-        return formMatch === null ? [] : [{ card, category: "neutral" as const, formMatch }];
-      })
-      .filter(({ card }) => !prefix || card.name.toLocaleLowerCase("en-US").startsWith(prefix));
-  }
-
   return sortedCards
     .map((card) => ({
       card,
       category: assistance ? classifyCandidate(card, assistance, cardsById) : "neutral",
-      formMatch: null,
     }))
     .filter(({ category }) => assistance === null || isCandidateCategoryVisible(category, assistance.visibility))
     .filter(({ card }) => !prefix || card.name.toLocaleLowerCase("en-US").startsWith(prefix));
@@ -83,7 +65,6 @@ export function CardSearch({
   spriteMap,
   guessedCardIds,
   assistance = null,
-  practiceFilter = null,
   roundKey,
   disabled = false,
   assistanceControlsDisabled = false,
@@ -105,8 +86,8 @@ export function CardSearch({
   const [invalidAttempt, setInvalidAttempt] = useState(0);
   const visibilityControlsDisabled = disabled || assistanceControlsDisabled;
   const results = useMemo(
-    () => hardcoreNameMode ? [] : searchCards(cards, query, guessedCardIds, assistance, cardsById, practiceFilter),
-    [assistance, cards, cardsById, guessedCardIds, hardcoreNameMode, practiceFilter, query],
+    () => hardcoreNameMode ? [] : searchCards(cards, query, guessedCardIds, assistance, cardsById),
+    [assistance, cards, cardsById, guessedCardIds, hardcoreNameMode, query],
   );
   const duplicateNames = useMemo(() => {
     if (hardcoreNameMode) return new Set<string>();
@@ -288,7 +269,7 @@ export function CardSearch({
     {hardcoreNameMode && invalidAttempt > 0 && <p key={invalidAttempt} className="card-search__sr-only" role="status">No matching unguessed card name.</p>}
     {!hardcoreNameMode && menuOpen && (results.length > 0 ? <ul id={listboxId} className="card-search__options" role="listbox">
       {results.map((candidate) => {
-        const { card, category, formMatch } = candidate;
+        const { card, category } = candidate;
         return <li
         id={optionId(card.id)}
         key={card.id}
@@ -310,8 +291,6 @@ export function CardSearch({
         <SpriteArt cardId={card.id} spriteMap={spriteMap} kind="candidate" label={`${card.name} artwork`} />
         <span className="card-search__name">{card.name}</span>
         {(card.duplicateName || duplicateNames.has(card.name)) && <span className="card-search__class">{card.base.cardClass}</span>}
-        {formMatch === "base-only" && <span className="card-search__form-badge">Base only</span>}
-        {formMatch === "upgrade-only" && <span className="card-search__form-badge">Upgrade only</span>}
         <span className="card-search__sr-only">{category === "neutral"
           ? "unhighlighted candidate"
           : category === "green"

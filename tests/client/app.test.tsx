@@ -13,7 +13,6 @@ import { REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid
 import { FEATURE_ORDER } from "../../src/shared/domain.js";
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 import type { RoundState } from "../../src/client/game/game-reducer.js";
-import { createDefaultPracticeFilter } from "../../src/client/game/practice-filter.js";
 
 const card = (id: string, name: string) => ({
   id, name, hasUpgrade: true, artUrl: `${id}.png`, baseCardUrl: `https://cards.example/${id}.png`, upgradedCardUrl: `https://cards.example/${id}-upgraded.png`,
@@ -80,7 +79,6 @@ function assistedRound(overrides: Partial<RoundState> = {}): RoundState {
     terminalGuessCount: null,
     error: null,
     assistance: createDefaultAssistance(),
-    practiceFilter: null,
     ...overrides,
   };
 }
@@ -98,21 +96,12 @@ function readyGame(round: RoundState, overrides: Record<string, unknown> = {}) {
     consumeFilter: vi.fn(),
     consumeNegation: vi.fn(),
     setCandidateVisibility: vi.fn(),
-    setPracticeFilterEnabled: vi.fn(),
-    setPracticeFilterGroupDisabled: vi.fn(),
-    setPracticeFilterValue: vi.fn(),
+    practiceHardcoreChoice: false,
+    setPracticeHardcoreChoice: vi.fn(),
     forfeitPractice: vi.fn(),
     nextPracticeRound: vi.fn(),
     nextRound: vi.fn(),
     ...overrides,
-  };
-}
-
-function practiceFilterActions() {
-  return {
-    setPracticeFilterEnabled: vi.fn(),
-    setPracticeFilterGroupDisabled: vi.fn(),
-    setPracticeFilterValue: vi.fn(),
   };
 }
 
@@ -149,99 +138,23 @@ describe("App snapshot cleanup", () => {
     expect([visibilityIndex, trayIndex, hintIndex, labelIndex, inputIndex]).toEqual([0, 1, 2, 3, 4]);
   });
 
-  test("wires Practice Filter Mode between controls and search without mutating assistance presentation", async () => {
-    window.localStorage.setItem("stsdle:filter-help-dismissed:v1", "1");
-    const filteredCard = {
-      ...appCards[0]!,
-      upgraded: { ...appCards[0]!.upgraded, mana: 2 as const },
-    };
-    const filterCards = [filteredCard, appCards[1]!];
-    const filterSnapshot = {
-      ...searchSnapshot,
-      cards: filterCards,
-      cardsById: new Map(filterCards.map((item) => [item.id, item])),
-    };
-    const practiceFilter = {
-      ...createDefaultPracticeFilter(),
-      enabled: true,
-      mana: { disabled: false, selected: [2] },
-    };
-    const assistance = {
-      ...createDefaultAssistance(),
-      negation: { guessIndex: 0, cardId: "apparition", feature: "cardClass" as const },
-      visibility: { neutral: true, green: false, red: true },
-    };
-    const setPracticeFilterEnabled = vi.fn();
-    const setPracticeFilterGroupDisabled = vi.fn();
-    const setPracticeFilterValue = vi.fn();
-    let gameState = readyGame(assistedRound({
-      mode: "practice",
-      roundId: "practice:filter",
-      assistance,
-      practiceFilter,
-    }), { setPracticeFilterEnabled, setPracticeFilterGroupDisabled, setPracticeFilterValue });
-    games.mockImplementation(() => gameState);
-    loads.mockResolvedValue(filterSnapshot);
-
-    const view = render(<App />);
-    const input = await screen.findByRole("combobox", { name: "Guess a card" });
-    expect(screen.getByRole("checkbox", { name: "Filter Mode" })).toBeChecked();
-    const panel = screen.getByRole("region", { name: "Practice filters" });
-    const boardChildren = [...view.container.querySelector(".game-board")!.children];
-    expect(boardChildren.indexOf(screen.getByRole("region", { name: "Practice controls" }))).toBeLessThan(boardChildren.indexOf(panel));
-    expect(boardChildren.indexOf(panel)).toBeLessThan(boardChildren.indexOf(screen.getByRole("region", { name: "Card search" })));
-
-    const manaGroup = within(panel).getByRole("group", { name: "Mana" });
-    expect(within(manaGroup).getByRole("checkbox", { name: "1" })).toBeInTheDocument();
-    expect(within(manaGroup).getByRole("checkbox", { name: "2" })).toBeChecked();
-    const classGroup = within(panel).getByRole("group", { name: "Class" });
-    fireEvent.click(within(classGroup).getByRole("checkbox", { name: "Disable" }));
-    expect(setPracticeFilterGroupDisabled).toHaveBeenCalledWith("cardClass", false);
-    fireEvent.click(within(manaGroup).getByRole("checkbox", { name: "1" }));
-    expect(setPracticeFilterValue).toHaveBeenCalledWith("mana", 1, true);
-
-    const visibilityControls = screen.getByRole("group", { name: "Candidate visibility" });
-    for (const category of ["Neutral", "Green", "Red"]) {
-      expect(within(visibilityControls).getByRole("checkbox", { name: category })).toBeDisabled();
-    }
-    expect(view.container.querySelector(".card-search__assistance-slot--disabled")).not.toBeNull();
-    expect(input).toBeEnabled();
-    fireEvent.focus(input);
-    expect(screen.getByRole("option", { name: /Apotheosis.*Upgrade only/ })).toHaveClass("card-search__option--neutral");
-
-    gameState = {
-      ...gameState,
-      round: { ...gameState.round, practiceFilter: { ...practiceFilter, enabled: false } },
-    };
-    view.rerender(<App />);
-    expect(screen.queryByRole("region", { name: "Practice filters" })).not.toBeInTheDocument();
-    expect(within(visibilityControls).getByRole("checkbox", { name: "Green" })).not.toBeChecked();
-    expect(within(visibilityControls).getByRole("checkbox", { name: "Green" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Reveal Orb, available" })).toBeEnabled();
-    expect(screen.getByRole("option", { name: /Apotheosis.*excluded by Negation Orb/ })).toHaveClass("card-search__option--red");
-
-    fireEvent.click(screen.getByRole("checkbox", { name: "Filter Mode" }));
-    expect(setPracticeFilterEnabled).toHaveBeenCalledWith(true);
-  });
-
-  test("fails explicitly when a Practice round omits required filter actions", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  test("uses memory-entry search and no assistance UI for Hardcore Practice", async () => {
+    const setPracticeHardcoreChoice = vi.fn();
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue(readyGame(assistedRound({
       mode: "practice",
-      roundId: "practice:missing-actions",
-      practiceFilter: createDefaultPracticeFilter(),
-    }), {
-      setPracticeFilterEnabled: undefined,
-      setPracticeFilterGroupDisabled: undefined,
-      setPracticeFilterValue: undefined,
-    }));
+      hardcore: true,
+      roundId: "practice:hardcore",
+      assistance: null,
+    }), { practiceHardcoreChoice: true, setPracticeHardcoreChoice }));
 
-    render(<AppErrorBoundary><App /></AppErrorBoundary>);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("Practice filter actions are unavailable");
-    expect(consoleError).toHaveBeenCalled();
-    consoleError.mockRestore();
+    render(<App />);
+    expect(await screen.findByRole("searchbox", { name: "Guess a card" })).toBeVisible();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Candidate visibility" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Orb/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Card name hint:/)).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Hardcore Practice" })).toBeChecked();
   });
 
   test("routes Reveal, Filter, and Negation target activations to their durable game actions", async () => {
@@ -509,8 +422,6 @@ describe("App snapshot cleanup", () => {
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Daily", "Hardcore Daily", "Practice"]);
     fireEvent.click(screen.getByRole("button", { name: "Hardcore Daily" }));
     expect(setMode).toHaveBeenCalledWith("hardcore-daily");
-    expect(screen.queryByRole("checkbox", { name: "Filter Mode" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Practice filters" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "End game" })).not.toBeInTheDocument();
   });
 
@@ -637,7 +548,6 @@ describe("App snapshot cleanup", () => {
         terminalGuessCount: 0,
         error: null,
         assistance: createDefaultAssistance(),
-        practiceFilter: createDefaultPracticeFilter(),
       },
       roundToken: 2,
       dailyUtcDate: "2026-08-12",
@@ -645,7 +555,8 @@ describe("App snapshot cleanup", () => {
       submit: vi.fn(),
       setMode: vi.fn(),
       setCandidateVisibility: vi.fn(),
-      ...practiceFilterActions(),
+      practiceHardcoreChoice: false,
+      setPracticeHardcoreChoice: vi.fn(),
       forfeitPractice: vi.fn(),
       nextPracticeRound,
       nextRound: nextPracticeRound,
@@ -654,7 +565,7 @@ describe("App snapshot cleanup", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Accepted answer" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Filter Mode" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Hardcore Practice" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "New Practice Round" }));
     expect(nextPracticeRound).toHaveBeenCalledOnce();
   });
@@ -684,63 +595,6 @@ describe("App snapshot cleanup", () => {
     fireEvent.click(screen.getByRole("option"));
     expect(submit).toHaveBeenCalledOnce();
     expect(submit).toHaveBeenCalledWith("apotheosis");
-  });
-
-  test("clears search and resets filters on a new Practice round", async () => {
-    const makeRound = (
-      mode: "daily" | "practice",
-      selectedCardId: string,
-      practiceFilter: RoundState["practiceFilter"] = mode === "practice" ? createDefaultPracticeFilter() : null,
-    ): RoundState => ({
-      mode,
-      hardcore: false,
-      roundId: `${mode}:round`,
-      hintSeed: `${mode}:round`,
-      answer: { baseGroupKey: "base", selectedCardId, pairKey: "pair", acceptedCardIds: [selectedCardId] },
-      guesses: [],
-      status: "playing",
-      terminalGuessCount: null,
-      error: null,
-      assistance: createDefaultAssistance(),
-      practiceFilter,
-    });
-    const selectedFilter = {
-      ...createDefaultPracticeFilter(),
-      enabled: true,
-      mana: { disabled: false, selected: [1] },
-    };
-    const submit = vi.fn();
-    let gameState = {
-      round: makeRound("daily", "apotheosis"),
-      roundToken: 1,
-      error: null,
-      submit,
-      setMode: vi.fn(),
-      nextRound: vi.fn(),
-      ...practiceFilterActions(),
-    };
-    games.mockImplementation(() => gameState);
-    loads.mockResolvedValue(searchSnapshot);
-    const view = render(<App />);
-    const input = await screen.findByRole("combobox");
-    fireEvent.change(input, { target: { value: "ap" } });
-    expect(screen.getByRole("listbox")).toBeInTheDocument();
-
-    gameState = { ...gameState, round: makeRound("practice", "apparition", selectedFilter), roundToken: 2 };
-    view.rerender(<App />);
-    expect(screen.getByRole("combobox")).toHaveValue("");
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Filter Mode" })).toBeChecked();
-    expect(screen.getByRole("region", { name: "Practice filters" })).toBeVisible();
-
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "ap" } });
-    expect(screen.getByRole("listbox")).toBeInTheDocument();
-    gameState = { ...gameState, round: makeRound("practice", "apotheosis"), roundToken: 3 };
-    view.rerender(<App />);
-    expect(screen.getByRole("combobox")).toHaveValue("");
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Filter Mode" })).not.toBeChecked();
-    expect(screen.queryByRole("region", { name: "Practice filters" })).not.toBeInTheDocument();
   });
 
   test("locks the search from row insertion through the tenth tile reveal", async () => {
@@ -846,32 +700,6 @@ describe("App snapshot cleanup", () => {
     expect(submit).toHaveBeenCalledTimes(2);
     expect(input).toHaveValue("Defend");
     expect(screen.getByText("No matching unguessed card name.")).toHaveAttribute("role", "status");
-  });
-
-  test("keeps Daily and Practice candidate search click and keyboard submission", async () => {
-    const dailySubmit = vi.fn();
-    loads.mockResolvedValue(searchSnapshot);
-    games.mockReturnValue(readyGame(assistedRound({ assistance: null }), { submit: dailySubmit }));
-    const dailyView = render(<App />);
-    const dailyInput = await screen.findByRole("combobox", { name: "Guess a card" });
-    fireEvent.change(dailyInput, { target: { value: "apo" } });
-    fireEvent.click(await screen.findByRole("option", { name: /Apotheosis/ }));
-    expect(dailySubmit).toHaveBeenCalledWith("apotheosis");
-    dailyView.unmount();
-
-    const practiceSubmit = vi.fn();
-    games.mockReturnValue(readyGame(assistedRound({
-      mode: "practice",
-      roundId: "practice:candidate-input",
-      assistance: null,
-      practiceFilter: createDefaultPracticeFilter(),
-    }), { submit: practiceSubmit }));
-    render(<App />);
-    const practiceInput = await screen.findByRole("combobox", { name: "Guess a card" });
-    fireEvent.change(practiceInput, { target: { value: "apo" } });
-    fireEvent.keyDown(practiceInput, { key: "ArrowDown" });
-    fireEvent.keyDown(practiceInput, { key: "Enter" });
-    expect(practiceSubmit).toHaveBeenCalledWith("apotheosis");
   });
 
   test("omits every assistance surface and orb share marker in Hardcore", async () => {
@@ -1035,14 +863,14 @@ describe("App snapshot cleanup", () => {
         terminalGuessCount: 1,
         error: null,
         assistance: createDefaultAssistance(),
-        practiceFilter: createDefaultPracticeFilter(),
       },
       roundToken: 2,
       dailyUtcDate: "2026-08-12",
       error: null,
       submit: vi.fn(),
       setMode: vi.fn(),
-      ...practiceFilterActions(),
+      practiceHardcoreChoice: false,
+      setPracticeHardcoreChoice: vi.fn(),
       nextRound,
     });
 

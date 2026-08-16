@@ -12,14 +12,8 @@ import { OrbInteractionProvider, useOrbInteraction, type OrbTargetDescriptor, ty
 import { OrbTray } from "./components/OrbTray.js";
 import { ORB_LABELS } from "./components/OrbVisual.js";
 import { PracticeControls } from "./components/PracticeControls.js";
-import { PracticeFilterPanel } from "./components/PracticeFilterPanel.js";
 import { useGame } from "./game/use-game.js";
-import type { PlayMode, RoundState } from "./game/game-reducer.js";
-import {
-  collectPracticeFilterOptions,
-  type PracticeFilterGroupName,
-  type PracticeFilterValue,
-} from "./game/practice-filter.js";
+import { canSetPracticeHardcore, type PlayMode, type RoundState } from "./game/game-reducer.js";
 import { deriveNameHint } from "./game/name-hints.js";
 import { resolveHardcoreCardName } from "./game/hardcore-name.js";
 import type { CandidateCategory, ConstraintOrbTarget, OrbKind, RevealOrbTarget } from "./game/assistance.js";
@@ -38,9 +32,8 @@ interface RoundGameProps {
   onConsumeFilter(target: ConstraintOrbTarget): void;
   onConsumeNegation(target: ConstraintOrbTarget): void;
   onCandidateVisibility(category: CandidateCategory, visible: boolean): void;
-  onPracticeFilterEnabled(enabled: boolean): void;
-  onPracticeFilterGroupDisabled(group: PracticeFilterGroupName, disabled: boolean): void;
-  onPracticeFilterValue(group: PracticeFilterGroupName, value: PracticeFilterValue, selected: boolean): void;
+  practiceHardcoreChoice: boolean;
+  onPracticeHardcoreChoice(hardcore: boolean): void;
   onForfeitPractice(): void;
   onNextRound(): void;
 }
@@ -119,9 +112,8 @@ function RoundGameBoard({
   utcDate,
   onSubmit,
   onCandidateVisibility,
-  onPracticeFilterEnabled,
-  onPracticeFilterGroupDisabled,
-  onPracticeFilterValue,
+  practiceHardcoreChoice,
+  onPracticeHardcoreChoice,
   onForfeitPractice,
   onNextRound,
   animateFromIndex,
@@ -130,11 +122,6 @@ function RoundGameBoard({
 }: RoundGameBoardProps) {
   const { draggingOrb } = useOrbInteraction();
   const interactionDisabled = isRevealing || round.status !== "playing";
-  const filterEnabled = round.mode === "practice" && round.practiceFilter?.enabled === true;
-  const practiceFilterOptions = useMemo(
-    () => collectPracticeFilterOptions(snapshot.cards),
-    [snapshot.cards],
-  );
   const showResult = round.status !== "playing" && !isRevealing;
   const guessedCardIds = useMemo(() => new Set(round.guesses.map((guess) => guess.cardId)), [round.guesses]);
   const acceptedCardIds = useMemo(() => new Set(round.answer.acceptedCardIds), [round.answer.acceptedCardIds]);
@@ -159,18 +146,12 @@ function RoundGameBoard({
   return <main className="game-board" aria-label="Card guessing game">
     {round.mode === "practice" && <PracticeControls
       round={round}
-      filterEnabled={filterEnabled}
+      selectedHardcore={practiceHardcoreChoice}
+      settingsEditable={canSetPracticeHardcore(round)}
       disabled={isRevealing || draggingOrb !== null}
-      onFilterEnabledChange={onPracticeFilterEnabled}
+      onHardcoreChange={onPracticeHardcoreChoice}
       onForfeit={onForfeitPractice}
       onNextRound={onNextRound}
-    />}
-    {filterEnabled && round.practiceFilter && <PracticeFilterPanel
-      state={round.practiceFilter}
-      options={practiceFilterOptions}
-      disabled={interactionDisabled}
-      onGroupDisabledChange={onPracticeFilterGroupDisabled}
-      onValueChange={onPracticeFilterValue}
     />}
     <CardSearch
       cards={snapshot.cards}
@@ -178,13 +159,11 @@ function RoundGameBoard({
       spriteMap={snapshot.spriteMap}
       guessedCardIds={guessedCardIds}
       assistance={round.assistance ?? null}
-      practiceFilter={round.mode === "practice" ? round.practiceFilter : null}
       roundKey={roundKey}
       disabled={interactionDisabled}
-      assistanceControlsDisabled={filterEnabled}
-      assistanceSlot={round.assistance && <OrbTray assistance={round.assistance} disabled={interactionDisabled || filterEnabled} />}
-      nameHintSlot={<NameHint hint={nameHint} cardName={answerCard.name} />}
-      {...(round.mode === "hardcore-daily" ? { searchMode: { kind: "hardcore-name" as const, submitExactName: submitHardcoreName } } : {})}
+      assistanceSlot={round.assistance && <OrbTray assistance={round.assistance} disabled={interactionDisabled} />}
+      nameHintSlot={round.hardcore ? undefined : <NameHint hint={nameHint} cardName={answerCard.name} />}
+      {...(round.hardcore ? { searchMode: { kind: "hardcore-name" as const, submitExactName: submitHardcoreName } } : {})}
       onVisibilityChange={onCandidateVisibility}
       onSelect={onSubmit}
     />
@@ -219,9 +198,8 @@ function RoundGame({
   onConsumeFilter,
   onConsumeNegation,
   onCandidateVisibility,
-  onPracticeFilterEnabled,
-  onPracticeFilterGroupDisabled,
-  onPracticeFilterValue,
+  practiceHardcoreChoice,
+  onPracticeHardcoreChoice,
   onForfeitPractice,
   onNextRound,
 }: RoundGameProps) {
@@ -252,9 +230,8 @@ function RoundGame({
       utcDate={utcDate}
       onSubmit={onSubmit}
       onCandidateVisibility={onCandidateVisibility}
-      onPracticeFilterEnabled={onPracticeFilterEnabled}
-      onPracticeFilterGroupDisabled={onPracticeFilterGroupDisabled}
-      onPracticeFilterValue={onPracticeFilterValue}
+      practiceHardcoreChoice={practiceHardcoreChoice}
+      onPracticeHardcoreChoice={onPracticeHardcoreChoice}
       onForfeitPractice={onForfeitPractice}
       onNextRound={onNextRound}
       animateFromIndex={animateFromIndex}
@@ -266,13 +243,6 @@ function RoundGame({
 
 function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
   const game = useGame(snapshot);
-  if (game.round?.mode === "practice" && (
-    typeof game.setPracticeFilterEnabled !== "function"
-    || typeof game.setPracticeFilterGroupDisabled !== "function"
-    || typeof game.setPracticeFilterValue !== "function"
-  )) {
-    throw new Error("Practice filter actions are unavailable.");
-  }
   const activeMode = game.activeMode ?? game.round?.mode ?? "daily";
   const modeLabels: Readonly<Record<PlayMode, string>> = {
     daily: "Daily",
@@ -297,9 +267,8 @@ function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
       onConsumeFilter={game.consumeFilter}
       onConsumeNegation={game.consumeNegation}
       onCandidateVisibility={game.setCandidateVisibility ?? ignoreCandidateVisibility}
-      onPracticeFilterEnabled={game.setPracticeFilterEnabled}
-      onPracticeFilterGroupDisabled={game.setPracticeFilterGroupDisabled}
-      onPracticeFilterValue={game.setPracticeFilterValue}
+      practiceHardcoreChoice={game.practiceHardcoreChoice}
+      onPracticeHardcoreChoice={game.setPracticeHardcoreChoice}
       onForfeitPractice={game.forfeitPractice ?? ignoreCandidateVisibility}
       onNextRound={game.nextPracticeRound ?? game.nextRound}
     />}

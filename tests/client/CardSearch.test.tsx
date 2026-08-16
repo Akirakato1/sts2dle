@@ -1,12 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { readFileSync } from "node:fs";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { CardSearch, searchCards } from "../../src/client/components/CardSearch.js";
 import type { AssistanceState } from "../../src/client/game/assistance.js";
-import { createDefaultPracticeFilter, type PracticeFilterState } from "../../src/client/game/practice-filter.js";
 import type { CardClass, CardIdentity, SpriteMap } from "../../src/shared/domain.js";
 
 afterEach(cleanup);
@@ -39,10 +37,6 @@ function card(
     base: { ...features, ...featuresOverride },
     upgraded: { ...features, ...upgradedFeaturesOverride },
   };
-}
-
-function manualFilter(overrides: Partial<PracticeFilterState> = {}): PracticeFilterState {
-  return { ...createDefaultPracticeFilter(), enabled: true, ...overrides };
 }
 
 const cards = [
@@ -122,55 +116,6 @@ describe("searchCards", () => {
     }
   });
 
-  test("reports the matching form and removes cards whose neither form satisfies a manual filter", () => {
-    const formCards = [
-      card("base", "Base match", "Silent", false, { mana: 1 }, { mana: 0 }),
-      card("both", "Both match", "Silent", false, { mana: 1 }, { mana: 1 }),
-      card("neither", "Neither match", "Silent", false, { mana: 3 }, { mana: 2 }),
-      card("upgrade", "Upgrade match", "Silent", false, { mana: 0 }, { mana: 1 }),
-    ];
-    const filter = manualFilter({ mana: { disabled: false, selected: [1] } });
-
-    expect(searchCards(formCards, "", new Set(), assisted, cardsById, filter).map(({ card: item, formMatch }) => [item.id, formMatch]))
-      .toEqual([
-        ["base", "base-only"],
-        ["both", "both"],
-        ["upgrade", "upgrade-only"],
-      ]);
-  });
-
-  test("all-disabled manual filters show every unguessed card while an enabled-empty group shows none", () => {
-    const filter = manualFilter();
-    expect(searchCards(cards, "", new Set(["anger"]), assisted, cardsById, filter).map(({ card: item, formMatch }) => [item.id, formMatch]))
-      .toEqual([
-        ["apotheosis", "both"],
-        ["apparition", "both"],
-        ["scrap", "both"],
-      ]);
-
-    const emptyClass = manualFilter({ cardClass: { disabled: false, selected: [] } });
-    expect(searchCards(cards, "", new Set(), assisted, cardsById, emptyClass)).toEqual([]);
-  });
-
-  test("manual filtering ignores orb categories and visibility, while disabling it restores both exactly", () => {
-    const hiddenAssistance: AssistanceState = {
-      ...assisted,
-      visibility: { neutral: false, green: true, red: false },
-    };
-    const filter = manualFilter();
-
-    expect(searchCards(cards, "a", new Set(), hiddenAssistance, cardsById, filter).map(({ card: item, category }) => [item.id, category]))
-      .toEqual([
-        ["anger", "neutral"],
-        ["apotheosis", "neutral"],
-        ["apparition", "neutral"],
-      ]);
-    expect(searchCards(cards, "a", new Set(), hiddenAssistance, cardsById, null).map(({ card: item, category, formMatch }) => [item.id, category, formMatch]))
-      .toEqual([
-        ["apotheosis", "green", null],
-        ["apparition", "green", null],
-      ]);
-  });
 });
 
 describe("CardSearch", () => {
@@ -319,81 +264,6 @@ describe("CardSearch", () => {
     />);
     expect(input).toHaveValue("ap");
     expect(screen.getByRole("listbox")).toBeInTheDocument();
-  });
-
-  test("renders accessible one-form badges without orb colors or descriptions in manual mode", () => {
-    const formCards = [
-      card("base", "Base match", "Silent", false, { mana: 1 }, { mana: 0 }),
-      card("both", "Both match", "Silent", false, { mana: 1 }, { mana: 1 }),
-      card("neither", "Neither match", "Silent", false, { mana: 3 }, { mana: 2 }),
-      card("upgrade", "Upgrade match", "Silent", false, { mana: 0 }, { mana: 1 }),
-    ];
-    const filter = manualFilter({ mana: { disabled: false, selected: [1] } });
-    const { input } = renderSearch({
-      cards: formCards,
-      cardsById: new Map([...formCards, filterSource, negationSource].map((item) => [item.id, item])),
-      practiceFilter: filter,
-      assistance: assisted,
-    });
-
-    fireEvent.focus(input);
-    const base = screen.getByRole("option", { name: /Base match.*Base only/ });
-    const both = screen.getByRole("option", { name: /Both match/ });
-    const upgrade = screen.getByRole("option", { name: /Upgrade match.*Upgrade only/ });
-    expect(within(base).getByText("Base only")).toBeInTheDocument();
-    expect(within(upgrade).getByText("Upgrade only")).toBeInTheDocument();
-    expect(within(both).queryByText(/only/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Neither match")).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /matches Filter Orb|excluded by Negation Orb/ })).not.toBeInTheDocument();
-    for (const option of screen.getAllByRole("option")) {
-      expect(option).not.toHaveClass("card-search__option--green");
-      expect(option).not.toHaveClass("card-search__option--red");
-    }
-  });
-
-  test("pins a non-duplicate candidate badge to the rightmost result column", () => {
-    const style = document.createElement("style");
-    style.textContent = readFileSync("src/client/styles/search.css", "utf8");
-    document.head.append(style);
-    try {
-      const formCards = [card("base", "Base match", "Silent", false, { mana: 1 }, { mana: 0 })];
-      const { input } = renderSearch({
-        cards: formCards,
-        cardsById: new Map(formCards.map((item) => [item.id, item])),
-        practiceFilter: manualFilter({ mana: { disabled: false, selected: [1] } }),
-      });
-
-      fireEvent.focus(input);
-      const option = screen.getByRole("option", { name: /Base match.*Base only/ });
-      expect(within(option).queryByText("Silent")).not.toBeInTheDocument();
-      expect(getComputedStyle(within(option).getByText("Base only")).gridColumn).toBe("4");
-    } finally {
-      style.remove();
-    }
-  });
-
-  test("manual results preserve exact keyboard and pointer card selection", () => {
-    const formCards = [
-      card("base", "Base match", "Silent", false, { mana: 1 }, { mana: 0 }),
-      card("upgrade", "Upgrade match", "Silent", false, { mana: 0 }, { mana: 1 }),
-    ];
-    const filter = manualFilter({ mana: { disabled: false, selected: [1] } });
-    const { input, onSelect } = renderSearch({
-      cards: formCards,
-      cardsById: new Map(formCards.map((item) => [item.id, item])),
-      practiceFilter: filter,
-    });
-
-    fireEvent.focus(input);
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(onSelect).toHaveBeenCalledOnce();
-    expect(onSelect).toHaveBeenLastCalledWith("base");
-
-    fireEvent.focus(input);
-    fireEvent.click(screen.getByRole("option", { name: /Upgrade match.*Upgrade only/ }));
-    expect(onSelect).toHaveBeenCalledTimes(2);
-    expect(onSelect).toHaveBeenLastCalledWith("upgrade");
   });
 
   test("shows classified visible candidates on empty focus and applies visibility without blocking red guesses", () => {

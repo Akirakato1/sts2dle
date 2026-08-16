@@ -2,11 +2,11 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
 import {
+  canSetPracticeHardcore,
   createRoundState,
   gameReducer,
   type RoundState,
 } from "../../src/client/game/game-reducer.js";
-import { createDefaultPracticeFilter } from "../../src/client/game/practice-filter.js";
 import type { CardIdentity } from "../../src/shared/domain.js";
 import { pairKey } from "../../src/shared/feature-keys.js";
 
@@ -35,10 +35,10 @@ const selectedAnswer = {
   acceptedCardIds: [answerCard.id, equivalentCard.id],
 };
 
-function practice(): RoundState {
+function practice(hardcore = false): RoundState {
   return createRoundState({
     mode: "practice",
-    hardcore: false,
+    hardcore,
     roundId: "practice:round-id",
     hintSeed: "round-id",
     answer: selectedAnswer,
@@ -46,14 +46,13 @@ function practice(): RoundState {
 }
 
 describe("gameReducer", () => {
-  test("RoundState requires every durable field and rejects deterministic mode contradictions", () => {
+  test("RoundState requires every durable field and rejects Daily contradictions", () => {
     expectTypeOf<RoundState>().toMatchTypeOf<{
       hardcore: boolean;
       roundId: string;
       hintSeed: string;
       terminalGuessCount: number | null;
       assistance: ReturnType<typeof createDefaultAssistance> | null;
-      practiceFilter: ReturnType<typeof createDefaultPracticeFilter> | null;
     }>();
     expect(() => createRoundState({
       mode: "daily", hardcore: true, roundId: "daily:date:revision", hintSeed: "seed", answer: selectedAnswer,
@@ -61,9 +60,7 @@ describe("gameReducer", () => {
     expect(() => createRoundState({
       mode: "hardcore-daily", hardcore: false, roundId: "hardcore-daily:date:revision", hintSeed: "seed", answer: selectedAnswer,
     })).toThrow(/hardcore/i);
-    expect(() => createRoundState({
-      mode: "practice", hardcore: true, roundId: "practice:round-id", hintSeed: "seed", answer: selectedAnswer,
-    })).toThrow(/hardcore/i);
+    expect(practice(true)).toMatchObject({ hardcore: true, assistance: null });
   });
 
   test("submits canonical results and wins only for an accepted card ID", () => {
@@ -138,68 +135,46 @@ describe("gameReducer", () => {
     expect(gameReducer(hidden, { type: "set-candidate-visibility", category: "green", visible: false })).toBe(hidden);
   });
 
-  test("new Practice rounds always use standard assistance and a default manual filter", () => {
+  test("new assisted Practice rounds use standard assistance", () => {
     const round = practice();
     expect(round.hardcore).toBe(false);
     expect(round.assistance).toEqual(createDefaultAssistance());
-    expect(round.practiceFilter).toEqual(createDefaultPracticeFilter());
   });
 
-  test("updates Practice filter mode, group disable, and selected values immutably and idempotently", () => {
-    const round = practice();
-    const enabled = gameReducer(round, { type: "set-practice-filter-enabled", enabled: true });
-    expect(enabled.practiceFilter?.enabled).toBe(true);
-    expect(gameReducer(enabled, { type: "set-practice-filter-enabled", enabled: true })).toBe(enabled);
+  test("toggles untouched Practice between assisted and Hardcore", () => {
+    const normal = practice(false);
+    expect(canSetPracticeHardcore(normal)).toBe(true);
 
-    const selected = gameReducer(enabled, {
-      type: "set-practice-filter-value", group: "cardClass", value: "Silent", selected: true,
-    });
-    expect(selected.practiceFilter?.cardClass.selected).toEqual(["Silent"]);
-    expect(selected.practiceFilter).not.toBe(enabled.practiceFilter);
-    expect(gameReducer(selected, {
-      type: "set-practice-filter-value", group: "cardClass", value: "Silent", selected: true,
-    })).toBe(selected);
+    const hardcore = gameReducer(normal, { type: "set-practice-hardcore", hardcore: true });
+    expect(hardcore).toMatchObject({ mode: "practice", hardcore: true, assistance: null });
+    expect(canSetPracticeHardcore(hardcore)).toBe(true);
 
-    const activeGroup = gameReducer(selected, {
-      type: "set-practice-filter-group-disabled", group: "cardClass", disabled: false,
-    });
-    expect(activeGroup.practiceFilter?.cardClass).toEqual({ disabled: false, selected: ["Silent"] });
-    expect(gameReducer(activeGroup, {
-      type: "set-practice-filter-group-disabled", group: "cardClass", disabled: false,
-    })).toBe(activeGroup);
-
-    const power = gameReducer(activeGroup, {
-      type: "set-practice-filter-value", group: "powers", value: "Strength", selected: true,
-    });
-    expect(power.practiceFilter?.powers.selected).toEqual(["Strength"]);
+    const restored = gameReducer(hardcore, { type: "set-practice-hardcore", hardcore: false });
+    expect(restored.hardcore).toBe(false);
+    expect(restored.assistance).toEqual(createDefaultAssistance());
   });
 
-  test("Practice filter actions are ignored outside active Practice", () => {
-    const daily = createRoundState({
-      mode: "daily", hardcore: false, roundId: "daily:2026-08-13:revision", hintSeed: "daily:2026-08-13:revision", answer: selectedAnswer,
-    });
-    const hardcoreDaily = createRoundState({
-      mode: "hardcore-daily", hardcore: true, roundId: "hardcore-daily:2026-08-13:revision", hintSeed: "hardcore-daily:2026-08-13:revision", answer: selectedAnswer,
-    });
-    const terminal = gameReducer(practice(), { type: "forfeit-practice" });
-    const action = { type: "set-practice-filter-enabled", enabled: true } as const;
-    expect(daily.practiceFilter).toBeNull();
-    expect(hardcoreDaily.practiceFilter).toBeNull();
-    expect(gameReducer(daily, action)).toBe(daily);
-    expect(gameReducer(hardcoreDaily, action)).toBe(hardcoreDaily);
-    expect(gameReducer(terminal, action)).toBe(terminal);
+  test.each(["reveal", "filter", "negation"] as const)("locks after %s Orb use", (orb) => {
+    const target = orb === "reveal"
+      ? { feature: "mana" as const }
+      : { guessIndex: 0, cardId: guessCard.id, feature: orb === "filter" ? "rarity" as const : "mana" as const };
+    const played = orb === "reveal"
+      ? practice(false)
+      : gameReducer(practice(false), { type: "submit", cardId: guessCard.id, cardsById });
+    const used = gameReducer(played, (orb === "reveal"
+      ? { type: "consume-reveal", target }
+      : orb === "filter"
+        ? { type: "consume-filter", target }
+        : { type: "consume-negation", target }) as never);
+    expect(canSetPracticeHardcore(used)).toBe(false);
+    expect(gameReducer(used, { type: "set-practice-hardcore", hardcore: true })).toBe(used);
   });
 
-  test("submissions retain the Practice filter and replacement uses the supplied filter state", () => {
-    const configured = gameReducer(
-      gameReducer(practice(), { type: "set-practice-filter-enabled", enabled: true }),
-      { type: "set-practice-filter-value", group: "mana", value: 1, selected: true },
-    );
-    const submitted = gameReducer(configured, { type: "submit", cardId: guessCard.id, cardsById });
-    expect(submitted.practiceFilter).toBe(configured.practiceFilter);
-
-    const replacement = gameReducer(practice(), { type: "set-practice-filter-enabled", enabled: true });
-    expect(gameReducer(configured, { type: "replace-round", round: replacement })).toBe(replacement);
+  test("locks Practice difficulty after a guess or terminal round but not candidate visibility", () => {
+    const visibilityChanged = gameReducer(practice(), { type: "set-candidate-visibility", category: "green", visible: false });
+    expect(canSetPracticeHardcore(visibilityChanged)).toBe(true);
+    expect(canSetPracticeHardcore(gameReducer(practice(), { type: "submit", cardId: guessCard.id, cardsById }))).toBe(false);
+    expect(canSetPracticeHardcore(gameReducer(practice(), { type: "forfeit-practice" }))).toBe(false);
   });
 
   test("forfeits only an active Practice round and records the terminal guess count", () => {

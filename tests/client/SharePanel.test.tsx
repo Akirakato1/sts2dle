@@ -27,7 +27,6 @@ const round: RoundState = {
   terminalGuessCount: 1,
   error: null,
   assistance: createDefaultAssistance(),
-  practiceFilter: null,
 };
 
 function deferred() {

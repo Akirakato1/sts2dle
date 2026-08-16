@@ -5,7 +5,6 @@ import { createDailyRandom, createPracticeRandom } from "../../shared/random.js"
 import { selectAnswer, selectDistinctAnswer, type SelectedAnswer } from "../../shared/selection.js";
 import type { CandidateCategory, ConstraintOrbTarget, RevealOrbTarget } from "./assistance.js";
 import { createRoundState, gameReducer, type GameAction, type PlayMode, type RoundState } from "./game-reducer.js";
-import type { PracticeFilterGroupName, PracticeFilterValue } from "./practice-filter.js";
 import { preloadAnswerImages } from "./preload-images.js";
 import {
   DAILY_RULESET_VERSION,
@@ -29,13 +28,12 @@ export interface UseGameResult {
   error: string | null;
   submit(cardId: string): void;
   setMode(mode: PlayMode): void;
+  practiceHardcoreChoice: boolean;
+  setPracticeHardcoreChoice(hardcore: boolean): void;
   consumeReveal(target: RevealOrbTarget): void;
   consumeFilter(target: ConstraintOrbTarget): void;
   consumeNegation(target: ConstraintOrbTarget): void;
   setCandidateVisibility(category: CandidateCategory, visible: boolean): void;
-  setPracticeFilterEnabled(enabled: boolean): void;
-  setPracticeFilterGroupDisabled(group: PracticeFilterGroupName, disabled: boolean): void;
-  setPracticeFilterValue(group: PracticeFilterGroupName, value: PracticeFilterValue, selected: boolean): void;
   forfeitPractice(): void;
   nextPracticeRound(): void;
   retryActiveMode(): void;
@@ -224,6 +222,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
       return current?.roundId === expectedTerminal.roundId && current.status === expectedTerminal.status;
     };
     if (!matchesExpectedTerminal()) return;
+    const practiceHardcoreChoice = stateRef.current.rounds.get(mode)?.hardcore ?? false;
     const generation = ++generations.current.practice;
     pending.current.practice = true;
     try {
@@ -252,7 +251,7 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
         mode,
         round: createRoundState({
           mode,
-          hardcore: false,
+          hardcore: practiceHardcoreChoice,
           roundId: `practice:${uuid}`,
           hintSeed: uuid,
           answer,
@@ -364,20 +363,8 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     applyToActive({ type: "submit", cardId, cardsById: snapshot.cardsById });
   }, [applyToActive, snapshot.cardsById]);
 
-  const setPracticeFilterEnabled = useCallback((enabled: boolean) => {
-    applyToActive({ type: "set-practice-filter-enabled", enabled });
-  }, [applyToActive]);
-
-  const setPracticeFilterGroupDisabled = useCallback((group: PracticeFilterGroupName, disabled: boolean) => {
-    applyToActive({ type: "set-practice-filter-group-disabled", group, disabled });
-  }, [applyToActive]);
-
-  const setPracticeFilterValue = useCallback((
-    group: PracticeFilterGroupName,
-    value: PracticeFilterValue,
-    selected: boolean,
-  ) => {
-    applyToActive({ type: "set-practice-filter-value", group, value, selected });
+  const setPracticeHardcoreChoice = useCallback((hardcore: boolean) => {
+    applyToActive({ type: "set-practice-hardcore", hardcore });
   }, [applyToActive]);
 
   const setMode = useCallback((mode: PlayMode) => {
@@ -426,15 +413,14 @@ export function useGame(snapshot: LoadedSnapshot): UseGameState {
     roundToken: state.roundToken,
     dailyUtcDate: activeUtcDate,
     error: state.errors[state.activeMode],
+    practiceHardcoreChoice: state.rounds.get("practice")?.hardcore ?? false,
     submit,
     setMode,
     consumeReveal: (target: RevealOrbTarget) => applyToActive({ type: "consume-reveal", target }),
     consumeFilter: (target: ConstraintOrbTarget) => applyToActive({ type: "consume-filter", target }),
     consumeNegation: (target: ConstraintOrbTarget) => applyToActive({ type: "consume-negation", target }),
     setCandidateVisibility: (category: CandidateCategory, visible: boolean) => applyToActive({ type: "set-candidate-visibility", category, visible }),
-    setPracticeFilterEnabled,
-    setPracticeFilterGroupDisabled,
-    setPracticeFilterValue,
+    setPracticeHardcoreChoice,
     forfeitPractice: () => applyToActive({ type: "forfeit-practice" }),
     nextPracticeRound,
     retryActiveMode,

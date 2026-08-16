@@ -4,18 +4,20 @@ import type { RoundState } from "../game/game-reducer.js";
 
 export interface PracticeControlsProps {
   round: RoundState;
-  filterEnabled: boolean;
+  selectedHardcore: boolean;
+  settingsEditable: boolean;
   disabled: boolean;
-  onFilterEnabledChange(enabled: boolean): void;
+  onHardcoreChange(hardcore: boolean): void;
   onForfeit(): void;
   onNextRound(): void;
 }
 
 export function PracticeControls({
   round,
-  filterEnabled,
+  selectedHardcore,
+  settingsEditable,
   disabled,
-  onFilterEnabledChange,
+  onHardcoreChange,
   onForfeit,
   onNextRound,
 }: PracticeControlsProps) {
@@ -25,13 +27,13 @@ export function PracticeControls({
     <label className="practice-controls__filter">
       <input
         type="checkbox"
-        checked={filterEnabled}
-        disabled={disabled || terminal}
+        checked={selectedHardcore}
+        disabled={disabled || terminal || !settingsEditable}
         onChange={(event) => {
-          if (!disabled && !terminal) onFilterEnabledChange(event.currentTarget.checked);
+          if (!disabled && !terminal && settingsEditable) onHardcoreChange(event.currentTarget.checked);
         }}
       />
-      <span>Filter Mode</span>
+      <span>Hardcore Practice</span>
     </label>
     {terminal
       ? <button type="button" disabled={disabled} onClick={onNextRound}>New Practice Round</button>

@@ -12,7 +12,6 @@ vi.mock("../../src/client/game/preload-images.js", () => ({ preloadAnswerImages:
 
 import type { LoadedSnapshot } from "../../src/client/api/load-snapshot.js";
 import { createRoundState } from "../../src/client/game/game-reducer.js";
-import { createDefaultPracticeFilter } from "../../src/client/game/practice-filter.js";
 import { preloadAnswerImages } from "../../src/client/game/preload-images.js";
 import {
   CURRENT_ROUND_KEYS,
@@ -103,7 +102,7 @@ describe("useGame", () => {
     expect(game.result.current.round?.hintSeed).toBe(uuids[0]);
     expect(game.result.current.round?.hardcore).toBe(false);
     expect(game.result.current.round?.assistance).not.toBeNull();
-    expect(game.result.current.round?.practiceFilter).toEqual(createDefaultPracticeFilter());
+    expect(game.result.current.practiceHardcoreChoice).toBe(false);
     expect(localStorage.getItem(CURRENT_ROUND_KEYS.practice)).not.toBeNull();
   });
 
@@ -161,18 +160,15 @@ describe("useGame", () => {
     });
   });
 
-  test("persists the active Practice manual filter across refresh", async () => {
+  test("persists a selected Hardcore Practice round and carries its choice into the next round", async () => {
     const game = renderHook(() => useGame(snapshot));
     await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
     act(() => game.result.current.setMode("practice"));
     await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
-    act(() => game.result.current.setPracticeFilterEnabled(true));
-    act(() => game.result.current.setPracticeFilterGroupDisabled("mana", false));
-    act(() => game.result.current.setPracticeFilterValue("mana", 2, true));
-    const configured = game.result.current.round!.practiceFilter;
-    expect(configured).toMatchObject({ enabled: true, mana: { disabled: false, selected: [2] } });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(CURRENT_ROUND_KEYS.practice)!).round.practiceFilter)
-      .toEqual(configured));
+    expect(game.result.current.practiceHardcoreChoice).toBe(false);
+    act(() => game.result.current.setPracticeHardcoreChoice(true));
+    expect(game.result.current.round).toMatchObject({ mode: "practice", hardcore: true, assistance: null });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(CURRENT_ROUND_KEYS.practice)!).round.hardcore).toBe(true));
     const roundId = game.result.current.round!.roundId;
     game.unmount();
 
@@ -180,47 +176,27 @@ describe("useGame", () => {
     await waitFor(() => expect(restored.result.current.round?.mode).toBe("daily"));
     act(() => restored.result.current.setMode("practice"));
     await waitFor(() => expect(restored.result.current.round?.roundId).toBe(roundId));
-    expect(restored.result.current.round?.hardcore).toBe(false);
-    expect(restored.result.current.round?.practiceFilter).toEqual(configured);
+    expect(restored.result.current.practiceHardcoreChoice).toBe(true);
+    expect(restored.result.current.round?.hardcore).toBe(true);
+    act(() => restored.result.current.forfeitPractice());
+    await act(async () => restored.result.current.nextPracticeRound());
+    await waitFor(() => expect(restored.result.current.round?.roundId).not.toBe(roundId));
+    expect(restored.result.current.round).toMatchObject({ hardcore: true, assistance: null });
   });
 
-  test("forfeit retains the Practice filter until requesting a new default round", async () => {
-    const game = renderHook(() => useGame(snapshot));
-    await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
-    act(() => game.result.current.setMode("practice"));
-    await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
-    act(() => game.result.current.setPracticeFilterEnabled(true));
-    act(() => game.result.current.setPracticeFilterGroupDisabled("cardClass", false));
-    act(() => game.result.current.setPracticeFilterValue("cardClass", "Silent", true));
-    const configured = game.result.current.round!.practiceFilter;
-    act(() => game.result.current.forfeitPractice());
-    expect(game.result.current.round?.status).toBe("forfeited");
-    expect(game.result.current.round?.practiceFilter).toBe(configured);
-    act(() => game.result.current.setPracticeFilterValue("cardClass", "Ironclad", true));
-    expect(game.result.current.round?.practiceFilter).toBe(configured);
-
-    await act(async () => game.result.current.nextPracticeRound());
-    await waitFor(() => expect(game.result.current.round?.roundId).toBe(`practice:${uuids[1]}`));
-    expect(game.result.current.round?.hardcore).toBe(false);
-    expect(game.result.current.round?.practiceFilter).toEqual(createDefaultPracticeFilter());
-  });
-
-  test("manual filter actions are ignored outside active playing Practice", async () => {
+  test("ignores Hardcore Practice choice changes outside an untouched Practice round", async () => {
     const game = renderHook(() => useGame(snapshot));
     await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
     const daily = game.result.current.round;
-    act(() => game.result.current.setPracticeFilterEnabled(true));
-    act(() => game.result.current.setPracticeFilterGroupDisabled("mana", false));
-    act(() => game.result.current.setPracticeFilterValue("mana", 1, true));
+    act(() => game.result.current.setPracticeHardcoreChoice(true));
     expect(game.result.current.round).toBe(daily);
-    expect(game.result.current.round?.practiceFilter).toBeNull();
 
     act(() => game.result.current.setMode("practice"));
     await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
-    act(() => game.result.current.forfeitPractice());
-    const terminal = game.result.current.round;
-    act(() => game.result.current.setPracticeFilterEnabled(true));
-    expect(game.result.current.round).toBe(terminal);
+    act(() => game.result.current.submit(second.id));
+    const played = game.result.current.round;
+    act(() => game.result.current.setPracticeHardcoreChoice(true));
+    expect(game.result.current.round).toBe(played);
   });
 
   test("roundToken changes only for mode switches, Daily replacement, and new Practice", async () => {
@@ -393,9 +369,6 @@ describe("useGame", () => {
     await waitFor(() => expect(game.result.current.round?.mode).toBe("daily"));
     act(() => game.result.current.setMode("practice"));
     await waitFor(() => expect(game.result.current.round?.mode).toBe("practice"));
-    act(() => game.result.current.setPracticeFilterEnabled(true));
-    act(() => game.result.current.setPracticeFilterGroupDisabled("mana", false));
-    act(() => game.result.current.setPracticeFilterValue("mana", 1, true));
     act(() => game.result.current.forfeitPractice());
     const initialAllocations = vi.mocked(crypto.randomUUID).mock.calls.length;
     const staleSource = deferred<{ nextUint32(): number }>();
@@ -410,7 +383,7 @@ describe("useGame", () => {
     await act(async () => latestSource.resolve({ nextUint32: () => 1 }));
     expect(crypto.randomUUID).toHaveBeenCalledTimes(initialAllocations + 1);
     expect(game.result.current.round?.roundId).toBe(`practice:${uuids[initialAllocations]}`);
-    expect(game.result.current.round?.practiceFilter).toEqual(createDefaultPracticeFilter());
+    expect(game.result.current.round?.hardcore).toBe(false);
   });
 
   test("ignores New Practice Round while the current Practice round is still playing", async () => {

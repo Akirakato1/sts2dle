@@ -1,18 +1,11 @@
 import { z } from "zod";
 
 import { compareGuess, type FeatureResult } from "../../shared/comparison.js";
-import { CARD_KEYWORDS, CARD_RARITIES, CARD_TARGETS, CARD_TYPES, FEATURE_ORDER, type CardIdentity, type PairGroup } from "../../shared/domain.js";
+import { FEATURE_ORDER, type CardIdentity, type PairGroup } from "../../shared/domain.js";
 import { baseKey, pairKey } from "../../shared/feature-keys.js";
 import type { SelectedAnswer } from "../../shared/selection.js";
 import type { AssistanceState, ConstraintOrbTarget } from "./assistance.js";
 import type { PlayMode, RoundState, SubmittedGuess } from "./game-reducer.js";
-import {
-  KEYWORD_FILTER_NONE,
-  POWER_FILTER_NONE,
-  collectPracticeFilterOptions,
-  type PracticeFilterOptions,
-  type PracticeFilterState,
-} from "./practice-filter.js";
 
 export const CURRENT_ROUND_VERSION = 5;
 export const CURRENT_ROUND_KEYS: Readonly<Record<PlayMode, string>> = Object.freeze({
@@ -22,7 +15,7 @@ export const CURRENT_ROUND_KEYS: Readonly<Record<PlayMode, string>> = Object.fre
 });
 export const DAILY_RULESET_VERSION = "v5";
 export const HARDCORE_DAILY_RULESET_VERSION = "hardcore-v2";
-export const PRACTICE_RULESET_VERSION = "practice-v3";
+export const PRACTICE_RULESET_VERSION = "practice-v4";
 export const DAILY_STATS_KEY = "stsdle:stats:v1";
 export const HARDCORE_DAILY_STATS_KEY = "stsdle:stats:hardcore:v1";
 
@@ -65,22 +58,6 @@ const assistanceSchema = z.object({
   negation: constraintTargetSchema.nullable(),
   visibility: visibilitySchema,
 }).strict();
-const cardClassSchema = z.enum(["Ironclad", "Silent", "Defect", "Necrobinder", "Regent", "Neutral", "Event"]);
-const manaSchema = z.union([z.number().finite(), z.literal("X"), z.literal("None")]);
-const filterGroupSchema = <T extends z.ZodTypeAny>(value: T) => z.object({
-  disabled: z.boolean(),
-  selected: z.array(value),
-}).strict();
-const practiceFilterSchema = z.object({
-  enabled: z.boolean(),
-  cardClass: filterGroupSchema(cardClassSchema),
-  cardType: filterGroupSchema(z.enum(CARD_TYPES)),
-  mana: filterGroupSchema(manaSchema),
-  rarity: filterGroupSchema(z.enum(CARD_RARITIES)),
-  target: filterGroupSchema(z.enum(CARD_TARGETS)),
-  powers: filterGroupSchema(z.string().min(1)),
-  keywords: filterGroupSchema(z.enum(CARD_KEYWORDS).or(z.literal(KEYWORD_FILTER_NONE))),
-}).strict();
 const roundSchema = z.object({
   mode: z.enum(["daily", "hardcore-daily", "practice"]),
   hardcore: z.boolean(),
@@ -91,7 +68,7 @@ const roundSchema = z.object({
   status: z.enum(["playing", "won", "forfeited"]),
   terminalGuessCount: z.number().int().nonnegative().nullable(),
   assistance: assistanceSchema.nullable(),
-  practiceFilter: practiceFilterSchema.nullable().optional(),
+  practiceFilter: z.null().optional(),
 }).strict();
 const envelopeSchema = z.object({
   version: z.literal(CURRENT_ROUND_VERSION),
@@ -154,30 +131,12 @@ function validRoundIdentity(round: RoundState, identity: RoundStorageIdentity): 
   if (round.mode !== identity.mode) return false;
   if (round.mode === "daily" && round.hardcore !== false) return false;
   if (round.mode === "hardcore-daily" && round.hardcore !== true) return false;
-  if (round.mode === "practice" && round.hardcore !== false) return false;
   if (round.mode !== "practice") {
     const expectedId = `${round.mode}:${identity.utcDate}:${identity.sourceRevision}`;
     return round.roundId === expectedId && round.hintSeed === expectedId;
   }
   const match = /^practice:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.exec(round.roundId);
   return match !== null && round.hintSeed === match[1];
-}
-
-function selectedValuesAreCanonical<T>(selected: readonly T[], allowed: readonly T[]): boolean {
-  return new Set(selected).size === selected.length
-    && selected.every((value) => allowed.includes(value));
-}
-
-function validPracticeFilter(filter: PracticeFilterState, options: PracticeFilterOptions): boolean {
-  return selectedValuesAreCanonical(filter.cardClass.selected, options.cardClass)
-    && selectedValuesAreCanonical(filter.cardType.selected, options.cardType)
-    && selectedValuesAreCanonical(filter.mana.selected, options.mana)
-    && selectedValuesAreCanonical(filter.rarity.selected, options.rarity)
-    && selectedValuesAreCanonical(filter.target.selected, options.target)
-    && selectedValuesAreCanonical(filter.powers.selected, options.powers)
-    && selectedValuesAreCanonical(filter.keywords.selected, options.keywords)
-    && (!filter.powers.selected.includes(POWER_FILTER_NONE) || filter.powers.selected.length === 1)
-    && (!filter.keywords.selected.includes(KEYWORD_FILTER_NONE) || filter.keywords.selected.length === 1);
 }
 
 function canonicalAnswer(
@@ -271,7 +230,6 @@ export function saveCurrentRound(
       status: round.status,
       terminalGuessCount: round.terminalGuessCount,
       assistance: round.assistance,
-      practiceFilter: round.practiceFilter,
     },
   };
   try { storage.setItem(CURRENT_ROUND_KEYS[identity.mode], JSON.stringify(value)); } catch { /* Best effort. */ }
@@ -302,18 +260,10 @@ export function loadCurrentRound(
       || !validRoundIdentity(parsedRound as RoundState, identity)
       || (expectedAnswer !== undefined && !sameAnswer(parsedRound.answer, expectedAnswer))
       || !canonicalAnswer(parsedRound.answer, cardsById, pairGroupsByKey)) throw new Error("Invalid stored round identity");
-    const practiceFilter = identity.mode === "practice" ? parsedRound.practiceFilter : null;
-    if (identity.mode === "practice") {
-      if (practiceFilter === null || practiceFilter === undefined
-        || !validPracticeFilter(practiceFilter, collectPracticeFilterOptions([...cardsById.values()]))) {
-        throw new Error("Invalid stored Practice filter");
-      }
-    } else if (parsedRound.practiceFilter !== null && parsedRound.practiceFilter !== undefined) {
-      throw new Error("Invalid stored non-Practice filter");
-    }
     const guesses = canonicalGuesses(parsedRound.guesses, parsedRound.answer, cardsById);
     if (guesses === null) throw new Error("Invalid stored guesses");
-    const round: RoundState = { ...parsedRound, guesses, error: null, practiceFilter: practiceFilter ?? null };
+    const { practiceFilter: _legacyPracticeFilter, ...storedRound } = parsedRound;
+    const round: RoundState = { ...storedRound, guesses, error: null };
     if (!validStatus(round) || !validAssistance(round.assistance, round.hardcore, guesses, round.status)) throw new Error("Invalid stored round state");
     return { round };
   } catch {
