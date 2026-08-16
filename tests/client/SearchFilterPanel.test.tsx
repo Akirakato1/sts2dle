@@ -53,6 +53,7 @@ describe("SearchFilterPanel", () => {
     const expand = screen.getByRole("button", { name: "Expand filters" });
     expect(expand.closest(".search-filter__header")).toHaveClass("search-filter__header--collapsed");
     expect(expand).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById(expand.getAttribute("aria-controls")!)).toHaveAttribute("hidden");
     expect(screen.queryByRole("group", { name: "Class" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reset filters" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Filter help" })).toBeVisible();

@@ -91,7 +91,7 @@ export function SearchFilterPanel({ state, options, collapsed, onCollapsedChange
         <button ref={triggerRef} type="button" className="search-filter__help-trigger" aria-label="Filter help" onClick={() => setHelpOpen(true)}>?</button>
       </div>
     </header>
-    {!collapsed && <div id={groupsId} className="search-filter__groups">
+    <div id={groupsId} className="search-filter__groups" hidden={collapsed}>
       {GROUPS.map(({ key, label }) => {
         const group = state[key];
         const values = options[key] as CardFilterValue[];
@@ -113,7 +113,7 @@ export function SearchFilterPanel({ state, options, collapsed, onCollapsedChange
           {!group.disabled && group.selected.length === 0 && <p className="search-filter__warning">Choose at least one.</p>}
         </fieldset>;
       })}
-    </div>}
+    </div>
     {helpOpen && <div className="search-filter-help__backdrop" onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
       <div ref={dialogRef} className="search-filter-help__dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header className="search-filter-help__header">
