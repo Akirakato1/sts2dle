@@ -81,7 +81,7 @@ export function SearchFilterPanel({ state, options, collapsed, onCollapsedChange
   }, [close, helpOpen]);
 
   return <section className={`search-filter${collapsed ? " search-filter--collapsed" : ""}`} aria-label="Search filters">
-    <header className="search-filter__header">
+    <header className={`search-filter__header${collapsed ? " search-filter__header--collapsed" : ""}`}>
       <button type="button" className="search-filter__collapse" aria-label={collapsed ? "Expand filters" : "Collapse filters"} aria-expanded={!collapsed} aria-controls={groupsId} onClick={() => onCollapsedChange(!collapsed)}>
         <span className="search-filter__chevron" aria-hidden="true">›</span>
       </button>

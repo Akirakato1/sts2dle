@@ -51,6 +51,7 @@ describe("SearchFilterPanel", () => {
 
     const collapsed = renderPanel(state(), true);
     const expand = screen.getByRole("button", { name: "Expand filters" });
+    expect(expand.closest(".search-filter__header")).toHaveClass("search-filter__header--collapsed");
     expect(expand).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("group", { name: "Class" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reset filters" })).not.toBeInTheDocument();
@@ -70,7 +71,7 @@ describe("SearchFilterPanel", () => {
   });
   test("keeps 44px controls and marks disabled values visually", () => {
     window.localStorage.setItem(SEARCH_FILTER_HELP_DISMISSED_KEY, "1"); const filter = state(); filter.cardType.disabled = true; renderPanel(filter);
-    const stylesheet = readFileSync(resolve(process.cwd(), "src/client/styles/search.css"), "utf8"); expect(stylesheet).toContain(".search-filter__collapse, .search-filter__reset, .search-filter__help-trigger, .search-filter-help__close { display: inline-flex; min-width: 44px; min-height: 44px;"); expect(stylesheet).toContain(".search-filter__choice { display: flex; min-height: 44px;");
+    const stylesheet = readFileSync(resolve(process.cwd(), "src/client/styles/search.css"), "utf8"); expect(stylesheet).toContain(".search-filter__collapse, .search-filter__reset, .search-filter__help-trigger, .search-filter-help__close { display: inline-flex; min-width: 44px; min-height: 44px;"); expect(stylesheet).toContain(".search-filter__header--collapsed { margin-bottom: 0; }"); expect(stylesheet).toContain(".search-filter__choice { display: flex; min-height: 44px;");
     expect(screen.getByRole("group", { name: "Type" }).querySelector(".search-filter__values--disabled")).not.toBeNull();
   });
 });
