@@ -8,7 +8,9 @@ Daily offers the shared UTC-date puzzle with three one-use assistance orbs and p
 
 Practice provides unlimited assisted rounds; use **End game** to forfeit the current round and reveal its accepted answers. Before playing, **Hardcore Practice** can instead be selected for the same assistance-free memory entry used by Hardcore Daily. The choice persists across reloads and new Practice rounds, and locks after the first guess or orb use.
 
-Search is a utility workspace, not a game round. It filters every card in the active validated snapshot: scalar choices use OR, Powers and Keywords use AND, enabled groups combine with AND, and base and upgraded forms are checked separately. Filter selections persist locally across reloads; the name query, result scroll, and open preview do not. Opening a result compares its Base and Upgraded card faces using only that card's snapshot-backed `baseCardUrl` and `upgradedCardUrl`. The running application has no card-data API or runtime card renderer.
+Search is a utility workspace, not a game round. It filters every card in the active validated snapshot: scalar choices use OR, Powers and Keywords use AND, enabled groups combine with AND, and base and upgraded forms are checked separately. A fresh Search enables every group with nothing selected, so it starts with no results until choices are checked or groups are disabled. **Disable** accepts any value for its group, and **Reset** restores the empty enabled state. Filter selections and the collapsed/expanded panel preference persist locally across reloads; the name query, result scroll, and open preview do not. Opening a result compares its Base and Upgraded card faces using only that card's snapshot-backed `baseCardUrl` and `upgradedCardUrl`. The running application has no card-data API or runtime card renderer.
+
+The hero countdown shows the time remaining until the shared UTC-midnight rollover for Daily and Hardcore Daily puzzles.
 
 Round progress and Daily statistics are persisted only in the local browser. STS-dle has no account or database for player progress, and Practice results are not shareable.
 

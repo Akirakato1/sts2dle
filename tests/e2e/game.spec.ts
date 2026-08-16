@@ -505,11 +505,12 @@ async function prepareOfflinePage(
   });
   await page.addInitScript(({ fixedNow, practiceRandomValues }) => {
     const NativeDate = Date;
+    (window as Window & { __stsdleE2eNow?: number }).__stsdleE2eNow = fixedNow;
     class FixedDate extends NativeDate {
       constructor(value?: string | number | Date) {
-        super(value === undefined ? fixedNow : value);
+        super(value === undefined ? (window as Window & { __stsdleE2eNow?: number }).__stsdleE2eNow ?? fixedNow : value);
       }
-      static override now(): number { return fixedNow; }
+      static override now(): number { return (window as Window & { __stsdleE2eNow?: number }).__stsdleE2eNow ?? fixedNow; }
     }
     Object.defineProperty(window, "Date", { configurable: true, value: FixedDate });
     Object.defineProperty(window.crypto, "getRandomValues", {
@@ -566,6 +567,22 @@ async function performAfterResponses(page: Page, urls: readonly string[], action
 
 async function dismissSearchFilterHelpOnLoad(page: Page): Promise<void> {
   await page.addInitScript((key) => localStorage.setItem(key, "1"), SEARCH_FILTER_HELP_DISMISSED_KEY);
+}
+
+async function seedPassThroughSearchFilters(page: Page): Promise<void> {
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    version: 2,
+    collapsed: false,
+    filter: {
+      cardClass: { disabled: true, selected: [] },
+      cardType: { disabled: true, selected: [] },
+      mana: { disabled: true, selected: [] },
+      rarity: { disabled: true, selected: [] },
+      target: { disabled: true, selected: [] },
+      powers: { disabled: true, selected: [] },
+      keywords: { disabled: true, selected: [] },
+    },
+  })), { key: SEARCH_FILTER_STORAGE_KEY });
 }
 
 async function openSearchWorkspace(page: Page): Promise<Locator> {
@@ -1135,7 +1152,12 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
     .map((card) => card.name);
 
   await openSearchWorkspace(page);
-  expect(await searchResultNames(page)).toEqual(expectedAllResultNames);
+  await expect(page.getByRole("list", { name: "Search results" }).getByRole("button")).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "No cards match these filters." }))
+    .toHaveText("No cards match these filters.");
+  for (const groupName of ["Class", "Type", "Mana", "Rarity", "Target", "Powers", "Keywords"]) {
+    await expect(page.getByRole("group", { name: groupName }).getByRole("checkbox", { name: "Disable" })).not.toBeChecked();
+  }
   expect(await page.evaluate((key) => localStorage.getItem(key), SEARCH_FILTER_STORAGE_KEY)).toBeNull();
   expect(await page.evaluate(() => localStorage.getItem("stsdle:round:practice:v1"))).toBe(practiceBefore);
   await page.getByRole("button", { name: "Practice" }).click();
@@ -1147,6 +1169,10 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
 
   const filterPanel = page.getByRole("region", { name: "Search filters" });
   const classGroup = filterPanel.getByRole("group", { name: "Class" });
+  for (const group of await filterPanel.getByRole("group").all()) {
+    await group.getByRole("checkbox", { name: "Disable" }).check();
+  }
+  expect(await searchResultNames(page)).toEqual(expectedAllResultNames);
   await classGroup.getByRole("checkbox", { name: "Disable" }).uncheck();
   await expect(page.getByRole("list", { name: "Search results" }).getByRole("button")).toHaveCount(0);
   await expect(page.getByRole("status").filter({ hasText: "No cards match these filters." }))
@@ -1237,7 +1263,8 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
   await expect(page.getByRole("dialog", { name: "Preview Malaise Pair" })).toBeVisible();
   const persisted = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), SEARCH_FILTER_STORAGE_KEY);
   expect(persisted).toStrictEqual({
-    version: 1,
+    version: 2,
+    collapsed: false,
     filter: {
       cardClass: { disabled: false, selected: canonicalClassValues },
       cardType: { disabled: true, selected: [] },
@@ -1262,6 +1289,33 @@ test("Search preserves the game round, rejects unknown storage, and applies ever
   expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), SEARCH_FILTER_STORAGE_KEY))
     .toStrictEqual(persisted);
   expect(await page.evaluate(() => localStorage.getItem("stsdle:round:practice:v1"))).toBe(practiceBefore);
+
+  await page.getByRole("button", { name: "Collapse filters" }).click();
+  await expect(page.getByRole("button", { name: "Expand filters" })).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("button", { name: "Reset filters" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Filter help" })).toBeVisible();
+  await page.getByRole("button", { name: "Practice" }).click();
+  await openSearchWorkspace(page);
+  await expect(page.getByRole("button", { name: "Expand filters" })).toBeVisible();
+  await page.reload();
+  await openSearchWorkspace(page);
+  await expect(page.getByRole("button", { name: "Expand filters" })).toBeVisible();
+  await page.getByRole("button", { name: "Expand filters" }).click();
+  await query.fill("mal");
+  await page.getByRole("button", { name: "Reset filters" }).click();
+  await expect(query).toHaveValue("mal");
+  await expect(resultList.getByRole("button")).toHaveCount(0);
+  for (const group of await filterPanel.getByRole("group").all()) {
+    await expect(group.getByRole("checkbox", { name: "Disable" })).not.toBeChecked();
+    for (const choice of await group.getByRole("checkbox").all().then((choices) => choices.slice(1))) {
+      await expect(choice).not.toBeChecked();
+    }
+  }
+  await page.reload();
+  await openSearchWorkspace(page);
+  await expect(page.getByRole("button", { name: "Collapse filters" })).toHaveAttribute("aria-expanded", "true");
+  await expect(query).toHaveValue("");
+  await expect(resultList.getByRole("button")).toHaveCount(0);
   expect(consoleIssues).toEqual([]);
   expect(codexGuard.attemptedRequests).toEqual([]);
   expect(codexGuard.blockedRequests).toEqual([]);
@@ -1279,6 +1333,7 @@ test("Search disambiguates validated duplicate names by class throughout result 
 
   const codexGuard = await prepareOfflinePage(page);
   await dismissSearchFilterHelpOnLoad(page);
+  await seedPassThroughSearchFilters(page);
   await page.goto("/");
   await openSearchWorkspace(page);
 
@@ -1310,6 +1365,7 @@ test("Search preview traps real wheel scrolling and restores prior root styles",
   const card = model.cards.find((candidate) => candidate.id === "ALCHEMIZE")!;
   await prepareOfflinePage(page);
   await dismissSearchFilterHelpOnLoad(page);
+  await seedPassThroughSearchFilters(page);
   await page.setViewportSize({ width: 1280, height: 640 });
   await page.goto("/");
   await openSearchWorkspace(page);
@@ -1385,6 +1441,7 @@ test("Search preview uses only snapshot URLs with pointer, keyboard, retry, clos
   const requests: string[] = [];
   page.on("request", (request) => requests.push(request.url()));
   await dismissSearchFilterHelpOnLoad(page);
+  await seedPassThroughSearchFilters(page);
   await page.goto("/");
   await openSearchWorkspace(page);
 
@@ -2106,6 +2163,7 @@ for (const viewport of [
     const codexGuard = await prepareOfflinePage(page);
     const consoleIssues = watchConsoleIssues(page);
     await dismissSearchFilterHelpOnLoad(page);
+    await seedPassThroughSearchFilters(page);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.setViewportSize(viewport);
     await page.goto("/");
@@ -2389,6 +2447,33 @@ for (const viewport of [
     const filterPanel = page.getByRole("region", { name: "Search filters" });
     const resultList = page.getByRole("list", { name: "Search results" });
     await expect(resultList.getByRole("button")).toHaveCount(model.cards.length);
+    const collapseFilters = filterPanel.getByRole("button", { name: "Collapse filters" });
+    const resetFilters = filterPanel.getByRole("button", { name: "Reset filters" });
+    const filterHelp = filterPanel.getByRole("button", { name: "Filter help" });
+    await expectAccessibleTarget(collapseFilters);
+    await expectAccessibleTarget(resetFilters);
+    await expectAccessibleTarget(filterHelp);
+    const filterHeaderGeometry = await filterPanel.evaluate((panel) => {
+      const panelRect = panel.getBoundingClientRect();
+      const controls = [...panel.querySelectorAll<HTMLElement>(".search-filter__header button")].map((control) => {
+        const rect = control.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+      });
+      return { panel: { left: panelRect.left, right: panelRect.right, top: panelRect.top, bottom: panelRect.bottom }, controls };
+    });
+    for (const control of filterHeaderGeometry.controls) {
+      expect(control.left).toBeGreaterThanOrEqual(filterHeaderGeometry.panel.left);
+      expect(control.right).toBeLessThanOrEqual(filterHeaderGeometry.panel.right);
+      expect(control.top).toBeGreaterThanOrEqual(filterHeaderGeometry.panel.top);
+      expect(control.bottom).toBeLessThanOrEqual(filterHeaderGeometry.panel.bottom);
+    }
+    await collapseFilters.click();
+    await expect(filterPanel).toHaveClass(/search-filter--collapsed/);
+    await expect(filterPanel.getByRole("group")).toHaveCount(0);
+    await expect(resetFilters).toHaveCount(0);
+    await expect(filterHelp).toBeVisible();
+    expect(await filterPanel.locator(".search-filter__header").evaluate((header) => getComputedStyle(header).marginBottom)).toBe("0px");
+    await filterPanel.getByRole("button", { name: "Expand filters" }).click();
     await expectAccessibleTarget(filterPanel.getByRole("button", { name: "Filter help" }));
     await expectAccessibleTarget(page.getByRole("searchbox", { name: "Search cards" }));
     await expectAccessibleTarget(resultList.getByRole("button").first());
@@ -2396,6 +2481,17 @@ for (const viewport of [
       await expectAccessibleTarget(group.locator(".search-filter__choice--disable"));
       await expectAccessibleTarget(group.locator(".search-filter__choice:not(.search-filter__choice--disable)").first());
     }
+    const timer = page.getByRole("timer", { name: "Time remaining until the next Daily puzzle" });
+    await expect(timer).toHaveText("NEXT DAILY 12:00:00");
+    const timerContained = await timer.evaluate((element) => {
+      const timerRect = element.getBoundingClientRect();
+      const heroRect = element.closest(".hero")!.getBoundingClientRect();
+      return timerRect.left >= heroRect.left && timerRect.right <= heroRect.right
+        && timerRect.top >= heroRect.top && timerRect.bottom <= heroRect.bottom;
+    });
+    expect(timerContained).toBe(true);
+    await page.evaluate(() => { (window as Window & { __stsdleE2eNow?: number }).__stsdleE2eNow! += 1_000; });
+    await expect(timer).toHaveText("NEXT DAILY 11:59:59", { timeout: 2_000 });
     const searchGeometry = await page.evaluate(() => {
       const root = document.documentElement;
       const shell = document.querySelector<HTMLElement>(".app-shell")!;
