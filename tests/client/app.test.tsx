@@ -12,6 +12,8 @@ import { REVEAL_DURATION_MS, REVEAL_STAGGER_MS } from "../../src/client/componen
 import { REVEAL_FALLBACK_SAFETY_MS } from "../../src/client/components/GuessGrid.js";
 import { FEATURE_ORDER } from "../../src/shared/domain.js";
 import { createDefaultAssistance } from "../../src/client/game/assistance.js";
+import { createDefaultCardFilter } from "../../src/client/game/card-filter.js";
+import { saveSearchPreferences } from "../../src/client/game/search-storage.js";
 import type { RoundState } from "../../src/client/game/game-reducer.js";
 
 const card = (id: string, name: string) => ({
@@ -47,6 +49,12 @@ const mixedGuess = {
 const revealFallbackMs = FEATURE_ORDER.length * REVEAL_STAGGER_MS
   + REVEAL_DURATION_MS
   + REVEAL_FALLBACK_SAFETY_MS;
+
+function savePassThroughSearchFilter(): void {
+  const filter = createDefaultCardFilter();
+  for (const group of Object.values(filter)) group.disabled = true;
+  saveSearchPreferences(window.localStorage, { filter, collapsed: false });
+}
 
 function dispatchTransformEnd(target: Element): void {
   const event = new Event("transitionend", { bubbles: true });
@@ -232,6 +240,7 @@ describe("App snapshot cleanup", () => {
 
   test("makes the entire App shell inert while a Search preview is open", async () => {
     window.localStorage.setItem("stsdle:search-filter-help-dismissed:v1", "1");
+    savePassThroughSearchFilter();
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue(readyGame(assistedRound()));
 
@@ -462,7 +471,8 @@ describe("App snapshot cleanup", () => {
 
     const view = render(<App />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading card data");
-    expect(screen.getByText("Prototype", { selector: ".subtitle" })).toBeVisible();
+    expect(screen.getByRole("timer", { name: /time remaining until the next Daily puzzle/i })).toHaveTextContent(/^NEXT DAILY \d{2}:\d{2}:\d{2}$/);
+    expect(screen.queryByText("Prototype", { selector: ".subtitle" })).not.toBeInTheDocument();
     expect(screen.queryByText("A daily card deduction.")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "How to play" }).closest(".hero")).toBeTruthy();

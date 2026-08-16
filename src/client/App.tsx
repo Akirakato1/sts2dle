@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { loadSnapshot, type LoadedSnapshot } from "./api/load-snapshot.js";
 import { getBrowserStorage } from "./browser-storage.js";
 import { CardSearch } from "./components/CardSearch.js";
+import { DailyCountdown } from "./components/DailyCountdown.js";
 import { GameGuide } from "./components/GameGuide.js";
 import { GuessGrid } from "./components/GuessGrid.js";
 import { FEATURE_LABELS } from "./components/FeatureTile.js";
@@ -299,7 +300,7 @@ export function App() {
   return <div className="app-shell">
     <div className="app-shell__content">
       <div className="ember-glow" aria-hidden="true" />
-      <header className="hero"><GameGuide /><p className="eyebrow">Slay the Spire 2</p><h1>STSDLE</h1><p className="subtitle">Prototype</p></header>
+      <header className="hero"><GameGuide /><p className="eyebrow">Slay the Spire 2</p><h1>STSDLE</h1><DailyCountdown /></header>
       {error ? <section className="load-error" role="alert"><p>We couldn&apos;t load the current card set.</p><small>{error}</small><button type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></section> : snapshot ? <GameShell snapshot={snapshot} /> : <p role="status">Loading card data…</p>}
       <footer className="site-footer">
         <p>Card data and artwork references provided by <a href="https://spire-codex.com/">Spire Codex</a>.</p>

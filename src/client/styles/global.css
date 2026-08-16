@@ -182,6 +182,18 @@ h1 {
   right: 0;
 }
 
+.daily-countdown {
+  text-transform: uppercase;
+  letter-spacing: .09em;
+}
+
+.daily-countdown strong {
+  color: var(--gold);
+  font-family: ui-monospace, "Cascadia Mono", "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
 .game-guide__trigger,
 .game-guide__close {
   display: inline-flex;
