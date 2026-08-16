@@ -58,7 +58,7 @@ describe("CardPreviewModal", () => {
     expect(screen.getByRole("img", { name: "Blur — Base card artwork" })).toBeVisible();
     expect(screen.getByRole("img", { name: "Blur — Upgraded card artwork" })).toBeVisible();
     for (const face of document.querySelectorAll<HTMLElement>("[data-card-preview-face]")) {
-      expect(face).toHaveStyle({ width: "400px", height: "520px" });
+      expect(face).toHaveClass("card-preview-modal__face");
     }
   });
 

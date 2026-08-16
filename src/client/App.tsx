@@ -12,6 +12,7 @@ import { OrbInteractionProvider, useOrbInteraction, type OrbTargetDescriptor, ty
 import { OrbTray } from "./components/OrbTray.js";
 import { ORB_LABELS } from "./components/OrbVisual.js";
 import { PracticeControls } from "./components/PracticeControls.js";
+import { SearchWorkspace } from "./components/SearchWorkspace.js";
 import { useGame } from "./game/use-game.js";
 import { canSetPracticeHardcore, type PlayMode, type RoundState } from "./game/game-reducer.js";
 import { deriveNameHint } from "./game/name-hints.js";
@@ -21,6 +22,8 @@ import { FEATURE_ORDER, type CardIdentity } from "../shared/domain.js";
 import { formatFeatureValue } from "../shared/comparison.js";
 
 function ignoreCandidateVisibility(): void {}
+
+type ShellTab = PlayMode | "search";
 
 interface RoundGameProps {
   round: RoundState;
@@ -243,17 +246,19 @@ function RoundGame({
 
 function GameShell({ snapshot }: { snapshot: LoadedSnapshot }) {
   const game = useGame(snapshot);
-  const activeMode = game.activeMode ?? game.round?.mode ?? "daily";
+  const [activeTab, setActiveTab] = useState<ShellTab>("daily");
   const modeLabels: Readonly<Record<PlayMode, string>> = {
     daily: "Daily",
     "hardcore-daily": "Hardcore Daily",
     practice: "Practice",
   };
+  const storage = typeof window === "undefined" ? null : window.localStorage;
   return <section className="game-panel" aria-label="Card guessing controls">
     <nav className="mode-tabs" aria-label="Round mode">
-      {(["daily", "hardcore-daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={activeMode === mode ? "page" : undefined} className={activeMode === mode ? "active" : ""} onClick={() => void game.setMode(mode)}>{modeLabels[mode]}</button>)}
+      {(["daily", "hardcore-daily", "practice"] as const).map((mode) => <button key={mode} type="button" aria-current={activeTab === mode ? "page" : undefined} className={activeTab === mode ? "active" : ""} onClick={() => { setActiveTab(mode); void game.setMode(mode); }}>{modeLabels[mode]}</button>)}
+      <button type="button" aria-current={activeTab === "search" ? "page" : undefined} className={activeTab === "search" ? "active" : ""} onClick={() => setActiveTab("search")}>Search</button>
     </nav>
-    {game.error ? <section className="load-error mode-error" role="alert">
+    {activeTab === "search" ? <SearchWorkspace cards={snapshot.cards} spriteMap={snapshot.spriteMap} storage={storage} /> : game.error ? <section className="load-error mode-error" role="alert">
       <p>Unable to prepare this game mode.</p>
       <button type="button" onClick={() => game.retryActiveMode()}>Retry</button>
     </section> : game.status === "loading" || !game.round ? <p role="status">Preparing today&apos;s card…</p> : <RoundGame
@@ -288,12 +293,15 @@ export function App() {
     return () => { controller.abort(); };
   }, [attempt]);
   return <div className="app-shell">
-    <div className="ember-glow" aria-hidden="true" />
-    <header className="hero"><GameGuide /><p className="eyebrow">Slay the Spire 2</p><h1>STSDLE</h1><p className="subtitle">Prototype</p></header>
-    {error ? <section className="load-error" role="alert"><p>We couldn&apos;t load the current card set.</p><small>{error}</small><button type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></section> : snapshot ? <GameShell snapshot={snapshot} /> : <p role="status">Loading card data…</p>}
-    <footer className="site-footer">
-      <p>Card data and artwork references provided by <a href="https://spire-codex.com/">Spire Codex</a>.</p>
-      <p>STS-dle is an unofficial fan project and is not affiliated with or endorsed by Mega Crit.</p>
-    </footer>
+    <div className="app-shell__content">
+      <div className="ember-glow" aria-hidden="true" />
+      <header className="hero"><GameGuide /><p className="eyebrow">Slay the Spire 2</p><h1>STSDLE</h1><p className="subtitle">Prototype</p></header>
+      {error ? <section className="load-error" role="alert"><p>We couldn&apos;t load the current card set.</p><small>{error}</small><button type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></section> : snapshot ? <GameShell snapshot={snapshot} /> : <p role="status">Loading card data…</p>}
+      <footer className="site-footer">
+        <p>Card data and artwork references provided by <a href="https://spire-codex.com/">Spire Codex</a>.</p>
+        <p>STS-dle is an unofficial fan project and is not affiliated with or endorsed by Mega Crit.</p>
+      </footer>
+    </div>
+    <div id="card-preview-root" />
   </div>;
 }

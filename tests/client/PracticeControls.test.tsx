@@ -43,6 +43,7 @@ describe("PracticeControls", () => {
     fireEvent.click(screen.getByRole("button", { name: "End game" }));
     expect(onForfeit).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "New Practice Round" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Filter Mode")).not.toBeInTheDocument();
   });
 
   test("reflects selected Hardcore Practice", () => {

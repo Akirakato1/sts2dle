@@ -120,6 +120,61 @@ class AppErrorBoundary extends React.Component<React.PropsWithChildren, { error:
 }
 
 describe("App snapshot cleanup", () => {
+  test("switches Search without replacing a Practice round and keeps Search-only UI out of game tabs", async () => {
+    const dazed = card("dazed", "Dazed");
+    const snapshotWithDazed = {
+      ...searchSnapshot,
+      cards: [...appCards, dazed],
+      cardsById: new Map([...appCards, dazed].map((item) => [item.id, item])),
+      spriteMap: { ...searchSnapshot.spriteMap, cards: { ...searchSnapshot.spriteMap.cards, dazed: appSprite } },
+    };
+    const game = readyGame(assistedRound({
+      mode: "practice",
+      guesses: [{ ...submittedGuess, cardId: "dazed" }],
+    }));
+    loads.mockResolvedValue(snapshotWithDazed);
+    games.mockReturnValue(game);
+
+    render(<App />);
+    await screen.findByRole("combobox");
+    expect(screen.getAllByRole("button", { name: /^(Daily|Hardcore Daily|Practice|Search)$/ })
+      .map((button) => button.textContent)).toEqual(["Daily", "Hardcore Daily", "Practice", "Search"]);
+    expect(screen.queryByRole("region", { name: "Search filters" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(screen.getByRole("region", { name: "Card search workspace" })).toBeVisible();
+    expect(game.setMode).not.toHaveBeenCalledWith("search");
+    expect(screen.queryByRole("combobox", { name: "Guess a card" })).not.toBeInTheDocument();
+    expect(document.querySelector(".guess-grid")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Orb inventory" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Accepted answer/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy .* result/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Practice" }));
+    expect(game.setMode).toHaveBeenCalledWith("practice");
+    expect(screen.getByText("Dazed")).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "Hardcore Practice" })).toBeVisible();
+    expect(screen.queryByText("Filter Mode")).not.toBeInTheDocument();
+  });
+
+  test("makes the entire App shell inert while a Search preview is open", async () => {
+    window.localStorage.setItem("stsdle:search-filter-help-dismissed:v1", "1");
+    loads.mockResolvedValue(searchSnapshot);
+    games.mockReturnValue(readyGame(assistedRound()));
+
+    const view = render(<App />);
+    await screen.findByRole("combobox");
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Apotheosis" }));
+
+    expect(screen.getByRole("dialog", { name: "Preview Apotheosis" })).toBeVisible();
+    expect(view.container.querySelector(".app-shell__content")).toHaveAttribute("inert", "");
+    expect(screen.getByRole("button", { name: "Close preview" })).not.toHaveAttribute("inert");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+    expect(view.container.querySelector(".app-shell__content")).not.toHaveAttribute("inert");
+  });
+
   test("composes the live assisted controls with search input last", async () => {
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue(readyGame(assistedRound({
@@ -389,7 +444,7 @@ describe("App snapshot cleanup", () => {
     expect(screen.getByRole("dialog", { name: "How to play" })).toBeVisible();
   });
 
-  test("renders exactly Daily, Hardcore Daily, and Practice mode tabs", async () => {
+  test("renders exactly Daily, Hardcore Daily, Practice, and Search tabs", async () => {
     const setMode = vi.fn();
     loads.mockResolvedValue(searchSnapshot);
     games.mockReturnValue({
@@ -418,8 +473,8 @@ describe("App snapshot cleanup", () => {
     });
 
     render(<App />);
-    const tabs = await screen.findAllByRole("button", { name: /^(Daily|Hardcore Daily|Practice)$/ });
-    expect(tabs.map((tab) => tab.textContent)).toEqual(["Daily", "Hardcore Daily", "Practice"]);
+    const tabs = await screen.findAllByRole("button", { name: /^(Daily|Hardcore Daily|Practice|Search)$/ });
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Daily", "Hardcore Daily", "Practice", "Search"]);
     fireEvent.click(screen.getByRole("button", { name: "Hardcore Daily" }));
     expect(setMode).toHaveBeenCalledWith("hardcore-daily");
     expect(screen.queryByRole("button", { name: "End game" })).not.toBeInTheDocument();
@@ -468,7 +523,7 @@ describe("App snapshot cleanup", () => {
     render(<App />);
 
     expect(await screen.findByRole("navigation", { name: "Round mode" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Hardcore Daily" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Daily" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("status")).toHaveTextContent("Preparing today's card");
     expect(screen.queryByRole("combobox", { name: "Guess a card" })).not.toBeInTheDocument();
     expect(screen.queryByRole("main", { name: "Card guessing game" })).not.toBeInTheDocument();
