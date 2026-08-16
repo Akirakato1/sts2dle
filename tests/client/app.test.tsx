@@ -729,9 +729,10 @@ describe("App snapshot cleanup", () => {
     render(<App />);
     const input = await screen.findByRole("combobox");
     fireEvent.change(input, { target: { value: "ap" } });
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Apotheosisunhighlighted candidate"]);
-    fireEvent.click(screen.getByRole("option"));
-    expect(submit).toHaveBeenCalledOnce();
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual(["Apotheosisunhighlighted candidate"]);
+    fireEvent.click(options[0]!);
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(submit).toHaveBeenCalledWith("apotheosis");
   });
 
@@ -823,11 +824,11 @@ describe("App snapshot cleanup", () => {
 
     fireEvent.change(input, { target: { value: "  sTRIKE!!!  " } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(submit).toHaveBeenCalledWith("strike-defect");
+    await waitFor(() => expect(submit).toHaveBeenCalledWith("strike-defect"));
 
     fireEvent.change(input, { target: { value: "Defend" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(submit).toHaveBeenLastCalledWith("defend-alpha");
+    await waitFor(() => expect(submit).toHaveBeenLastCalledWith("defend-alpha"));
 
     round = { ...round, guesses: [{ cardId: "defend-alpha", results: [] }] };
     roundToken = 2;

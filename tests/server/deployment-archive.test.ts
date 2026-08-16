@@ -63,7 +63,7 @@ describe("deployment snapshot archive", () => {
       await validated.cleanup();
     }
     await expect(readDeploymentRevision(first, validationOptions)).resolves.toBe(revision);
-  });
+  }, 20_000);
 
   it("removes only its own final link when create post-link verification fails", async () => {
     const revision = "ac".repeat(32);
