@@ -262,7 +262,7 @@ export function loadCurrentRound(
       || !canonicalAnswer(parsedRound.answer, cardsById, pairGroupsByKey)) throw new Error("Invalid stored round identity");
     const guesses = canonicalGuesses(parsedRound.guesses, parsedRound.answer, cardsById);
     if (guesses === null) throw new Error("Invalid stored guesses");
-    const { practiceFilter: _legacyPracticeFilter, ...storedRound } = parsedRound;
+    const { practiceFilter: _legacyFilter, ...storedRound } = parsedRound;
     const round: RoundState = { ...storedRound, guesses, error: null };
     if (!validStatus(round) || !validAssistance(round.assistance, round.hardcore, guesses, round.status)) throw new Error("Invalid stored round state");
     return { round };

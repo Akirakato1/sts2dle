@@ -3,26 +3,26 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   KEYWORD_FILTER_NONE,
   POWER_FILTER_NONE,
-  type PracticeFilterGroupName,
-  type PracticeFilterOptions,
-  type PracticeFilterState,
-  type PracticeFilterValue,
-} from "../game/practice-filter.js";
+  type CardFilterGroupName,
+  type CardFilterOptions,
+  type CardFilterState,
+  type CardFilterValue,
+} from "../game/card-filter.js";
 import { formatCardTarget } from "../../shared/comparison.js";
 import type { CardTarget } from "../../shared/domain.js";
 
 export const FILTER_HELP_DISMISSED_KEY = "stsdle:filter-help-dismissed:v1";
 
 export interface PracticeFilterPanelProps {
-  state: PracticeFilterState;
-  options: PracticeFilterOptions;
+  state: CardFilterState;
+  options: CardFilterOptions;
   disabled: boolean;
-  onGroupDisabledChange(group: PracticeFilterGroupName, disabled: boolean): void;
-  onValueChange(group: PracticeFilterGroupName, value: PracticeFilterValue, selected: boolean): void;
+  onGroupDisabledChange(group: CardFilterGroupName, disabled: boolean): void;
+  onValueChange(group: CardFilterGroupName, value: CardFilterValue, selected: boolean): void;
 }
 
 interface GroupDefinition {
-  key: PracticeFilterGroupName;
+  key: CardFilterGroupName;
   label: string;
 }
 
@@ -36,7 +36,7 @@ const GROUPS: readonly GroupDefinition[] = [
   { key: "keywords", label: "Keywords" },
 ];
 
-function formatValue(group: PracticeFilterGroupName, value: PracticeFilterValue): string {
+function formatValue(group: CardFilterGroupName, value: CardFilterValue): string {
   if (value === POWER_FILTER_NONE || value === KEYWORD_FILTER_NONE) return "None";
   if (group === "target") return formatCardTarget(value as CardTarget);
   return String(value);
@@ -81,10 +81,10 @@ export function PracticeFilterPanel({
   }, []);
 
   useEffect(() => {
-    const justEnabled = state.enabled && !previouslyEnabledRef.current;
-    previouslyEnabledRef.current = state.enabled;
+    const justEnabled = !disabled && !previouslyEnabledRef.current;
+    previouslyEnabledRef.current = !disabled;
     if (justEnabled && !dismissedThisMountRef.current && !storageHasDismissal()) setHelpOpen(true);
-  }, [state.enabled]);
+  }, [disabled]);
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -129,7 +129,7 @@ export function PracticeFilterPanel({
     <div className="practice-filter__groups">
       {GROUPS.map(({ key, label }) => {
         const group = state[key];
-        const values = options[key] as PracticeFilterValue[];
+        const values = options[key] as CardFilterValue[];
         const valuesDisabled = disabled || group.disabled;
         return <fieldset key={key} className="practice-filter__group" aria-label={label}>
           <legend>{label}</legend>
@@ -152,7 +152,7 @@ export function PracticeFilterPanel({
                 <input
                   type="checkbox"
                   aria-label={valueLabel}
-                  checked={(group.selected as PracticeFilterValue[]).includes(value)}
+                  checked={(group.selected as CardFilterValue[]).includes(value)}
                   disabled={valuesDisabled}
                   onChange={(event) => {
                     if (!valuesDisabled) onValueChange(key, value, event.currentTarget.checked);

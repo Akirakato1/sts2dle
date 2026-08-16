@@ -8,12 +8,12 @@ import {
   PracticeFilterPanel,
 } from "../../src/client/components/PracticeFilterPanel.js";
 import {
-  createDefaultPracticeFilter,
+  createDefaultCardFilter,
   KEYWORD_FILTER_NONE,
   POWER_FILTER_NONE,
-  type PracticeFilterOptions,
-  type PracticeFilterState,
-} from "../../src/client/game/practice-filter.js";
+  type CardFilterOptions,
+  type CardFilterState,
+} from "../../src/client/game/card-filter.js";
 
 const nativeLocalStorage = window.localStorage;
 
@@ -29,7 +29,7 @@ function freshLocalStorage(): Storage {
   };
 }
 
-const OPTIONS: PracticeFilterOptions = {
+const OPTIONS: CardFilterOptions = {
   cardClass: ["Ironclad", "Silent"],
   cardType: ["Attack", "Skill"],
   mana: [0, 1, "X", "None"],
@@ -39,11 +39,10 @@ const OPTIONS: PracticeFilterOptions = {
   keywords: ["Ethereal", "Innate", KEYWORD_FILTER_NONE],
 };
 
-function enabledState(): PracticeFilterState {
-  const state = createDefaultPracticeFilter();
+function enabledState(): CardFilterState {
+  const state = createDefaultCardFilter();
   return {
     ...state,
-    enabled: true,
     cardClass: { disabled: false, selected: ["Ironclad", "Silent"] },
     cardType: { disabled: true, selected: ["Attack"] },
     mana: { disabled: false, selected: [0, "None"] },
