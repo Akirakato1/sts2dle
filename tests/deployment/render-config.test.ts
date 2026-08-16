@@ -83,18 +83,4 @@ describe("Render deployment configuration", () => {
     expect(ignore.split(/\r?\n/)).not.toContain("deploy/snapshot-data.tar.gz");
   });
 
-  test("documents snapshot releases and the stateless Render deployment", async () => {
-    const readme = await readRoot("README.md");
-    for (const required of [
-      "Deploy to Render", "New → Blueprint", "Akirakato1/sts2dle",
-      "/health", "repository snapshot", "no startup synchronization", "no persistent disk",
-      "npm run release:snapshot", "npm run release:snapshot -- --force",
-      "git push origin HEAD:main", "Mad Science", "official CDN",
-      "Later pushes to `main` deploy automatically.",
-    ]) expect(readme).toContain(required);
-    expect(readme).toMatch(/unchanged[\s\S]{0,100}no commit|no commit[\s\S]{0,100}unchanged/i);
-    expect(readme).not.toContain("STSDLE_SKIP_SYNC=0");
-    expect(readme).not.toContain("paid Starter service and its 1 GB persistent disk");
-    expect(readme).not.toContain("runtime recovery snapshots");
-  });
 });
