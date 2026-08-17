@@ -1615,6 +1615,7 @@ test("Hardcore memory entry rejects invalid and already-guessed names but accept
   await expect(page.getByRole("rowheader").first())
     .toHaveAttribute("aria-label", `${validCard.name} artwork and name`);
   await expect(search).toHaveValue("");
+  await expect(search).toBeFocused();
 
   await enterHardcoreName(page, normalizedVariant);
   await expect(search).toHaveValue(normalizedVariant);

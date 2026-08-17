@@ -76,6 +76,9 @@ export function CardSearch({
 }: CardSearchProps) {
   const hardcoreNameMode = searchMode.kind === "hardcore-name";
   const listboxId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const restoreHardcoreFocus = useRef(false);
+  const sawHardcoreRevealLock = useRef(false);
   const pointerSelecting = useRef(false);
   const visibilityPointerDown = useRef(false);
   const optionRefs = useRef(new Map<string, HTMLLIElement>());
@@ -103,16 +106,8 @@ export function CardSearch({
   const optionId = (cardId: string) => `${listboxId}-option-${encodeURIComponent(cardId)}`;
 
   useEffect(() => {
-    if (!disabled) return;
-    pointerSelecting.current = false;
-    visibilityPointerDown.current = false;
-    setQuery("");
-    setActiveCardId(null);
-    setIsOpen(false);
-    setInvalidAttempt(0);
-  }, [disabled]);
-
-  useEffect(() => {
+    restoreHardcoreFocus.current = false;
+    sawHardcoreRevealLock.current = false;
     pointerSelecting.current = false;
     visibilityPointerDown.current = false;
     setQuery("");
@@ -120,6 +115,24 @@ export function CardSearch({
     setIsOpen(false);
     setInvalidAttempt(0);
   }, [roundKey]);
+
+  useEffect(() => {
+    if (!disabled) {
+      if (restoreHardcoreFocus.current && sawHardcoreRevealLock.current) {
+        restoreHardcoreFocus.current = false;
+        sawHardcoreRevealLock.current = false;
+        inputRef.current?.focus();
+      }
+      return;
+    }
+    if (restoreHardcoreFocus.current) sawHardcoreRevealLock.current = true;
+    pointerSelecting.current = false;
+    visibilityPointerDown.current = false;
+    setQuery("");
+    setActiveCardId(null);
+    setIsOpen(false);
+    setInvalidAttempt(0);
+  }, [disabled]);
 
   useEffect(() => {
     if (!menuOpen || activeCandidate === undefined || scrollRequest === 0) return;
@@ -159,6 +172,7 @@ export function CardSearch({
   function submitHardcoreName() {
     if (disabled || searchMode.kind !== "hardcore-name") return;
     if (searchMode.submitExactName(query)) {
+      restoreHardcoreFocus.current = true;
       setQuery("");
       setActiveCardId(null);
       setIsOpen(false);
@@ -205,6 +219,7 @@ export function CardSearch({
     {assistance !== null && nameHintSlot}
     <label className="card-search__label" htmlFor={`${listboxId}-input`}>Guess a card</label>
     <input
+      ref={inputRef}
       id={`${listboxId}-input`}
       className={`card-search__input${hardcoreNameMode && invalidAttempt > 0 ? ` card-search__input--invalid-${invalidAttempt % 2 === 1 ? "a" : "b"}` : ""}`}
       type="search"

@@ -122,17 +122,22 @@ describe("CardSearch", () => {
   test("hardcore name mode hides candidates and submits an accepted exact name with Enter", () => {
     const submitExactName = vi.fn((query: string) => query === "Known Card");
     const onSelect = vi.fn();
-    render(<CardSearch
-      cards={cards}
-      cardsById={cardsById}
-      spriteMap={spriteMap}
-      guessedCardIds={new Set()}
-      assistance={null}
-      roundKey="hardcore-round"
-      searchMode={{ kind: "hardcore-name", submitExactName }}
-      onVisibilityChange={vi.fn()}
-      onSelect={onSelect}
-    />);
+    const hardcoreSearch = (disabled: boolean, roundKey = "hardcore-round") => <>
+      <button type="button">Outside</button>
+      <CardSearch
+        cards={cards}
+        cardsById={cardsById}
+        spriteMap={spriteMap}
+        guessedCardIds={new Set()}
+        assistance={null}
+        roundKey={roundKey}
+        disabled={disabled}
+        searchMode={{ kind: "hardcore-name", submitExactName }}
+        onVisibilityChange={vi.fn()}
+        onSelect={onSelect}
+      />
+    </>;
+    const view = render(hardcoreSearch(false));
 
     const input = screen.getByRole("searchbox", { name: "Guess a card" });
     expect(input).not.toHaveAttribute("aria-controls");
@@ -156,6 +161,45 @@ describe("CardSearch", () => {
     expect(submitExactName).toHaveBeenCalledWith("Known Card");
     expect(onSelect).not.toHaveBeenCalled();
     expect(input).toHaveValue("");
+
+    view.rerender(hardcoreSearch(true));
+    screen.getByRole("button", { name: "Outside" }).focus();
+    expect(input).not.toHaveFocus();
+
+    view.rerender(hardcoreSearch(false));
+    expect(input).toHaveFocus();
+  });
+
+  test("hardcore name mode cancels pending focus restoration when the round changes", () => {
+    const submitExactName = vi.fn((query: string) => query === "Known Card");
+    const hardcoreSearch = (disabled: boolean, roundKey = "hardcore-round") => <>
+      <button type="button">Outside</button>
+      <CardSearch
+        cards={cards}
+        cardsById={cardsById}
+        spriteMap={spriteMap}
+        guessedCardIds={new Set()}
+        assistance={null}
+        roundKey={roundKey}
+        disabled={disabled}
+        searchMode={{ kind: "hardcore-name", submitExactName }}
+        onVisibilityChange={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    </>;
+    const view = render(hardcoreSearch(false));
+    const input = screen.getByRole("searchbox", { name: "Guess a card" });
+
+    input.focus();
+    fireEvent.change(input, { target: { value: "Known Card" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    view.rerender(hardcoreSearch(true));
+    const outside = screen.getByRole("button", { name: "Outside" });
+    outside.focus();
+
+    view.rerender(hardcoreSearch(false, "next-hardcore-round"));
+    expect(outside).toHaveFocus();
+    expect(input).not.toHaveFocus();
   });
 
   test("hardcore name mode restarts invalid feedback without clearing or blurring the query", () => {
